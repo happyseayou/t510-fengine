@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T510 F-engine 当前架构与验证状态报告</title>
+  <style>
+    :root {
+      --bg: #f5f1e8;
+      --paper: #fffdf7;
+      --ink: #1d252c;
+      --muted: #66727d;
+      --line: #c8c0ae;
+      --verified: #24a06b;
+      --verified-bg: #def7ea;
+      --implemented: #2f78c4;
+      --implemented-bg: #e2f0ff;
+      --temporary: #bd7a00;
+      --temporary-bg: #fff0cc;
+      --expected: #7462b7;
+      --expected-bg: #eee9ff;
+      --risk: #c84444;
+      --risk-bg: #ffe3df;
+      --dark: #27313b;
+      --shadow: 0 18px 45px rgba(51, 45, 32, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 4%, rgba(255, 188, 84, 0.22), transparent 28rem),
+        radial-gradient(circle at 92% 3%, rgba(47, 120, 196, 0.18), transparent 30rem),
+        linear-gradient(180deg, #efe6d3 0, var(--bg) 28rem, #f7f3ea 100%);
+      font-family: "Aptos", "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.58;
+    }
+
+    main {
+      width: min(1280px, calc(100vw - 36px));
+      margin: 0 auto;
+      padding: 34px 0 64px;
+    }
+
+    header.hero {
+      position: relative;
+      overflow: hidden;
+      padding: 38px 42px;
+      border: 1px solid rgba(120, 102, 66, 0.22);
+      border-radius: 28px;
+      background:
+        linear-gradient(135deg, rgba(255, 253, 247, 0.96), rgba(250, 244, 231, 0.92)),
+        repeating-linear-gradient(45deg, rgba(39, 49, 59, 0.04) 0 1px, transparent 1px 14px);
+      box-shadow: var(--shadow);
+    }
+
+    header.hero:after {
+      content: "";
+      position: absolute;
+      right: -80px;
+      top: -80px;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      border: 34px solid rgba(36, 160, 107, 0.12);
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      max-width: 900px;
+      font-size: clamp(2rem, 4vw, 4.5rem);
+      line-height: 1.04;
+      letter-spacing: -0.045em;
+    }
+
+    h2 {
+      margin: 42px 0 16px;
+      font-size: 1.55rem;
+      letter-spacing: -0.02em;
+    }
+
+    h3 {
+      margin: 22px 0 10px;
+      font-size: 1.08rem;
+    }
+
+    p {
+      margin: 0 0 12px;
+    }
+
+    code, .mono {
+      font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.94em;
+    }
+
+    .lede {
+      max-width: 940px;
+      color: #3c4750;
+      font-size: 1.08rem;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 32px;
+      padding: 6px 11px;
+      border-radius: 999px;
+      border: 1px solid rgba(39, 49, 59, 0.14);
+      background: rgba(255, 255, 255, 0.68);
+      color: #36424c;
+      font-size: 0.9rem;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 18px;
+      margin-top: 20px;
+    }
+
+    .card {
+      border: 1px solid rgba(120, 102, 66, 0.18);
+      border-radius: 22px;
+      background: rgba(255, 253, 247, 0.94);
+      box-shadow: 0 10px 30px rgba(51, 45, 32, 0.08);
+      padding: 22px;
+    }
+
+    .span-4 { grid-column: span 4; }
+    .span-5 { grid-column: span 5; }
+    .span-6 { grid-column: span 6; }
+    .span-7 { grid-column: span 7; }
+    .span-12 { grid-column: span 12; }
+
+    .metric {
+      font-size: 2rem;
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+      font-weight: 760;
+      color: var(--dark);
+    }
+
+    .metric small {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 0.88rem;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .status-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .status-list li {
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(39, 49, 59, 0.1);
+      background: #fffaf0;
+    }
+
+    .tag {
+      display: inline-block;
+      margin-right: 8px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.77rem;
+      font-weight: 740;
+      letter-spacing: 0.02em;
+    }
+
+    .tag.verified { color: #075b38; background: var(--verified-bg); border: 1px solid rgba(36, 160, 107, 0.24); }
+    .tag.implemented { color: #114d84; background: var(--implemented-bg); border: 1px solid rgba(47, 120, 196, 0.24); }
+    .tag.temporary { color: #7a4f00; background: var(--temporary-bg); border: 1px solid rgba(189, 122, 0, 0.25); }
+    .tag.expected { color: #423486; background: var(--expected-bg); border: 1px solid rgba(116, 98, 183, 0.25); }
+    .tag.risk { color: #8a2020; background: var(--risk-bg); border: 1px solid rgba(200, 68, 68, 0.25); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 16px;
+      background: #fffaf0;
+      font-size: 0.95rem;
+    }
+
+    th, td {
+      padding: 11px 12px;
+      border-bottom: 1px solid rgba(120, 102, 66, 0.16);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: #38434d;
+      background: rgba(39, 49, 59, 0.06);
+      font-weight: 760;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .diagram-wrap {
+      overflow-x: auto;
+      border-radius: 24px;
+      border: 1px solid rgba(120, 102, 66, 0.2);
+      background:
+        linear-gradient(180deg, rgba(255, 253, 247, 0.96), rgba(247, 241, 229, 0.96)),
+        radial-gradient(circle at 0 0, rgba(47, 120, 196, 0.08), transparent 20rem);
+      box-shadow: var(--shadow);
+      padding: 12px;
+    }
+
+    svg {
+      display: block;
+      min-width: 1180px;
+      width: 100%;
+      height: auto;
+    }
+
+    .node {
+      stroke-width: 2.2;
+      rx: 13;
+      filter: drop-shadow(0 4px 8px rgba(35, 31, 23, 0.08));
+    }
+
+    .node-title {
+      font: 760 14px "Aptos", "Segoe UI", sans-serif;
+      fill: #202b34;
+    }
+
+    .node-sub {
+      font: 500 11px "Aptos", "Segoe UI", sans-serif;
+      fill: #5d6973;
+    }
+
+    .lane-title {
+      font: 800 15px "Aptos", "Segoe UI", sans-serif;
+      fill: #2d3740;
+      letter-spacing: 0.02em;
+    }
+
+    .box-verified { fill: var(--verified-bg); stroke: var(--verified); }
+    .box-implemented { fill: var(--implemented-bg); stroke: var(--implemented); }
+    .box-temporary { fill: var(--temporary-bg); stroke: var(--temporary); }
+    .box-expected { fill: var(--expected-bg); stroke: var(--expected); stroke-dasharray: 8 5; }
+    .box-risk { fill: var(--risk-bg); stroke: var(--risk); }
+    .line { fill: none; stroke: #48535c; stroke-width: 2.2; marker-end: url(#arrow); }
+    .line-verified { stroke: var(--verified); }
+    .line-implemented { stroke: var(--implemented); }
+    .line-temporary { stroke: var(--temporary); stroke-dasharray: 6 4; }
+    .line-expected { stroke: var(--expected); stroke-dasharray: 8 6; }
+    .line-risk { stroke: var(--risk); stroke-dasharray: 5 5; }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 14px 0 0;
+    }
+
+    .callout {
+      padding: 14px 16px;
+      border-radius: 16px;
+      border-left: 5px solid var(--implemented);
+      background: rgba(226, 240, 255, 0.66);
+    }
+
+    .callout.risk {
+      border-left-color: var(--risk);
+      background: rgba(255, 227, 223, 0.72);
+    }
+
+    .callout.good {
+      border-left-color: var(--verified);
+      background: rgba(222, 247, 234, 0.72);
+    }
+
+    .two-col {
+      columns: 2 360px;
+      column-gap: 32px;
+      padding-left: 18px;
+    }
+
+    .two-col li {
+      break-inside: avoid;
+      margin-bottom: 8px;
+    }
+
+    footer {
+      margin-top: 36px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+    }
+
+    @media print {
+      body { background: white; }
+      main { width: 100%; padding: 0; }
+      .card, header.hero, .diagram-wrap { box-shadow: none; }
+      .diagram-wrap { overflow: visible; }
+      svg { min-width: 0; }
+    }
+
+    @media (max-width: 860px) {
+      main { width: min(100vw - 22px, 1280px); padding-top: 16px; }
+      header.hero { padding: 28px 22px; border-radius: 22px; }
+      .span-4, .span-5, .span-6, .span-7, .span-12 { grid-column: span 12; }
+      .card { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <h1>T510 单板 F-engine 当前架构与验证状态报告</h1>
+    <p class="lede">
+      本报告把当前实现拆成四类状态：已经上板验证的链路、已实现并通过 RTL/构建验证的模块、为无 PPS/无外部 10 MHz 实验临时加入的路径、以及最终 F-engine 设计期望但尚未接入的能力。
+      当前阶段的核心结论是：RFDC ADC0/DAC0 单通道闭环、free-run 同步启动、PYNQ 时域波形读取和 1024 点硬件 FFT debug 频谱读取已经跑通；CMAC/100G 网络输出和正式 4096-channel PFB/FFT 仍是下一阶段。
+    </p>
+    <div class="meta">
+      <span class="pill"><span class="dot" style="background:var(--verified)"></span>报告日期：2026-06-13</span>
+      <span class="pill"><span class="dot" style="background:var(--implemented)"></span>工程：<span class="mono">demo-ant</span></span>
+      <span class="pill"><span class="dot" style="background:var(--implemented)"></span>Part：<span class="mono">xczu47dr-ffve1156-2-i</span></span>
+      <span class="pill"><span class="dot" style="background:var(--verified)"></span>Overlay：<span class="mono">t510_fengine.bit/.hwh/.tcl</span></span>
+    </div>
+  </header>
+
+  <section>
+    <h2>状态图例</h2>
+    <div class="legend">
+      <span class="pill"><span class="dot" style="background:var(--verified)"></span>绿色：当前板上实测通过</span>
+      <span class="pill"><span class="dot" style="background:var(--implemented)"></span>蓝色：已实现，RTL/构建验证通过</span>
+      <span class="pill"><span class="dot" style="background:var(--temporary)"></span>黄色：实验临时路径，不等同生产同步方案</span>
+      <span class="pill"><span class="dot" style="background:var(--expected)"></span>紫色虚线：设计期望，尚未接入或未验收</span>
+      <span class="pill"><span class="dot" style="background:var(--risk)"></span>红色：已知风险或待清理项</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>架构图</h2>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1280 820" role="img" aria-label="T510 F-engine 当前架构图，按实现状态着色">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="8.5" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L9,3 L0,6 Z" fill="#48535c"></path>
+          </marker>
+          <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+            <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(39,49,59,0.06)" stroke-width="1"></path>
+          </pattern>
+        </defs>
+
+        <rect x="0" y="0" width="1280" height="820" rx="20" fill="url(#grid)"></rect>
+        <text x="32" y="42" class="lane-title">物理板级与 PYNQ 控制</text>
+        <text x="32" y="250" class="lane-title">Vivado BD/IP 层</text>
+        <text x="32" y="458" class="lane-title">F-engine RTL 数据面与 debug 观测</text>
+        <text x="32" y="665" class="lane-title">最终网络输出目标</text>
+
+        <line x1="20" y1="72" x2="1260" y2="72" stroke="rgba(39,49,59,0.16)"></line>
+        <line x1="20" y1="280" x2="1260" y2="280" stroke="rgba(39,49,59,0.16)"></line>
+        <line x1="20" y1="488" x2="1260" y2="488" stroke="rgba(39,49,59,0.16)"></line>
+        <line x1="20" y1="695" x2="1260" y2="695" stroke="rgba(39,49,59,0.16)"></line>
+
+        <!-- Physical and software lane -->
+        <rect class="node box-temporary" x="50" y="95" width="165" height="78" rx="13"></rect>
+        <text class="node-title" x="68" y="122">板载 TCXO 路径</text>
+        <text class="node-sub" x="68" y="144">当前无外部 10 MHz</text>
+        <text class="node-sub" x="68" y="160">lab: clock_ref=tcxo</text>
+
+        <rect class="node box-expected" x="50" y="182" width="165" height="54" rx="13"></rect>
+        <text class="node-title" x="68" y="206">外部 10 MHz / PPS</text>
+        <text class="node-sub" x="68" y="224">未来多板同步验收</text>
+
+        <rect class="node box-verified" x="265" y="96" width="190" height="96" rx="13"></rect>
+        <text class="node-title" x="283" y="123">PYNQ / Jupyter</text>
+        <text class="node-sub" x="283" y="145">root notebook server</text>
+        <text class="node-sub" x="283" y="162">T510FEngine wrapper</text>
+        <text class="node-sub" x="283" y="179">capture_time / spectrum ok</text>
+
+        <rect class="node box-verified" x="505" y="96" width="170" height="84" rx="13"></rect>
+        <text class="node-title" x="523" y="123">ADC0-DAC0 连接</text>
+        <text class="node-sub" x="523" y="145">当前硬件闭环</text>
+        <text class="node-sub" x="523" y="162">active_mask=0x0001</text>
+
+        <rect class="node box-expected" x="718" y="96" width="190" height="84" rx="13"></rect>
+        <text class="node-title" x="736" y="123">8 路 complex ADC</text>
+        <text class="node-sub" x="736" y="145">最终正式输入</text>
+        <text class="node-sub" x="736" y="162">default mask=0xffff</text>
+
+        <rect class="node box-expected" x="958" y="96" width="210" height="84" rx="13"></rect>
+        <text class="node-title" x="976" y="123">QSFP28 / DGX A,B</text>
+        <text class="node-sub" x="976" y="145">100G UDP 联调目标</text>
+        <text class="node-sub" x="976" y="162">当前未连接 CMAC</text>
+
+        <!-- BD/IP lane -->
+        <rect class="node box-verified" x="265" y="300" width="190" height="96" rx="13"></rect>
+        <text class="node-title" x="283" y="327">Zynq PS + AXI-Lite</text>
+        <text class="node-sub" x="283" y="349">RFDC 0x8000_0000</text>
+        <text class="node-sub" x="283" y="366">F-engine 0x8004_0000</text>
+        <text class="node-sub" x="283" y="383">.hwh 导出可用</text>
+
+        <rect class="node box-verified" x="505" y="300" width="170" height="96" rx="13"></rect>
+        <text class="node-title" x="523" y="327">RFDC IP</text>
+        <text class="node-sub" x="523" y="349">ADC valid=1</text>
+        <text class="node-sub" x="523" y="366">DAC ready=1</text>
+        <text class="node-sub" x="523" y="383">flags=0x1f</text>
+
+        <rect class="node box-verified" x="50" y="310" width="165" height="78" rx="13"></rect>
+        <text class="node-title" x="68" y="337">clk_wiz / MTS</text>
+        <text class="node-sub" x="68" y="359">resetn 已修复连接</text>
+        <text class="node-sub" x="68" y="376">clock_locked=1</text>
+
+        <rect class="node box-temporary" x="718" y="300" width="190" height="96" rx="13"></rect>
+        <text class="node-title" x="736" y="327">DAC tone source</text>
+        <text class="node-sub" x="736" y="349">可配置幅度/phase_step</text>
+        <text class="node-sub" x="736" y="366">只作板上激励</text>
+        <text class="node-sub" x="736" y="383">不属于最终 F-engine 输出</text>
+
+        <rect class="node box-expected" x="958" y="300" width="210" height="96" rx="13"></rect>
+        <text class="node-title" x="976" y="327">CMAC / UDP/IP 基础设施</text>
+        <text class="node-sub" x="976" y="349">下一阶段接入</text>
+        <text class="node-sub" x="976" y="366">当前 TX AXIS 未上网</text>
+        <text class="node-sub" x="976" y="383">pl_led3 仅锁存活动</text>
+
+        <!-- RTL lane -->
+        <rect class="node box-verified" x="50" y="510" width="165" height="90" rx="13"></rect>
+        <text class="node-title" x="68" y="537">sync_fsm</text>
+        <text class="node-sub" x="68" y="559">external_pps 默认</text>
+        <text class="node-sub" x="68" y="576">free_run 已上板</text>
+        <text class="node-sub" x="68" y="593">fsm_state=STREAMING</text>
+
+        <rect class="node box-verified" x="265" y="510" width="190" height="90" rx="13"></rect>
+        <text class="node-title" x="283" y="537">RFDC ADC adapter</text>
+        <text class="node-sub" x="283" y="559">16 RFDC AXIS 到 8 complex</text>
+        <text class="node-sub" x="283" y="576">当前每 64-bit 取 [15:0]</text>
+        <text class="node-sub" x="283" y="593">ADC0 数据已流动</text>
+
+        <rect class="node box-implemented" x="505" y="510" width="170" height="90" rx="13"></rect>
+        <text class="node-title" x="523" y="537">stream duplicator</text>
+        <text class="node-sub" x="523" y="559">SPEC/TIME/SNAPSHOT/MON</text>
+        <text class="node-sub" x="523" y="576">反压/丢弃策略仿真</text>
+        <text class="node-sub" x="523" y="593">非线速最终实现</text>
+
+        <rect class="node box-verified" x="718" y="500" width="190" height="110" rx="13"></rect>
+        <text class="node-title" x="736" y="527">fft_debug_observer</text>
+        <text class="node-sub" x="736" y="549">ADC0 lane0 观测</text>
+        <text class="node-sub" x="736" y="566">1024 点 XFFT power</text>
+        <text class="node-sub" x="736" y="583">time BRAM + FFT BRAM</text>
+        <text class="node-sub" x="736" y="600">PYNQ 已读出</text>
+
+        <rect class="node box-implemented" x="958" y="500" width="210" height="110" rx="13"></rect>
+        <text class="node-title" x="976" y="527">packetizers + arbiter</text>
+        <text class="node-sub" x="976" y="549">TIME/SPEC headers</text>
+        <text class="node-sub" x="976" y="566">8192 B payload contract</text>
+        <text class="node-sub" x="976" y="583">SPEC &gt; TIME priority</text>
+        <text class="node-sub" x="976" y="600">RTL 仿真 PASS</text>
+
+        <!-- Target lane -->
+        <rect class="node box-expected" x="265" y="716" width="190" height="74" rx="13"></rect>
+        <text class="node-title" x="283" y="743">正式 4096-channel PFB/FFT</text>
+        <text class="node-sub" x="283" y="765">SPEC packet payload 布局</text>
+        <text class="node-sub" x="283" y="782">待替换 debug FFT</text>
+
+        <rect class="node box-expected" x="505" y="716" width="170" height="74" rx="13"></rect>
+        <text class="node-title" x="523" y="743">snapshot DMA / DDR</text>
+        <text class="node-sub" x="523" y="765">设计接口保留</text>
+        <text class="node-sub" x="523" y="782">当前未接 DMA</text>
+
+        <rect class="node box-expected" x="718" y="716" width="190" height="74" rx="13"></rect>
+        <text class="node-title" x="736" y="743">100G CMAC 输出</text>
+        <text class="node-sub" x="736" y="765">UDP SPEC/TIME/SNAPSHOT</text>
+        <text class="node-sub" x="736" y="782">待硬件联调</text>
+
+        <rect class="node box-risk" x="958" y="716" width="210" height="74" rx="13"></rect>
+        <text class="node-title" x="976" y="743">debug_error 清理项</text>
+        <text class="node-sub" x="976" y="765">DEBUG_STATUS=0x6 可读</text>
+        <text class="node-sub" x="976" y="782">bit1 需在 RTL 收敛</text>
+
+        <!-- Connections -->
+        <path class="line line-temporary" d="M215 134 C235 134, 240 342, 265 342"></path>
+        <path class="line line-expected" d="M215 209 C238 209, 30 512, 50 552"></path>
+        <path class="line line-verified" d="M455 144 C482 144, 480 342, 505 342"></path>
+        <path class="line line-verified" d="M590 180 L590 300"></path>
+        <path class="line line-verified" d="M590 396 C590 450, 360 455, 360 510"></path>
+        <path class="line line-verified" d="M675 348 L718 348"></path>
+        <path class="line line-temporary" d="M805 300 C805 235, 590 230, 590 180"></path>
+        <path class="line line-verified" d="M455 555 L505 555"></path>
+        <path class="line line-verified" d="M455 575 C565 645, 690 637, 718 575"></path>
+        <path class="line line-implemented" d="M675 555 L718 555"></path>
+        <path class="line line-implemented" d="M675 555 L958 555"></path>
+        <path class="line line-expected" d="M1168 555 C1210 555, 1210 760, 908 760"></path>
+        <path class="line line-expected" d="M1168 348 C1222 420, 1218 690, 908 753"></path>
+        <path class="line line-expected" d="M360 600 L360 716"></path>
+        <path class="line line-expected" d="M590 600 L590 716"></path>
+        <path class="line line-risk" d="M908 580 C965 610, 1025 670, 1060 716"></path>
+      </svg>
+    </div>
+  </section>
+
+  <section>
+    <h2>一页结论</h2>
+    <div class="grid">
+      <div class="card span-4">
+        <div class="metric">RFDC 已跑通<small>ADC valid、DAC ready、clock locked 均已在 PYNQ 端看到</small></div>
+      </div>
+      <div class="card span-4">
+        <div class="metric">Debug 可观测<small>PYNQ 已读出 1024 点时域 buffer 和 FFT power bins</small></div>
+      </div>
+      <div class="card span-4">
+        <div class="metric">100G 未接入<small>CMAC/UDP/IP 硬件输出仍是下一阶段目标</small></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>当前实测证据</h2>
+    <div class="grid">
+      <div class="card span-7">
+        <h3>PYNQ / 硬件 bring-up 结果</h3>
+        <table>
+          <thead>
+            <tr><th>项目</th><th>观测值</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Core version</td><td class="mono">0x00010002</td><td>当前 bitstream 与 Python wrapper 期望一致。</td></tr>
+            <tr><td>Sync config</td><td class="mono">0x00010002</td><td><span class="tag temporary">LAB</span><span class="mono">clock_ref=tcxo_10mhz</span>，<span class="mono">sync_mode=free_run</span>。</td></tr>
+            <tr><td>Status</td><td class="mono">0x0000060b</td><td><span class="tag verified">VERIFIED</span><span class="mono">armed=1</span>，<span class="mono">streaming=1</span>，FSM state 6。</td></tr>
+            <tr><td>RFDC flags</td><td class="mono">0x0000001f</td><td><span class="tag verified">VERIFIED</span>core ready、ADC valid、DAC ready、clock locked 均有效；当前无外部 PPS，任何 PPS 相关位不作为同步验收依据。</td></tr>
+            <tr><td>RFDC active mask</td><td class="mono">0x0001</td><td><span class="tag temporary">LAB</span>当前只验收 ADC0/DAC0 单通道闭环。</td></tr>
+            <tr><td>计数增长</td><td class="mono">约 21.67M / 250 ms</td><td><span class="tag verified">VERIFIED</span><span class="mono">rfdc_sample_count</span> 和 <span class="mono">monitor_sample_count</span> 均增长。</td></tr>
+            <tr><td>Time capture</td><td class="mono">1024 IQ samples</td><td><span class="tag verified">VERIFIED</span>首 16 点非零，当前 Q 为 0，符合 ADC0 real lane 观测路径。</td></tr>
+            <tr><td>Spectrum capture</td><td class="mono">peak_bin 1016, mirror bin 8</td><td><span class="tag verified">VERIFIED</span>硬件 FFT power buffer 可读，峰值随当前输入/激励出现。</td></tr>
+            <tr><td>Debug status</td><td class="mono">0x00000006</td><td><span class="tag risk">CLEANUP</span>bit2 done 代表 buffer 有效；bit1 error 是当前 observer 过严的待清理标志。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card span-5">
+        <h3>Vivado / 仿真结果</h3>
+        <ul class="status-list">
+          <li><span class="tag verified">PASS</span>11 个 XSim 自检 testbench 均 PASS，包括 AXI-Lite、sync_fsm、RFDC adapter、debug observer、packetizer、arbiter 和 top smoke。</li>
+          <li><span class="tag verified">PASS</span>当前导出 overlay 包含 <span class="mono">t510_fengine.bit</span>、<span class="mono">.hwh</span>、<span class="mono">.tcl</span>、manifest。</li>
+          <li><span class="tag verified">PASS</span>最新 implementation run 日志显示 <span class="mono">write_bitstream completed successfully</span>。</li>
+          <li><span class="tag verified">PASS</span>route timing 日志显示 <span class="mono">WNS=+3.098 ns</span>、<span class="mono">TNS=0</span>、<span class="mono">WHS=+0.011 ns</span>。</li>
+          <li><span class="tag implemented">NOTE</span>当前 Vivado MCP attach 会话是活的，但 GUI 中没有加载项目；工程状态以本地 run 日志和已上板 overlay 为准。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>模块状态矩阵</h2>
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>模块/接口</th>
+            <th>当前状态</th>
+            <th>验证方式</th>
+            <th>备注</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="mono">t510_fengine_board_top</span></td>
+            <td><span class="tag verified">板上验证</span></td>
+            <td>bitstream 下载 + PYNQ 寄存器/计数器读取</td>
+            <td>当前顶层，接入 RFDC BD 与 F-engine RTL。</td>
+          </tr>
+          <tr>
+            <td>PS + AXI-Lite control</td>
+            <td><span class="tag verified">板上验证</span></td>
+            <td>MMIO 读写，<span class="mono">core_version=0x00010002</span></td>
+            <td>F-engine 控制段位于 <span class="mono">0x8004_0000</span>。</td>
+          </tr>
+          <tr>
+            <td>RFDC IP</td>
+            <td><span class="tag verified">板上验证</span></td>
+            <td><span class="mono">RFDC_FLAGS=0x1f</span>，sample counter 增长</td>
+            <td>当前验收 ADC0/DAC0，不声明 8 路全量验收。</td>
+          </tr>
+          <tr>
+            <td>RFDC ADC adapter</td>
+            <td><span class="tag verified">板上验证</span></td>
+            <td>XSim + ADC0 数据进入 debug observer</td>
+            <td>当前每个 64-bit RFDC port 先取 <span class="mono">[15:0]</span>，后续需要全速扩展。</td>
+          </tr>
+          <tr>
+            <td>Sync FSM</td>
+            <td><span class="tag verified">板上验证</span></td>
+            <td>XSim + free-run streaming 状态</td>
+            <td>生产默认仍为 external PPS；lab 才使用 free_run。</td>
+          </tr>
+          <tr>
+            <td>DAC tone source</td>
+            <td><span class="tag temporary">临时调试</span></td>
+            <td>PYNQ 可写 enable/amplitude/phase_step</td>
+            <td>用于当前 ADC0-DAC0 自激励，不是最终数据输出路径。</td>
+          </tr>
+          <tr>
+            <td>FFT debug observer</td>
+            <td><span class="tag verified">板上验证</span></td>
+            <td>时域 buffer 和 FFT power buffer 可读</td>
+            <td>1024 点 debug FFT，不替代最终 4096-channel F-engine。</td>
+          </tr>
+          <tr>
+            <td>TIME/SPEC packetizers</td>
+            <td><span class="tag implemented">RTL 已实现</span></td>
+            <td>XSim 自检 packet header、payload、sequence</td>
+            <td>尚未通过 CMAC 真实发包验收。</td>
+          </tr>
+          <tr>
+            <td>UDP TX arbiter</td>
+            <td><span class="tag implemented">RTL 已实现</span></td>
+            <td>XSim 自检优先级和 packet lock</td>
+            <td>优先级为 SPEC &gt; TIME &gt; SNAPSHOT &gt; MONITOR。</td>
+          </tr>
+          <tr>
+            <td>CMAC / QSFP28 100G</td>
+            <td><span class="tag expected">目标设计</span></td>
+            <td>未接入</td>
+            <td>当前 packet AXIS 没有接到网络硬核。</td>
+          </tr>
+          <tr>
+            <td>Snapshot DMA / DDR</td>
+            <td><span class="tag expected">目标设计</span></td>
+            <td>未接入</td>
+            <td>当前 snapshot 通过 debug BRAM 观测，不是正式 DMA。</td>
+          </tr>
+          <tr>
+            <td>外部 PPS / 10 MHz 多板同步</td>
+            <td><span class="tag expected">目标设计</span></td>
+            <td>当前实验室条件未提供</td>
+            <td>接口语义保留，未来切回 external_pps 验收。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>当前寄存器与软件契约</h2>
+    <div class="grid">
+      <div class="card span-6">
+        <h3>核心控制</h3>
+        <table>
+          <thead><tr><th>偏移</th><th>名称</th><th>当前用途</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">0x0000</td><td><span class="mono">CORE_VERSION</span></td><td>当前值 <span class="mono">0x00010002</span>。</td></tr>
+            <tr><td class="mono">0x000c</td><td><span class="mono">CONTROL</span></td><td>arm、soft_epoch、stop、soft_reset。</td></tr>
+            <tr><td class="mono">0x0010</td><td><span class="mono">STATUS</span></td><td>armed、streaming、active_sync_mode、waiting_for_epoch、fsm_state。</td></tr>
+            <tr><td class="mono">0x0020</td><td><span class="mono">SYNC_CONFIG</span></td><td>external_pps、software_epoch、free_run；external/tcxo/gps clock_ref。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card span-6">
+        <h3>RFDC 与 debug</h3>
+        <table>
+          <thead><tr><th>偏移</th><th>名称</th><th>当前用途</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">0x0340</td><td><span class="mono">RFDC_STATUS_FLAGS</span></td><td>core ready、ADC valid、DAC ready、clock locked，以及状态观测位；当前无 PPS，不使用 PPS 位作验收。</td></tr>
+            <tr><td class="mono">0x0350</td><td><span class="mono">RFDC_ACTIVE_MASK</span></td><td>当前 lab 设为 <span class="mono">0x0001</span>；正式默认 <span class="mono">0xffff</span>。</td></tr>
+            <tr><td class="mono">0x0400..0x0418</td><td><span class="mono">DEBUG_*</span></td><td>debug capture 控制、NFFT、采样率、peak bin/power、capture count。</td></tr>
+            <tr><td class="mono">0x0800..0x27ff</td><td>Debug buffers</td><td>时域 IQ buffer 和 FFT power bins。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>临时实现与边界</h2>
+    <div class="grid">
+      <div class="card span-6">
+        <h3>当前为了 bring-up 临时加入</h3>
+        <ul class="two-col">
+          <li><span class="tag temporary">LAB</span><span class="mono">tcxo_10mhz + free_run</span> 路径，用于无 PPS/无外部 10 MHz 环境。</li>
+          <li><span class="tag temporary">LAB</span>ADC0-only active mask <span class="mono">0x0001</span>，避免当前只接一根线时等待所有 RFDC ports。</li>
+          <li><span class="tag temporary">LAB</span>DAC tone source，作为 ADC0-DAC0 闭环激励。</li>
+          <li><span class="tag temporary">LAB</span>1024 点 debug FFT 与 BRAM readout，用于 PYNQ 直接看波形和频谱。</li>
+          <li><span class="tag temporary">LAB</span>packet TX AXIS 当前不接 CMAC，只保留内部活动观测。</li>
+        </ul>
+      </div>
+      <div class="card span-6">
+        <h3>设计期望但尚未完成</h3>
+        <ul class="two-col">
+          <li><span class="tag expected">TARGET</span>8 路 complex baseband 全输入验收。</li>
+          <li><span class="tag expected">TARGET</span>正式 4096-channel、4 taps 起步的 PFB/FFT channelizer。</li>
+          <li><span class="tag expected">TARGET</span>SPEC/TIME 包通过 CMAC/QSFP28 100G 输出。</li>
+          <li><span class="tag expected">TARGET</span>Snapshot DMA 写 DDR，由 PYNQ 拉取大块时域数据。</li>
+          <li><span class="tag expected">TARGET</span>外部 10 MHz/PPS 多板同步验收。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>已知风险与下一步</h2>
+    <div class="grid">
+      <div class="card span-5">
+        <div class="callout risk">
+          <h3>最需要清理的技术债</h3>
+          <p>
+            <span class="mono">DEBUG_STATUS=0x6</span> 目前不影响读取，bit2 done 已经确认 buffer 有效；但 bit1 error 不应该在“可用 capture”上常亮。下一步应检查 <span class="mono">fft_debug_observer</span> 内部对 XFFT event 或 backpressure 的错误判定，把它改成真正的 fatal-only 标志。
+          </p>
+        </div>
+      </div>
+      <div class="card span-7">
+        <h3>建议执行顺序</h3>
+        <ol>
+          <li>修正 <span class="mono">fft_debug_observer</span> 的 error bit，保持 done/error 语义干净。</li>
+          <li>用 Jupyter notebook 改变 <span class="mono">DAC_TONE_PHASE_STEP</span>，确认 FFT peak bin 随 tone 移动。</li>
+          <li>把 RFDC adapter 从“每 port 每 beat 取 1 个 16-bit sample”扩展到更接近真实吞吐的多样本路径。</li>
+          <li>将 debug FFT 的观测路径和正式 channelizer 设计解耦，开始接入 4096-channel SPEC 路径。</li>
+          <li>接 CMAC 前先完成 UDP/IP framing 的仿真向量和 host-side packet checker。</li>
+          <li>外部 PPS/10 MHz 条件具备后，切回 <span class="mono">external_pps</span>，验证 arm 后下一次 PPS 进入 streaming。</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>交付物位置</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>文件/目录</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">overlay/t510_fengine.bit</td><td>当前已上板测试 bitstream。</td></tr>
+          <tr><td class="mono">overlay/t510_fengine.hwh</td><td>PYNQ overlay metadata。</td></tr>
+          <tr><td class="mono">overlay/t510_fengine.tcl</td><td>导出的 BD/overlay Tcl。</td></tr>
+          <tr><td class="mono">python/t510_fengine.py</td><td>PYNQ 控制、RFDC lab 初始化、debug capture API。</td></tr>
+          <tr><td class="mono">notebooks/08_lab_rfdc_fft_debug.ipynb</td><td>当前手动交互验证 notebook，已同步到 PYNQ 的 Jupyter 目录。</td></tr>
+          <tr><td class="mono">reports/t510_fengine_current_status_report.html</td><td>本报告，单文件可离线打开。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    Generated from the local Vivado/PYNQ bring-up state in <span class="mono">/home/astrolab/demo-ant</span>.
+  </footer>
+</main>
+</body>
+</html>

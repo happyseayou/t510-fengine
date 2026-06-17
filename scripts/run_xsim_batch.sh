@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VIVADO_ROOT="${VIVADO_ROOT:-/run/media/astrolab/data/xilinx-ep/Vivado/2022.2}"
+LOCAL_LOCALE="${HOME}/.local/share/locale"
+WORK_DIR="${REPO_ROOT}/.xsim_batch"
+
+if [[ ! -d "${LOCAL_LOCALE}/en_US.UTF-8" ]]; then
+  mkdir -p "${LOCAL_LOCALE}/en_US.UTF-8"
+  localedef -i en_US -f UTF-8 "${LOCAL_LOCALE}/en_US.UTF-8"
+fi
+
+export LOCPATH="${LOCAL_LOCALE}"
+export LD_LIBRARY_PATH="${VIVADO_ROOT}/lib/lnx64.o/SuSE${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+mkdir -p "${WORK_DIR}"
+
+rtl_files=(
+  rtl/sync_fsm.sv
+  rtl/axis_stream_duplicator.sv
+  rtl/requantizer.sv
+  rtl/monitor_counters.sv
+  rtl/time_packetizer.sv
+  rtl/pfb_channelizer.sv
+  rtl/spectral_packetizer.sv
+  rtl/udp_tx_arbiter.sv
+  rtl/axis_packet_fifo.sv
+  rtl/tx_route_selector.sv
+  rtl/udp_frame_builder.sv
+  rtl/tx_header_capture.sv
+  rtl/tx_payload_witness_capture.sv
+  rtl/dac_tx_witness_capture.sv
+  rtl/fft_debug_observer.sv
+  rtl/multi_preview_observer.sv
+  rtl/t510_dac_loopback_source.sv
+  rtl/feng_ctrl_axi.sv
+  rtl/axi4_to_axil_bridge.sv
+  rtl/rfdc_adc_axis_adapter.sv
+  rtl/t510_fengine_top.sv
+  rtl/t510_fengine_synthetic_board_top.sv
+)
+
+tb_files=(
+  sim/tb_feng_ctrl_axi.sv
+  sim/tb_axi4_to_axil_bridge.sv
+  sim/tb_sync_fsm.sv
+  sim/tb_rfdc_adc_axis_adapter.sv
+  sim/tb_axis_stream_duplicator.sv
+  sim/tb_time_packetizer.sv
+  sim/tb_pfb_channelizer.sv
+  sim/tb_spectral_packetizer.sv
+  sim/tb_udp_tx_arbiter.sv
+  sim/tb_axis_packet_fifo.sv
+  sim/tb_tx_route_selector.sv
+  sim/tb_udp_frame_builder.sv
+  sim/tb_tx_payload_witness_capture.sv
+  sim/tb_dac_tx_witness_capture.sv
+  sim/tb_fft_debug_observer.sv
+  sim/tb_t510_dac_loopback_source.sv
+  sim/tb_rfdc_fullrate_preview.sv
+  sim/tb_preview_event_capture.sv
+  sim/tb_t510_fengine_top_smoke.sv
+  sim/tb_t510_fengine_board_top.sv
+)
+
+tb_tops=("$@")
+if [[ ${#tb_tops[@]} -eq 0 ]]; then
+  tb_tops=(
+    tb_feng_ctrl_axi
+    tb_axi4_to_axil_bridge
+    tb_sync_fsm
+    tb_rfdc_adc_axis_adapter
+    tb_axis_stream_duplicator
+    tb_time_packetizer
+    tb_pfb_channelizer
+    tb_spectral_packetizer
+    tb_udp_tx_arbiter
+    tb_axis_packet_fifo
+    tb_tx_route_selector
+    tb_udp_frame_builder
+    tb_tx_payload_witness_capture
+    tb_dac_tx_witness_capture
+    tb_fft_debug_observer
+    tb_t510_dac_loopback_source
+    tb_rfdc_fullrate_preview
+    tb_preview_event_capture
+    tb_t510_fengine_top_smoke
+    tb_t510_fengine_board_top
+  )
+fi
+
+pushd "${WORK_DIR}" >/dev/null
+
+cat > vlog.prj <<EOF
+sv xil_defaultlib "${REPO_ROOT}/sim/tb_common.svh"
+verilog xil_defaultlib "${VIVADO_ROOT}/data/verilog/src/glbl.v"
+EOF
+
+for f in "${rtl_files[@]}"; do
+  echo "sv xil_defaultlib \"${REPO_ROOT}/${f}\"" >> vlog.prj
+done
+for f in "${tb_files[@]}"; do
+  echo "sv xil_defaultlib \"${REPO_ROOT}/${f}\"" >> vlog.prj
+done
+
+"${VIVADO_ROOT}/bin/xvlog" --incr --relax -d T510_SIM_FFT_MODEL -i "${REPO_ROOT}/sim" -prj vlog.prj | tee xvlog.log
+
+failed=0
+for tb in "${tb_tops[@]}"; do
+  echo "INFO: Running ${tb}"
+  "${VIVADO_ROOT}/bin/xelab" --incr --debug typical --relax --mt 8 \
+    -L xil_defaultlib -L unisims_ver -L unimacro_ver -L secureip -L xpm \
+    --snapshot "${tb}_behav" "xil_defaultlib.${tb}" xil_defaultlib.glbl \
+    -log "${tb}_xelab.log"
+  "${VIVADO_ROOT}/bin/xsim" "${tb}_behav" -R -log "${tb}_xsim.log" || failed=1
+  if grep -q "CHECK FAILED" "${tb}_xsim.log"; then
+    failed=1
+  fi
+done
+
+popd >/dev/null
+
+if [[ ${failed} -ne 0 ]]; then
+  echo "ERROR: one or more XSim testbenches failed; logs are in ${WORK_DIR}" >&2
+  exit 1
+fi
+
+echo "INFO: all XSim batch testbenches passed"

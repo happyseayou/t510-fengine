@@ -1,0 +1,25 @@
+* text=auto
+
+# Source and project text files
+*.bd text eol=lf
+*.ipynb text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.sv text eol=lf
+*.svh text eol=lf
+*.tcl text eol=lf
+*.txt text eol=lf
+*.v text eol=lf
+*.vh text eol=lf
+*.xdc text eol=lf
+*.xci text eol=lf
+*.xpr text eol=lf
+
+# Binary documentation/assets
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.zip binary

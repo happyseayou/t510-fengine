@@ -1,0 +1,1434 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T510 F-engine 顶层架构细化设计 v0.3</title>
+  <style>
+    :root {
+      --bg: #f7f9fb;
+      --ink: #17212b;
+      --muted: #607080;
+      --line: #d7e0e8;
+      --paper: #ffffff;
+      --blue: #1267a8;
+      --cyan: #0c8aa5;
+      --green: #14875b;
+      --amber: #9a6b00;
+      --red: #b13b3b;
+      --slate: #263544;
+      --soft-blue: #e8f3fb;
+      --soft-green: #e7f7ef;
+      --soft-amber: #fff4d8;
+      --soft-red: #fde9e7;
+      --shadow: 0 14px 40px rgba(30, 45, 60, 0.10);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(180deg, #eef4f8 0, var(--bg) 360px, #ffffff 100%);
+      color: var(--ink);
+      font-family: "Inter", "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif;
+      line-height: 1.62;
+    }
+
+    header {
+      min-height: 90vh;
+      display: grid;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background:
+        radial-gradient(circle at 86% 22%, rgba(18, 103, 168, 0.18), transparent 26rem),
+        linear-gradient(135deg, #f8fbfd 0%, #eef5f9 48%, #f7f9fb 100%);
+      overflow: hidden;
+    }
+
+    main, .hero-inner {
+      width: min(1240px, calc(100vw - 36px));
+      margin: 0 auto;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(420px, 1.05fr);
+      gap: 48px;
+      align-items: center;
+      padding: 50px 0;
+    }
+
+    .eyebrow {
+      margin: 0 0 14px;
+      color: var(--blue);
+      font-weight: 760;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-size: 0.82rem;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 760px;
+      font-size: clamp(2.5rem, 5.6vw, 5.8rem);
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+    }
+
+    .lede {
+      max-width: 720px;
+      margin: 22px 0 0;
+      color: #344656;
+      font-size: 1.12rem;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 30px;
+    }
+
+    a.button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 16px;
+      border-radius: 8px;
+      border: 1px solid #1d6fa8;
+      background: var(--blue);
+      color: white;
+      text-decoration: none;
+      font-weight: 720;
+    }
+
+    a.button.secondary {
+      background: white;
+      color: var(--blue);
+    }
+
+    .hero-visual {
+      position: relative;
+      min-height: 560px;
+      border: 1px solid rgba(18, 103, 168, 0.16);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.78);
+      box-shadow: var(--shadow);
+      padding: 20px;
+      animation: rise 700ms ease-out both;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 30px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.82);
+      color: #314250;
+      font-size: 0.88rem;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--blue);
+    }
+
+    section {
+      padding: 54px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: clamp(1.65rem, 3vw, 2.6rem);
+      line-height: 1.12;
+      letter-spacing: -0.03em;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 1.08rem;
+      letter-spacing: -0.01em;
+    }
+
+    p { margin: 0 0 12px; }
+
+    .section-head {
+      max-width: 850px;
+      margin-bottom: 24px;
+    }
+
+    .muted { color: var(--muted); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+    }
+
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-5 { grid-column: span 5; }
+    .span-6 { grid-column: span 6; }
+    .span-7 { grid-column: span 7; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      box-shadow: 0 8px 22px rgba(30, 45, 60, 0.05);
+      padding: 18px;
+    }
+
+    .panel.tight { padding: 14px; }
+
+    .metric {
+      font-size: 2.1rem;
+      line-height: 1;
+      font-weight: 820;
+      letter-spacing: -0.035em;
+    }
+
+    .metric small {
+      display: block;
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.35;
+      font-weight: 520;
+      letter-spacing: 0;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 23px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 0.76rem;
+      font-weight: 780;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .tag.ok { background: var(--soft-green); color: #085b3c; border: 1px solid rgba(20,135,91,0.2); }
+    .tag.work { background: var(--soft-blue); color: #0b4f80; border: 1px solid rgba(18,103,168,0.2); }
+    .tag.lab { background: var(--soft-amber); color: #684800; border: 1px solid rgba(154,107,0,0.22); }
+    .tag.risk { background: var(--soft-red); color: #7b2424; border: 1px solid rgba(177,59,59,0.22); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: white;
+      font-size: 0.94rem;
+    }
+
+    th, td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #eef4f8;
+      color: #314250;
+      font-weight: 780;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    code, .mono {
+      font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.93em;
+    }
+
+    .status-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .status-list li {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+    }
+
+    .diagram-scroll {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      box-shadow: var(--shadow);
+    }
+
+    svg { display: block; width: 100%; height: auto; }
+
+    .diagram-scroll svg { min-width: 1120px; }
+
+    .node { fill: #ffffff; stroke: #88a7bd; stroke-width: 2; rx: 8; }
+    .node.ctrl { fill: #eaf5fb; stroke: var(--blue); }
+    .node.data { fill: #eef9f5; stroke: var(--green); }
+    .node.warn { fill: #fff8e6; stroke: var(--amber); }
+    .node.future { fill: #f3f7fa; stroke: #8598aa; stroke-dasharray: 6 5; }
+    .label { font: 720 16px "Segoe UI", "Noto Sans CJK SC", sans-serif; fill: #1c2d3b; }
+    .sublabel { font: 13px "Segoe UI", "Noto Sans CJK SC", sans-serif; fill: #536879; }
+    .arrow { stroke: var(--green); stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+    .ctrl-arrow { stroke: var(--blue); stroke-width: 2; fill: none; stroke-dasharray: 7 5; marker-end: url(#arrowBlue); }
+    .state-arrow { stroke: var(--amber); stroke-width: 2; fill: none; marker-end: url(#arrowAmber); }
+
+    .image-frame {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: white;
+      box-shadow: 0 8px 22px rgba(30,45,60,0.06);
+    }
+
+    .image-frame img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .tab {
+      border: 1px solid var(--line);
+      background: white;
+      color: #314250;
+      border-radius: 8px;
+      padding: 8px 11px;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+    }
+
+    .tab.active {
+      background: var(--blue);
+      color: white;
+      border-color: var(--blue);
+    }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; animation: fade 260ms ease-out both; }
+
+    .instrument {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    canvas {
+      width: 100%;
+      height: 260px;
+      border: 1px solid #cbd8e2;
+      border-radius: 8px;
+      background: #071522;
+    }
+
+    .controls {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .control-row {
+      display: grid;
+      grid-template-columns: 155px 1fr 86px;
+      gap: 10px;
+      align-items: center;
+    }
+
+    input[type="range"] { width: 100%; }
+
+    .readout {
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #0e2233;
+      color: #d9f2ff;
+      font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.9rem;
+      min-height: 44px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin-top: 10px;
+      color: #314250;
+      font-size: 0.9rem;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 24px;
+    }
+
+    .swatch {
+      width: 18px;
+      height: 3px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+
+    .packet {
+      display: grid;
+      grid-template-columns: 1.2fr 1.1fr 1fr 1fr;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .packet .field {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: white;
+      min-height: 80px;
+    }
+
+    .field b {
+      display: block;
+      margin-bottom: 5px;
+      color: #233646;
+    }
+
+    .callout {
+      border-left: 4px solid var(--blue);
+      background: #eef6fb;
+      padding: 13px 15px;
+      border-radius: 0 8px 8px 0;
+    }
+
+    .two-col {
+      columns: 2 340px;
+      column-gap: 28px;
+    }
+
+    .two-col p, .two-col li { break-inside: avoid; }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      counter-reset: step;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 38px 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      font-weight: 780;
+    }
+
+    footer {
+      padding: 28px 0 46px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fade {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 980px) {
+      header { min-height: auto; }
+      .hero-grid { grid-template-columns: 1fr; padding: 38px 0; }
+      .hero-visual { min-height: 400px; }
+      .span-3, .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; }
+      .instrument { grid-template-columns: 1fr; }
+      .packet { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 620px) {
+      main, .hero-inner { width: min(100vw - 24px, 1240px); }
+      .packet { grid-template-columns: 1fr; }
+      .control-row { grid-template-columns: 1fr; }
+      canvas { height: 220px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="hero-inner hero-grid">
+      <div>
+        <p class="eyebrow">T510 RFSoC F-engine refined architecture v0.3</p>
+        <h1>单板可独立采样，外部同步可插拔，PYNQ 可观测。</h1>
+        <p class="lede">
+          本设计基于当前已跑通的 RFDC ADC0/DAC0 闭环、free-run 启动、PYNQ 时域/FFT debug 预览和待接入的 CMAC/100G 路径，重新细化 T510 F-engine 顶层架构。重点是让实验室单板调试、无外部 10 MHz/PPS、无 QSFP 链路、DAC 测试信号、PYNQ 虚拟仪器和正式 UDP 时间标记共存。
+        </p>
+        <div class="chip-row">
+          <span class="chip"><span class="dot" style="background:var(--green)"></span>RFDC ADC0/DAC0 已验证</span>
+          <span class="chip"><span class="dot" style="background:var(--amber)"></span>无 PPS 可 free-run</span>
+          <span class="chip"><span class="dot" style="background:var(--blue)"></span>PYNQ 负责控制与预览</span>
+          <span class="chip"><span class="dot" style="background:var(--cyan)"></span>高速流不强制走 DDR</span>
+          <span class="chip"><span class="dot" style="background:var(--red)"></span>100G 与 4096 PFB 尚待接入</span>
+        </div>
+        <div class="hero-actions">
+          <a class="button" href="#architecture">查看架构</a>
+          <a class="button secondary" href="#implementation">实现路线</a>
+        </div>
+      </div>
+
+      <div class="hero-visual" aria-label="T510 refined architecture compact diagram">
+        <svg viewBox="0 0 720 620" role="img">
+          <defs>
+            <marker id="heroArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 Z" fill="#14875b"></path>
+            </marker>
+            <marker id="heroCtrl" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 Z" fill="#1267a8"></path>
+            </marker>
+          </defs>
+          <rect x="24" y="28" width="672" height="560" rx="10" fill="#f8fbfd" stroke="#cbd8e2"/>
+          <text x="52" y="72" class="label">T510 单板 F-engine</text>
+          <text x="52" y="98" class="sublabel">运行状态不再强依赖外部参考和 QSFP link</text>
+
+          <rect x="54" y="145" width="132" height="70" class="node warn"/>
+          <text x="74" y="174" class="label">时钟管理</text>
+          <text x="74" y="196" class="sublabel">external / internal</text>
+
+          <rect x="54" y="250" width="132" height="72" class="node ctrl"/>
+          <text x="74" y="280" class="label">PYNQ</text>
+          <text x="74" y="302" class="sublabel">控制和预览</text>
+
+          <rect x="244" y="122" width="150" height="82" class="node data"/>
+          <text x="271" y="153" class="label">8x DAC</text>
+          <text x="266" y="176" class="sublabel">可调测试信号</text>
+
+          <rect x="244" y="236" width="150" height="82" class="node data"/>
+          <text x="268" y="266" class="label">8x ADC</text>
+          <text x="267" y="289" class="sublabel">RFDC DDC</text>
+
+          <rect x="454" y="118" width="168" height="82" class="node data"/>
+          <text x="485" y="149" class="label">Raw 时域</text>
+          <text x="477" y="172" class="sublabel">AXIS FIFO / TIME UDP</text>
+
+          <rect x="454" y="235" width="168" height="82" class="node data"/>
+          <text x="481" y="266" class="label">PFB / FFT</text>
+          <text x="480" y="289" class="sublabel">可调 channelizer</text>
+
+          <rect x="454" y="354" width="168" height="82" class="node ctrl"/>
+          <text x="488" y="385" class="label">UDP 生成</text>
+          <text x="478" y="408" class="sublabel">link down 仍计数</text>
+
+          <rect x="246" y="454" width="372" height="72" class="node future"/>
+          <text x="282" y="484" class="label">QSFP28 / CMAC</text>
+          <text x="282" y="507" class="sublabel">连接后真实发送，未连接时向 PYNQ 报告 link_down</text>
+
+          <path d="M186 178 C220 160 222 160 244 160" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#heroArrow)"/>
+          <path d="M319 204 L319 236" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#heroArrow)"/>
+          <path d="M394 274 L454 159" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#heroArrow)"/>
+          <path d="M394 276 L454 276" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#heroArrow)"/>
+          <path d="M538 200 L538 235" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#heroArrow)"/>
+          <path d="M538 317 L538 354" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#heroArrow)"/>
+          <path d="M538 436 L496 454" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#heroArrow)"/>
+          <path d="M186 286 C210 286 220 286 244 286" stroke="#1267a8" stroke-width="2" stroke-dasharray="7 5" fill="none" marker-end="url(#heroCtrl)"/>
+          <path d="M186 286 C334 354 402 385 454 393" stroke="#1267a8" stroke-width="2" stroke-dasharray="7 5" fill="none" marker-end="url(#heroCtrl)"/>
+        </svg>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section id="baseline">
+      <div class="section-head">
+        <h2>当前状态基线</h2>
+        <p class="muted">这份细化设计不从空白开始，而是继承当前 bring-up 结果：单通道 RFDC 链路和 PYNQ debug 已经可用，正式多通道数据面仍在下一阶段。</p>
+      </div>
+      <div class="grid">
+        <div class="panel span-3">
+          <div class="metric">RFDC<small>ADC valid、DAC ready、clock locked 已可在 PYNQ 端看到。</small></div>
+        </div>
+        <div class="panel span-3">
+          <div class="metric">1024<small>当前 debug 时域 buffer 与 FFT power buffer 可读。</small></div>
+        </div>
+        <div class="panel span-3">
+          <div class="metric">free-run<small>无外部 PPS/10 MHz 时，实验室模式已经可启动。</small></div>
+        </div>
+        <div class="panel span-3">
+          <div class="metric">100G<small>CMAC/QSFP28 与正式 4096-channel PFB/FFT 仍未完成。</small></div>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top:16px">
+        <div class="panel span-7">
+          <h3>现有草图保留的核心方向</h3>
+          <p>你的草图已经把系统拆成 RFDC、测试信号生成、Raw 时域信号、F-engine PFB/FFT、采样降速数据量、UDP 发送和 PYNQ 控制/预览几块。新的顶层设计延续这个划分，但补充两类缺口：第一，缺少外部参考或 QSFP 时的状态机；第二，DAC、PYNQ 预览和 UDP header 里的时间标记需要作为正式接口，而不是临时 debug。</p>
+          <div class="image-frame">
+            <img src="t510_fengine_architecture_assets/current_top_sketch.png" alt="用户提供的当前 T510 F-engine 顶层草图">
+          </div>
+        </div>
+        <div class="panel span-5">
+          <h3>这次新增的架构约束</h3>
+          <ul class="status-list">
+            <li><span class="tag lab">无外部同步</span> 仍可采样，PYNQ 显示为 <span class="mono">INTERNAL_ONLY</span>，包头 flags 标记非绝对同步。</li>
+            <li><span class="tag lab">无 QSFP</span> UDP packetizer 仍可产生 frame、seq、byte counter，链路状态显示 <span class="mono">LINK_DOWN</span>。</li>
+            <li><span class="tag work">8 路 DAC</span> 作为可调测试信号源，支持频率、幅度、相位和 PYNQ phase offset 注入。</li>
+            <li><span class="tag work">PYNQ 预览</span> 同时提供虚拟示波器和虚拟频谱仪，时域点带 sample index / time tick。</li>
+            <li><span class="tag work">UDP 时间</span> 包头带 sample counter、frame id、epoch mode 和 PPS counter。</li>
+            <li><span class="tag work">采集可调</span> RFDC 频率访问、DDC/NCO、抽取、PFB 频道数、输出频道窗口和预览长度可配置。</li>
+            <li><span class="tag work">缓存分层</span> 高速连续观测走片上 FIFO/packet FIFO；调试预览和触发抓取才写 DDR/BRAM。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <div class="section-head">
+        <h2>新的顶层架构</h2>
+        <p class="muted">数据面仍然放在 PL 内高速运行，PYNQ 只做控制、状态和低速预览。关键变化是把“内部同步状态”“未连接输出状态”“测试信号源”和“时间标记”明确成顶层接口。</p>
+      </div>
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1260 760" role="img" aria-label="T510 F-engine refined architecture">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 Z" fill="#14875b"></path>
+            </marker>
+            <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 Z" fill="#1267a8"></path>
+            </marker>
+            <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 Z" fill="#9a6b00"></path>
+            </marker>
+          </defs>
+
+          <rect x="20" y="18" width="1220" height="724" rx="10" fill="#f8fbfd" stroke="#cbd8e2"/>
+          <text x="44" y="55" class="label">T510 单板顶层</text>
+          <text x="44" y="80" class="sublabel">控制面虚线，数据面实线，状态面黄色</text>
+
+          <rect x="52" y="125" width="172" height="72" class="node warn"/>
+          <text x="78" y="154" class="label">Clock Manager</text>
+          <text x="75" y="177" class="sublabel">external / internal</text>
+
+          <rect x="52" y="245" width="172" height="72" class="node ctrl"/>
+          <text x="98" y="274" class="label">PYNQ</text>
+          <text x="73" y="297" class="sublabel">AXI-Lite / preview</text>
+
+          <rect x="52" y="365" width="172" height="72" class="node warn"/>
+          <text x="83" y="394" class="label">Status Core</text>
+          <text x="70" y="417" class="sublabel">locks / link / counters</text>
+
+          <rect x="282" y="105" width="170" height="86" class="node data"/>
+          <text x="332" y="136" class="label">DAC x8</text>
+          <text x="311" y="159" class="sublabel">tone / phase / sweep</text>
+          <text x="312" y="178" class="sublabel">PYNQ phase inject</text>
+
+          <rect x="282" y="230" width="170" height="86" class="node data"/>
+          <text x="329" y="261" class="label">ADC x8</text>
+          <text x="306" y="284" class="sublabel">RFDC DDC / NCO</text>
+          <text x="311" y="303" class="sublabel">sample counter tap</text>
+
+          <rect x="515" y="95" width="178" height="86" class="node data"/>
+          <text x="551" y="126" class="label">Raw Branch</text>
+          <text x="543" y="149" class="sublabel">AXIS FIFO stream</text>
+          <text x="543" y="168" class="sublabel">optional TIME UDP</text>
+
+          <rect x="515" y="228" width="178" height="86" class="node data"/>
+          <text x="552" y="259" class="label">PFB / FFT</text>
+          <text x="545" y="282" class="sublabel">Nchan configurable</text>
+          <text x="550" y="301" class="sublabel">frequency windows</text>
+
+          <rect x="515" y="363" width="178" height="86" class="node data"/>
+          <text x="553" y="394" class="label">Decimator</text>
+          <text x="547" y="417" class="sublabel">preview / monitor</text>
+          <text x="547" y="436" class="sublabel">rate-limited stream</text>
+
+          <rect x="758" y="128" width="174" height="86" class="node ctrl"/>
+          <text x="799" y="159" class="label">Preview</text>
+          <text x="786" y="182" class="sublabel">snapshot DDR/BRAM</text>
+          <text x="790" y="201" class="sublabel">scope + spectrum</text>
+
+          <rect x="758" y="282" width="174" height="86" class="node data"/>
+          <text x="789" y="313" class="label">Packetizer</text>
+          <text x="790" y="336" class="sublabel">packet FIFO</text>
+          <text x="788" y="355" class="sublabel">MTU-sized payload</text>
+
+          <rect x="758" y="438" width="174" height="86" class="node warn"/>
+          <text x="797" y="469" class="label">UDP Sink</text>
+          <text x="786" y="492" class="sublabel">link-down dry run</text>
+          <text x="790" y="511" class="sublabel">counter / checker</text>
+
+          <rect x="998" y="282" width="174" height="86" class="node future"/>
+          <text x="1033" y="313" class="label">CMAC 100G</text>
+          <text x="1034" y="336" class="sublabel">QSFP linked</text>
+          <text x="1031" y="355" class="sublabel">real Ethernet TX</text>
+
+          <path class="state-arrow" d="M224 160 L282 145"/>
+          <path class="arrow" d="M367 191 L367 230"/>
+          <path class="arrow" d="M452 274 L515 138"/>
+          <path class="arrow" d="M452 274 L515 271"/>
+          <path class="arrow" d="M452 274 C485 330 492 377 515 406"/>
+          <path class="arrow" d="M693 138 L758 171"/>
+          <path class="arrow" d="M693 271 L758 325"/>
+          <path class="arrow" d="M693 406 L758 325"/>
+          <path class="arrow" d="M932 325 L998 325"/>
+          <path class="state-arrow" d="M845 368 L845 438"/>
+          <path class="ctrl-arrow" d="M224 281 C314 214 398 138 515 138"/>
+          <path class="ctrl-arrow" d="M224 281 C330 314 420 388 515 406"/>
+          <path class="ctrl-arrow" d="M224 281 L758 171"/>
+          <path class="ctrl-arrow" d="M224 401 C375 500 604 530 758 481"/>
+          <path class="state-arrow" d="M224 401 C342 462 628 492 758 481"/>
+          <path class="state-arrow" d="M932 481 C976 456 1006 405 1034 368"/>
+        </svg>
+      </div>
+    </section>
+
+    <section id="modes">
+      <div class="section-head">
+        <h2>运行模式与状态策略</h2>
+        <p class="muted">新的设计把“能否采样”和“是否全局同步”分离，把“能否生成 UDP 包”和“QSFP 是否连通”分离。这样单板调试不被外部设备卡住，正式观测时又能严格标记同步等级。</p>
+      </div>
+      <div class="tabs" role="tablist" aria-label="运行模式">
+        <button class="tab active" data-tab="sync">同步模式</button>
+        <button class="tab" data-tab="link">QSFP 模式</button>
+        <button class="tab" data-tab="stream">输出模式</button>
+      </div>
+      <div class="panel">
+        <div class="tab-panel active" id="tab-sync">
+          <table>
+            <thead><tr><th>模式</th><th>触发条件</th><th>采样行为</th><th>PYNQ 状态</th><th>UDP flags</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="tag ok">EXTERNAL_LOCKED</span></td>
+                <td>外部 10 MHz 锁定，PPS 可见，RFDC tile sync 完成</td>
+                <td>下一个 PPS 边沿 arm/start，sample counter 对齐绝对秒</td>
+                <td><span class="mono">sync_source=external</span></td>
+                <td><span class="mono">REF_LOCK=1, PPS_LOCK=1, TIME_VALID=1</span></td>
+              </tr>
+              <tr>
+                <td><span class="tag lab">INTERNAL_ONLY</span></td>
+                <td>无外部 10 MHz 或 PPS，但本板 TCXO/内部参考有效</td>
+                <td>允许采样和预览，sample counter 从软件 arm 时刻或内部 epoch 递增</td>
+                <td><span class="mono">sync_source=internal_only</span></td>
+                <td><span class="mono">REF_LOCK=0, PPS_LOCK=0, TIME_VALID=0, INTERNAL_EPOCH=1</span></td>
+              </tr>
+              <tr>
+                <td><span class="tag risk">SYNC_LOST</span></td>
+                <td>streaming 中外部参考丢失或 PPS 异常</td>
+                <td>可配置为继续采样但标记 invalid，或停止正式 SPEC 输出</td>
+                <td><span class="mono">sync_state=lost</span></td>
+                <td><span class="mono">SYNC_LOST=1</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="tab-panel" id="tab-link">
+          <table>
+            <thead><tr><th>链路状态</th><th>UDP packetizer</th><th>CMAC/QSFP</th><th>PYNQ 应显示</th><th>用途</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="tag ok">LINK_UP</span></td>
+                <td>正常产生 frame 并送入 CMAC</td>
+                <td>真实发送 Ethernet/UDP</td>
+                <td><span class="mono">qsfp_link=up, tx_active=1</span></td>
+                <td>正式联调和观测</td>
+              </tr>
+              <tr>
+                <td><span class="tag lab">LINK_DOWN_DRY_RUN</span></td>
+                <td>仍产生 header、seq、sample0、frame_id 和 payload counter</td>
+                <td>TX 被导入内部 sink，不因 link down 反压主链路</td>
+                <td><span class="mono">qsfp_link=down, udp_generated=1, udp_sent=0</span></td>
+                <td>无 QSFP 时验证 UDP 逻辑、计数器和 PYNQ 状态</td>
+              </tr>
+              <tr>
+                <td><span class="tag risk">TX_BACKPRESSURE</span></td>
+                <td>如果内部 FIFO 接近满，优先保护 SPEC 或停止输出</td>
+                <td>标记 overflow/drop</td>
+                <td><span class="mono">tx_error=1</span></td>
+                <td>定位链路或仲裁器问题</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="tab-panel" id="tab-stream">
+          <table>
+            <thead><tr><th>输出模式</th><th>数据路径</th><th>目标</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><span class="tag work">PREVIEW</span></td><td>ADC/RFDC 或 PFB 输出到 BRAM/DDR</td><td>PYNQ</td><td>虚拟示波器、频谱仪、功率和 clip 监控。</td></tr>
+              <tr><td><span class="tag work">SPEC_UDP</span></td><td>ADC → PFB/FFT → channel window → UDP</td><td>未来 X-engine</td><td>用于干涉的正式 F-engine 数据。</td></tr>
+              <tr><td><span class="tag work">TIME_UDP</span></td><td>ADC → decimation/requant → UDP</td><td>其他计算</td><td>保留时域能力，用于瞬变、RFI、beamforming 或记录。</td></tr>
+              <tr><td><span class="tag lab">DUAL</span></td><td>SPEC + TIME 同时输出</td><td>调试或特殊观测</td><td>需要速率仲裁和优先级，默认保护 SPEC。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="dac">
+      <div class="section-head">
+        <h2>8 路 DAC 测试信号源</h2>
+        <p class="muted">DAC 不再只是 ADC0-DAC0 闭环临时路径，而是成为系统级自检源。每一路 DAC 都可由 PYNQ 配置频率、幅度、初相和相位偏移，用于检查 RFDC、PFB channel、相位一致性和 UDP 时间标记。</p>
+      </div>
+      <div class="grid">
+        <div class="panel span-7">
+          <div class="diagram-scroll" style="box-shadow:none">
+            <svg viewBox="0 0 1000 330" role="img" aria-label="DAC test signal architecture">
+              <defs>
+                <marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0 0 L10 5 L0 10 Z" fill="#14875b"></path>
+                </marker>
+                <marker id="arrow2b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0 0 L10 5 L0 10 Z" fill="#1267a8"></path>
+                </marker>
+              </defs>
+              <rect x="22" y="30" width="148" height="70" class="node ctrl"/>
+              <text x="62" y="60" class="label">PYNQ</text>
+              <text x="45" y="82" class="sublabel">tone table / phase</text>
+
+              <rect x="235" y="30" width="170" height="70" class="node data"/>
+              <text x="274" y="60" class="label">NCO Bank</text>
+              <text x="257" y="82" class="sublabel">8 independent DDS</text>
+
+              <rect x="470" y="30" width="170" height="70" class="node data"/>
+              <text x="510" y="60" class="label">DAC x8</text>
+              <text x="496" y="82" class="sublabel">RFDC DAC tiles</text>
+
+              <rect x="705" y="30" width="170" height="70" class="node warn"/>
+              <text x="736" y="60" class="label">Loopback</text>
+              <text x="727" y="82" class="sublabel">cable / coupler</text>
+
+              <rect x="705" y="190" width="170" height="70" class="node data"/>
+              <text x="750" y="220" class="label">ADC x8</text>
+              <text x="722" y="242" class="sublabel">measure response</text>
+
+              <rect x="470" y="190" width="170" height="70" class="node data"/>
+              <text x="509" y="220" class="label">F-engine</text>
+              <text x="495" y="242" class="sublabel">preview / PFB / UDP</text>
+
+              <rect x="235" y="190" width="170" height="70" class="node ctrl"/>
+              <text x="274" y="220" class="label">Checker</text>
+              <text x="250" y="242" class="sublabel">phase / peak / power</text>
+
+              <path d="M170 65 L235 65" stroke="#1267a8" stroke-width="2" stroke-dasharray="7 5" fill="none" marker-end="url(#arrow2b)"/>
+              <path d="M405 65 L470 65" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#arrow2)"/>
+              <path d="M640 65 L705 65" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#arrow2)"/>
+              <path d="M790 100 L790 190" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#arrow2)"/>
+              <path d="M705 225 L640 225" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#arrow2)"/>
+              <path d="M470 225 L405 225" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#arrow2)"/>
+            </svg>
+          </div>
+        </div>
+        <div class="panel span-5">
+          <h3>建议寄存器</h3>
+          <table>
+            <tbody>
+              <tr><td class="mono">DAC_ENABLE_MASK</td><td>8 bit，每一路独立使能。</td></tr>
+              <tr><td class="mono">DAC_FREQ_WORD[i]</td><td>每路 NCO 频率字。</td></tr>
+              <tr><td class="mono">DAC_AMP[i]</td><td>幅度，建议带饱和保护。</td></tr>
+              <tr><td class="mono">DAC_PHASE0[i]</td><td>初始相位。</td></tr>
+              <tr><td class="mono">DAC_PHASE_INJECT[i]</td><td>PYNQ 注入相位，用于人为制造相位差。</td></tr>
+              <tr><td class="mono">DAC_MODE[i]</td><td>single tone、multi-tone、chirp、PRBS。</td></tr>
+            </tbody>
+          </table>
+          <div class="callout" style="margin-top:14px">
+            第一阶段建议先实现 single tone 和 phase inject。只要能让 PYNQ 改变相位并在 ADC 预览或 FFT peak 上看到响应，就能形成非常强的单板闭环测试。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="preview">
+      <div class="section-head">
+        <h2>PYNQ 多路虚拟示波器与频谱仪</h2>
+        <p class="muted">PYNQ 预览不是高速数据面，而是“抽样观测窗口”。它需要同时显示多路 ADC/DAC 闭环结果：时域用多条 trace 直接看相位错开，频域用多路 peak、power 和相位标记检查每一路是否落在同一频点并保持预期相位关系。</p>
+      </div>
+      <div class="panel">
+        <div class="instrument">
+          <div>
+            <h3>虚拟示波器：多路相位叠加</h3>
+            <canvas id="scope" width="720" height="320"></canvas>
+          </div>
+          <div>
+            <h3>虚拟频谱仪：多路峰值与相位</h3>
+            <canvas id="spectrum" width="720" height="320"></canvas>
+          </div>
+        </div>
+        <div class="legend" id="channelLegend"></div>
+        <div class="controls">
+          <div class="control-row">
+            <label for="freq">DAC tone frequency</label>
+            <input id="freq" type="range" min="1" max="45" value="12">
+            <span class="mono"><span id="freqVal">12</span> MHz</span>
+          </div>
+          <div class="control-row">
+            <label for="phase">channel phase step</label>
+            <input id="phase" type="range" min="0" max="180" value="35">
+            <span class="mono"><span id="phaseVal">35</span> deg/ch</span>
+          </div>
+          <div class="control-row">
+            <label for="amp">DAC amplitude</label>
+            <input id="amp" type="range" min="5" max="95" value="62">
+            <span class="mono"><span id="ampVal">62</span> %FS</span>
+          </div>
+          <div class="control-row">
+            <label for="nchanView">visible channels</label>
+            <input id="nchanView" type="range" min="2" max="8" value="4">
+            <span class="mono"><span id="nchanVal">4</span> ch</span>
+          </div>
+        </div>
+        <div class="readout" id="readout"></div>
+      </div>
+      <div class="grid" style="margin-top:16px">
+        <div class="panel span-6">
+          <h3>时域预览数据结构</h3>
+          <pre class="mono">preview_time {
+  sync_mode      = EXTERNAL_LOCKED | INTERNAL_ONLY
+  sample_rate_hz = current RFDC output rate
+  sample0        = absolute or internal sample counter
+  nsamp          = 1024 / 4096 / configurable
+  ninput         = 1..8
+  input_mask     = selected ADC lanes
+  phase_ref      = reference input, usually ADC0
+  iq[input][n]   = complex int16 or real debug lane
+  phase_deg[input] = measured or requested phase
+}</pre>
+        </div>
+        <div class="panel span-6">
+          <h3>频谱预览数据结构</h3>
+          <pre class="mono">preview_spectrum {
+  source         = debug_fft | pfb_output
+  nfft           = 1024 now, 4096 target
+  bin0_hz        = frequency origin
+  bin_width_hz   = sample_rate_hz / nfft
+  ninput         = 1..8
+  peak_bin[input]   = hardware or software detected
+  peak_power[input] = accumulated or instant
+  phase_deg[input]  = phase at selected peak bin
+  power[input][bin] = multi-channel spectrum
+}</pre>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <h3>多路显示的工程要求</h3>
+        <table>
+          <tbody>
+            <tr><td class="mono">preview_input_mask</td><td>PYNQ 可以选择 ADC0..ADC7 的任意组合，默认显示 4 路，最多显示 8 路。</td></tr>
+            <tr><td class="mono">shared_sample0</td><td>同一次 capture 的所有通道必须共享同一个 <span class="mono">sample0</span>，否则不能用来判断相位。</td></tr>
+            <tr><td class="mono">phase_ref_input</td><td>默认 ADC0 作为相位参考，显示每一路相对 ADC0 的 <span class="mono">delta_phase</span>。</td></tr>
+            <tr><td class="mono">peak_phase[input]</td><td>频谱仪不仅显示 peak bin/power，还要显示该 bin 上的复数相位，方便验证 DAC phase inject。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="buffering">
+      <div class="section-head">
+        <h2>缓存与发包策略</h2>
+        <p class="muted">8 路、约 100 MHz 带宽时，要把“连续高速数据流缓存”和“PYNQ 调试缓存”分开设计。DDR 适合 snapshot 和触发抓取，不适合作为默认连续 UDP streaming 的必经路径；但 packetizer 前必须有片上 packet FIFO，用来凑够接近 jumbo MTU 的 payload。</p>
+      </div>
+      <div class="grid">
+        <div class="panel span-6">
+          <h3>高速连续观测路径</h3>
+          <div class="diagram-scroll" style="box-shadow:none">
+            <svg viewBox="0 0 900 210" role="img" aria-label="High speed streaming path without DDR">
+              <defs>
+                <marker id="arrowFast" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0 0 L10 5 L0 10 Z" fill="#14875b"></path>
+                </marker>
+              </defs>
+              <rect x="28" y="68" width="112" height="60" class="node data"/>
+              <text x="58" y="99" class="label">ADC</text>
+              <rect x="182" y="68" width="112" height="60" class="node data"/>
+              <text x="220" y="99" class="label">FIFO</text>
+              <rect x="336" y="54" width="148" height="88" class="node data"/>
+              <text x="365" y="88" class="label">PFB/FFT</text>
+              <text x="365" y="114" class="sublabel">or TIME path</text>
+              <rect x="526" y="54" width="148" height="88" class="node data"/>
+              <text x="554" y="88" class="label">Packet FIFO</text>
+              <text x="557" y="114" class="sublabel">8192 B payload</text>
+              <rect x="716" y="68" width="112" height="60" class="node data"/>
+              <text x="750" y="99" class="label">UDP</text>
+              <path d="M140 98 L182 98" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#arrowFast)"/>
+              <path d="M294 98 L336 98" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#arrowFast)"/>
+              <path d="M484 98 L526 98" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#arrowFast)"/>
+              <path d="M674 98 L716 98" stroke="#14875b" stroke-width="2.5" fill="none" marker-end="url(#arrowFast)"/>
+            </svg>
+          </div>
+          <p>这条路径应保持 AXI-Stream 化，使用片上 FIFO 吸收短时速率抖动。它不依赖 DDR，因此延迟低、结构清晰，也更容易保证 PFB/FFT 和 UDP 的持续吞吐。</p>
+        </div>
+        <div class="panel span-6">
+          <h3>调试预览路径</h3>
+          <div class="diagram-scroll" style="box-shadow:none">
+            <svg viewBox="0 0 900 210" role="img" aria-label="Snapshot preview path using DDR or BRAM">
+              <defs>
+                <marker id="arrowSlow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0 0 L10 5 L0 10 Z" fill="#1267a8"></path>
+                </marker>
+              </defs>
+              <rect x="42" y="68" width="112" height="60" class="node data"/>
+              <text x="72" y="99" class="label">ADC</text>
+              <rect x="214" y="54" width="142" height="88" class="node ctrl"/>
+              <text x="239" y="88" class="label">Snapshot</text>
+              <text x="242" y="114" class="sublabel">trigger/window</text>
+              <rect x="416" y="54" width="142" height="88" class="node warn"/>
+              <text x="451" y="88" class="label">DDR/BRAM</text>
+              <text x="446" y="114" class="sublabel">ring buffer</text>
+              <rect x="618" y="54" width="142" height="88" class="node ctrl"/>
+              <text x="661" y="88" class="label">PYNQ</text>
+              <text x="646" y="114" class="sublabel">scope/spectrum</text>
+              <path d="M154 98 L214 98" stroke="#1267a8" stroke-width="2.2" fill="none" marker-end="url(#arrowSlow)"/>
+              <path d="M356 98 L416 98" stroke="#1267a8" stroke-width="2.2" fill="none" marker-end="url(#arrowSlow)"/>
+              <path d="M558 98 L618 98" stroke="#1267a8" stroke-width="2.2" fill="none" marker-end="url(#arrowSlow)"/>
+            </svg>
+          </div>
+          <p>这条路径服务于 PYNQ 虚拟示波器、频谱仪、预触发/后触发抓取和离线调试。它可以使用 BRAM 做短窗口，也可以使用 DDR 做更长 snapshot，但不应反压主高速数据流。</p>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top:16px">
+        <div class="panel span-4">
+          <h3>为什么默认不走 DDR</h3>
+          <ul class="status-list">
+            <li>8 路 complex int16、100 MSps 时，原始时域 payload 约为 <span class="mono">25.6 Gbps</span>。</li>
+            <li>DDR 路径会引入写读仲裁、地址管理、突发读写和更复杂的 backpressure 策略。</li>
+            <li>连续观测中，如果网络或 CMAC 长时间跟不上，DDR 只能延迟失败，不能从根本上消除吞吐不匹配。</li>
+          </ul>
+        </div>
+        <div class="panel span-4">
+          <h3>不走 DDR 的限制</h3>
+          <ul class="status-list">
+            <li>无法保存长时间原始波形，只能保留片上 FIFO 深度内的数据。</li>
+            <li>后端或链路持续反压时，必须 drop、标记 invalid，或停止 streaming。</li>
+            <li>PYNQ 不能慢慢读取全速数据，只能读取 snapshot 或降速预览。</li>
+          </ul>
+        </div>
+        <div class="panel span-4">
+          <h3>packet FIFO 的作用</h3>
+          <ul class="status-list">
+            <li>把连续 sample 聚合成接近 MTU 的 UDP payload。</li>
+            <li>降低 packets per second，减轻 FPGA packetizer 和后端收包压力。</li>
+            <li>只需要几个 jumbo packet 深度，通常用 BRAM/URAM，不需要 DDR。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top:16px">
+        <div class="panel span-6">
+          <h3>推荐 TIME UDP payload</h3>
+          <pre class="mono">complex int16:
+  8 inputs x 4 byte/sample = 32 byte/time
+
+8192 byte payload:
+  8192 / 32 = 256 time samples
+
+packet rate:
+  100e6 / 256 = 390625 packets/s</pre>
+        </div>
+        <div class="panel span-6">
+          <h3>推荐 SPEC UDP payload</h3>
+          <pre class="mono">complex int16:
+  4 time frames x 64 channels x 8 inputs x 4 byte
+  = 8192 byte payload
+
+layout:
+  payload[time][channel][input][I/Q]</pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="packet">
+      <div class="section-head">
+        <h2>UDP 包必须带时间语义</h2>
+        <p class="muted">这里的“时间”不一定总是 UTC。外部 PPS/10 MHz 存在时，它是可跨板对齐的绝对采样时间；无外部同步时，它是本板内部 epoch 和 sample counter。两种情况必须在 header 中明确区分。</p>
+      </div>
+      <div class="packet">
+        <div class="field">
+          <b>Identity</b>
+          <span class="mono">magic, version, board_id, stream_type, local_input_mask</span>
+        </div>
+        <div class="field">
+          <b>Time</b>
+          <span class="mono">epoch_mode, unix_sec, pps_count, sample0, frame_id</span>
+        </div>
+        <div class="field">
+          <b>Layout</b>
+          <span class="mono">chan0, chan_count, time_count, payload_format</span>
+        </div>
+        <div class="field">
+          <b>Status</b>
+          <span class="mono">flags, seq_no, link_state, overflow_count, crc</span>
+        </div>
+      </div>
+      <div class="grid" style="margin-top:16px">
+        <div class="panel span-6">
+          <h3>建议 header</h3>
+          <pre class="mono">struct T510UdpHeader {
+  uint32 magic;          // "T510"
+  uint16 version;
+  uint16 header_bytes;
+  uint16 board_id;
+  uint16 stream_type;    // SPEC, TIME, PREVIEW, MONITOR
+  uint16 epoch_mode;     // EXTERNAL_PPS or INTERNAL_ONLY
+  uint16 flags;
+  uint64 unix_sec;       // valid only when TIME_VALID=1
+  uint64 pps_count;
+  uint64 sample0;        // first ADC sample in payload
+  uint64 frame_id;       // PFB frame or time block
+  uint32 seq_no;
+  uint32 chan0;
+  uint16 chan_count;
+  uint16 time_count;
+  uint16 ninput;
+  uint16 payload_format; // ci16, ci8+scale
+};</pre>
+        </div>
+        <div class="panel span-6">
+          <h3>flags 语义</h3>
+          <table>
+            <tbody>
+              <tr><td class="mono">TIME_VALID</td><td>外部参考和 PPS 有效，sample0 可跨板比较。</td></tr>
+              <tr><td class="mono">INTERNAL_EPOCH</td><td>无外部同步，sample0 只表示本板内部时间。</td></tr>
+              <tr><td class="mono">QSFP_LINK_UP</td><td>真实 CMAC link up。</td></tr>
+              <tr><td class="mono">UDP_DRY_RUN</td><td>packetizer 正在产生包，但未真实发送。</td></tr>
+              <tr><td class="mono">ADC_CLIP</td><td>当前 payload 覆盖区间内出现 clipping。</td></tr>
+              <tr><td class="mono">FIFO_OVERFLOW</td><td>数据面出现 overflow，本包或本段观测不可直接用于科学数据。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="config">
+      <div class="section-head">
+        <h2>采集链路可调参数</h2>
+        <p class="muted">“频率访问”和“通道化频点个数”需要从一开始就进入寄存器和 PYNQ API。即使第一版只固定 1024 debug FFT，也要把正式 4096 PFB/FFT 的控制面预留出来。</p>
+      </div>
+      <table>
+        <thead>
+          <tr><th>层级</th><th>参数</th><th>第一版建议</th><th>PYNQ API</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>RFDC</td>
+            <td>ADC tile/block enable、NCO center、mixer、decimation、输出 sample rate</td>
+            <td>先支持 ADC0，接口按 8 路设计</td>
+            <td class="mono">configure_rfdc(fs, center_hz, decimation, active_mask)</td>
+          </tr>
+          <tr>
+            <td>DAC</td>
+            <td>tone freq、amp、phase、phase inject、mode</td>
+            <td>8 路 single-tone + phase inject</td>
+            <td class="mono">set_dac_tone(ch, freq_hz, amp, phase_deg)</td>
+          </tr>
+          <tr>
+            <td>Preview</td>
+            <td>input select、nsamp、trigger、source、nfft</td>
+            <td>多路 1024 点时域 + 1024 FFT power，snapshot 可写 BRAM/DDR</td>
+            <td class="mono">capture_preview(input_id, nsamp, source)</td>
+          </tr>
+          <tr>
+            <td>Buffering</td>
+            <td>packet payload bytes、packet FIFO depth、snapshot buffer mode</td>
+            <td>连续流用片上 packet FIFO；调试抓取用 BRAM/DDR</td>
+            <td class="mono">configure_buffers(payload_bytes=8192, snapshot="bram_or_ddr")</td>
+          </tr>
+          <tr>
+            <td>PFB/FFT</td>
+            <td>nchan、taps、FFT shift、window、chan range</td>
+            <td>目标 4096 channel，4 taps 起步</td>
+            <td class="mono">configure_channelizer(nchan, taps, chan0, chan_count)</td>
+          </tr>
+          <tr>
+            <td>UDP</td>
+            <td>stream type、payload shape、destination、dry-run enable</td>
+            <td>无 QSFP 时默认 dry-run，不报 fatal</td>
+            <td class="mono">configure_udp(stream, dst, dry_run_auto=True)</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="registers">
+      <div class="section-head">
+        <h2>寄存器与 PYNQ 契约</h2>
+        <p class="muted">下面是建议从当前寄存器扩展出来的顶层 contract。名字可以和实际 RTL 保持一致微调，但语义建议固定，方便 notebook、自动测试和后端 packet checker 共用。</p>
+      </div>
+      <div class="grid">
+        <div class="panel span-6">
+          <h3>控制寄存器</h3>
+          <table>
+            <tbody>
+              <tr><td class="mono">CTRL_MODE</td><td><span class="mono">PREVIEW / SPEC_UDP / TIME_UDP / DUAL</span></td></tr>
+              <tr><td class="mono">SYNC_MODE</td><td><span class="mono">AUTO / REQUIRE_EXTERNAL / ALLOW_INTERNAL</span></td></tr>
+              <tr><td class="mono">ACTIVE_ADC_MASK</td><td>8 路 ADC 使能，当前可继续支持 ADC0-only lab。</td></tr>
+              <tr><td class="mono">UDP_DRY_RUN_EN</td><td>无 QSFP 时 packetizer 走内部 sink。</td></tr>
+              <tr><td class="mono">PACKET_PAYLOAD_BYTES</td><td>推荐 <span class="mono">8192</span> byte，接近 jumbo MTU 并降低包率。</td></tr>
+              <tr><td class="mono">SNAPSHOT_BUFFER_MODE</td><td><span class="mono">BRAM / DDR / DISABLE</span>，只用于预览和触发抓取。</td></tr>
+              <tr><td class="mono">PREVIEW_TRIGGER</td><td>arm、single shot、continuous、trigger source。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="panel span-6">
+          <h3>状态寄存器</h3>
+          <table>
+            <tbody>
+              <tr><td class="mono">CLOCK_STATUS</td><td>external ref、PPS seen、internal clock、RFDC lock。</td></tr>
+              <tr><td class="mono">SYNC_STATUS</td><td>external locked、internal only、sync lost、last PPS sample。</td></tr>
+              <tr><td class="mono">QSFP_STATUS</td><td>CMAC reset done、link up、tx local fault、dry-run active。</td></tr>
+              <tr><td class="mono">UDP_GEN_COUNT</td><td>packetizer 已产生包数，link down 时仍增长。</td></tr>
+              <tr><td class="mono">UDP_SENT_COUNT</td><td>真实送入 CMAC 的包数，link down 时不增长。</td></tr>
+              <tr><td class="mono">PACKET_FIFO_LEVEL</td><td>packet FIFO 当前水位，用于判断短时 backpressure。</td></tr>
+              <tr><td class="mono">SNAPSHOT_WRITE_COUNT</td><td>写入 BRAM/DDR 的 preview sample 数，不代表主高速流。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="implementation">
+      <div class="section-head">
+        <h2>实现路线</h2>
+        <p class="muted">路线按“先闭环、再全速、再多板”的顺序推进。每一步都能在没有 DGX Spark 收包端的情况下验证一部分设计。</p>
+      </div>
+      <div class="timeline">
+        <div class="step">
+          <div>
+            <h3>巩固当前单通道闭环</h3>
+            <p>保持 ADC0/DAC0、free-run、PYNQ 1024 点时域/FFT 预览可用。先把 <span class="mono">DEBUG_STATUS</span> 的 error 位语义清理成 fatal-only。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>扩展 8 路 DAC/ADC 控制面</h3>
+            <p>完成 8 路 DAC tone table、phase inject、8 路 ADC active mask 和 per-input RMS/clip 计数。即使物理只接一路，也能在 PYNQ 中看到完整接口。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>实现无 QSFP dry-run UDP</h3>
+            <p>packetizer 产生完整 header、payload counter、seq_no、frame_id。QSFP 未连接时不 fatal，PYNQ 显示 <span class="mono">udp_generated</span> 增长、<span class="mono">udp_sent</span> 不增长。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>把 preview 从 debug 功能升级为正式接口</h3>
+            <p>加入 sample0、sample_rate、sync_mode、input_mask、trigger_id 和 snapshot buffer mode。PYNQ notebook 用同一套 metadata 绘制多路示波器和多路频谱仪。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>实现片上 packet FIFO 和 jumbo payload 聚合</h3>
+            <p>连续高速流不默认写 DDR，而是在 packetizer 前凑够接近 <span class="mono">8192 byte</span> 的 payload。PYNQ 需要能看到 packet FIFO 水位、payload size 和 dry-run 计数。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>接入正式 PFB/FFT 和可调 channel window</h3>
+            <p>从 1024 debug FFT 过渡到 4096-channel PFB/FFT。支持配置 <span class="mono">nchan</span>、<span class="mono">chan0</span>、<span class="mono">chan_count</span> 和输出模式。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>QSFP link-up 后再做真实 UDP 发送</h3>
+            <p>本设计暂不涉及 DGX Spark 端采集，只要求 T510 侧能够在 link up 时把 dry-run packetizer 无缝切到 CMAC TX，并保留同样的 header contract。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="summary">
+      <div class="section-head">
+        <h2>最终建议</h2>
+      </div>
+      <div class="callout">
+        把 T510 F-engine 顶层做成四个可独立验收的平面：采样平面、测试激励平面、预览监控平面、UDP 生成平面。外部 10 MHz/PPS 和 QSFP 是“提升同步等级与输出等级”的条件，不应该是单板采样和 PYNQ 预览的硬阻塞条件。
+      </div>
+      <div class="two-col" style="margin-top:18px">
+        <p><b>当前实验室默认：</b><span class="mono">ALLOW_INTERNAL + LINK_DOWN_DRY_RUN + PREVIEW</span>。这样没有外部参考、没有 QSFP 时也能采样、看波形、看频谱、验证 DAC 相位注入和 UDP header 计数。</p>
+        <p><b>正式观测默认：</b><span class="mono">REQUIRE_EXTERNAL + LINK_UP + SPEC_UDP</span>。这样只有 10 MHz/PPS 锁定且 QSFP 真实连通时，才输出可跨板对齐的 F-engine 数据。</p>
+      </div>
+    </section>
+
+    <footer>
+      <p>Generated as an implementation-facing HTML design note. Scope: T510 F-engine side only. DGX Spark UDP receive path is intentionally out of scope for this version.</p>
+    </footer>
+  </main>
+
+  <script>
+    const $ = (sel) => document.querySelector(sel);
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        tabs.forEach((t) => t.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+        tab.classList.add('active');
+        document.querySelector('#tab-' + tab.dataset.tab).classList.add('active');
+      });
+    });
+
+    const scope = $('#scope');
+    const spectrum = $('#spectrum');
+    const sctx = scope.getContext('2d');
+    const fctx = spectrum.getContext('2d');
+    const freq = $('#freq');
+    const phase = $('#phase');
+    const amp = $('#amp');
+    const nchanView = $('#nchanView');
+    const freqVal = $('#freqVal');
+    const phaseVal = $('#phaseVal');
+    const ampVal = $('#ampVal');
+    const nchanVal = $('#nchanVal');
+    const readout = $('#readout');
+    const channelLegend = $('#channelLegend');
+    const channelColors = ['#66d9ef', '#72f1b8', '#ffd166', '#ff7aa2', '#b18cff', '#f78c6c', '#9be7c1', '#c3e88d'];
+
+    function drawGrid(ctx, w, h) {
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#071522';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = 'rgba(149, 207, 235, 0.18)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= w; x += w / 8) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= h; y += h / 6) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+    }
+
+    function render() {
+      const w = scope.width;
+      const h = scope.height;
+      const fMHz = Number(freq.value);
+      const phaseStepDeg = Number(phase.value);
+      const a = Number(amp.value) / 100;
+      const visibleChannels = Number(nchanView.value);
+      const fsMHz = 100;
+      const n = 256;
+      const t0 = Math.floor(performance.now() / 50) * 256;
+
+      freqVal.textContent = freq.value;
+      phaseVal.textContent = phase.value;
+      ampVal.textContent = amp.value;
+      nchanVal.textContent = nchanView.value;
+
+      channelLegend.innerHTML = '';
+      for (let ch = 0; ch < visibleChannels; ch++) {
+        const item = document.createElement('span');
+        item.className = 'legend-item';
+        item.style.color = channelColors[ch];
+        const delta = ch * phaseStepDeg;
+        item.innerHTML = '<span class="swatch"></span><span class="mono">CH' + ch + ' ' + delta + ' deg</span>';
+        channelLegend.appendChild(item);
+      }
+
+      drawGrid(sctx, w, h);
+      for (let ch = 0; ch < visibleChannels; ch++) {
+        const ph = ch * phaseStepDeg * Math.PI / 180;
+        sctx.strokeStyle = channelColors[ch];
+        sctx.globalAlpha = ch === 0 ? 1 : 0.9;
+        sctx.lineWidth = ch === 0 ? 2.4 : 1.8;
+        sctx.beginPath();
+        for (let i = 0; i < n; i++) {
+          const yv = Math.sin(2 * Math.PI * fMHz / fsMHz * i + ph) * a;
+          const noise = 0.022 * Math.sin(i * (0.71 + ch * 0.03) + ph * 0.3);
+          const x = i / (n - 1) * w;
+          const y = h * 0.5 - (yv + noise) * h * (0.34 - Math.min(0.08, visibleChannels * 0.006));
+          if (i === 0) sctx.moveTo(x, y); else sctx.lineTo(x, y);
+        }
+        sctx.stroke();
+      }
+      sctx.globalAlpha = 1;
+      sctx.fillStyle = '#d9f2ff';
+      sctx.font = '15px Cascadia Code, monospace';
+      sctx.fillText('sample0=' + t0 + '  dt=10 ns  mode=INTERNAL_ONLY', 18, 26);
+      sctx.fillText('inputs=ADC0..ADC' + (visibleChannels - 1) + '  nsamp=256  phase_step=' + phase.value + ' deg/ch', 18, 50);
+
+      drawGrid(fctx, spectrum.width, spectrum.height);
+      const bins = 128;
+      const peakBin = Math.round(fMHz / fsMHz * bins);
+      for (let ch = 0; ch < visibleChannels; ch++) {
+        const ph = ch * phaseStepDeg * Math.PI / 180;
+        for (let i = 0; i < bins; i++) {
+          const dist = Math.min(Math.abs(i - peakBin), Math.abs(i - (bins - peakBin)));
+          const val = Math.max(0.01, a * Math.exp(-dist * dist / 5.5) + 0.035 * Math.sin(i * 0.31 + ph) ** 2);
+          const barH = val * spectrum.height * 0.58;
+          const x = i / bins * spectrum.width + ch * 1.2;
+          const bw = Math.max(1, spectrum.width / bins / Math.max(2, visibleChannels * 0.6));
+          fctx.globalAlpha = dist < 2 ? 0.95 : 0.18;
+          fctx.fillStyle = channelColors[ch];
+          fctx.fillRect(x, spectrum.height - 24 - barH, bw, barH);
+        }
+        fctx.globalAlpha = 1;
+        fctx.fillStyle = channelColors[ch];
+        fctx.font = '13px Cascadia Code, monospace';
+        fctx.fillText('CH' + ch + ' phase=' + (ch * phaseStepDeg) + 'deg', 18, 76 + ch * 18);
+      }
+      fctx.globalAlpha = 1;
+      fctx.fillStyle = '#d9f2ff';
+      fctx.font = '15px Cascadia Code, monospace';
+      fctx.fillText('peak_bin=' + peakBin + '  peak_freq=' + fMHz + ' MHz', 18, 26);
+      fctx.fillText('nfft=1024 now, target=4096 PFB, multi-input phase readout', 18, 50);
+
+      readout.textContent =
+        'PYNQ preview metadata: sync_mode=INTERNAL_ONLY, sample_rate=100e6, sample0=' +
+        t0 + ', input_mask=0x' + ((1 << visibleChannels) - 1).toString(16).padStart(2, '0') +
+        ', DAC.freq=' + fMHz + 'MHz, phase_step=' + phase.value +
+        'deg/ch, phase_ref=CH0, UDP_DRY_RUN=1, QSFP_LINK_UP=0';
+    }
+
+    [freq, phase, amp, nchanView].forEach((el) => el.addEventListener('input', render));
+    render();
+  </script>
+</body>
+</html>
