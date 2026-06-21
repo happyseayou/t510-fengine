@@ -26,8 +26,11 @@ module t510_fengine_synthetic_board_top (
     logic [1:0] pps_sync = 2'b00;
     logic pps_d = 1'b0;
     logic pps_seen_latched = 1'b0;
+    logic [27:0] pps_age_cycles = 28'd122_880_000;
+    logic [23:0] pps_blink_cycles = 24'd0;
 
     wire rst_n = &reset_pipe;
+    wire pps_recent = pps_seen_latched && (pps_age_cycles < 28'd122_880_000);
 
     always_ff @(posedge pl_clk) begin
         reset_pipe <= {reset_pipe[6:0], 1'b1};
@@ -36,6 +39,15 @@ module t510_fengine_synthetic_board_top (
         pps_d <= pps_sync[1];
         if (pps_sync[1] && !pps_d) begin
             pps_seen_latched <= 1'b1;
+            pps_age_cycles <= 28'd0;
+            pps_blink_cycles <= 24'd6_144_000;
+        end else begin
+            if (pps_age_cycles != 28'd122_880_000) begin
+                pps_age_cycles <= pps_age_cycles + 28'd1;
+            end
+            if (pps_blink_cycles != 24'd0) begin
+                pps_blink_cycles <= pps_blink_cycles - 24'd1;
+            end
         end
     end
 
@@ -135,15 +147,26 @@ module t510_fengine_synthetic_board_top (
     logic [63:0] test_sample_counter = 64'd0;
     logic [7:0] test_frame_counter = 8'd0;
     wire adc_test_tready;
-    wire [255:0] adc_test_tdata = {
-        test_sample_counter[15:0] + 16'd7, ~(test_sample_counter[15:0] + 16'd7),
-        test_sample_counter[15:0] + 16'd6, ~(test_sample_counter[15:0] + 16'd6),
-        test_sample_counter[15:0] + 16'd5, ~(test_sample_counter[15:0] + 16'd5),
-        test_sample_counter[15:0] + 16'd4, ~(test_sample_counter[15:0] + 16'd4),
-        test_sample_counter[15:0] + 16'd3, ~(test_sample_counter[15:0] + 16'd3),
-        test_sample_counter[15:0] + 16'd2, ~(test_sample_counter[15:0] + 16'd2),
-        test_sample_counter[15:0] + 16'd1, ~(test_sample_counter[15:0] + 16'd1),
-        test_sample_counter[15:0] + 16'd0, ~(test_sample_counter[15:0] + 16'd0)
+    function automatic [255:0] make_preview_subsample(input [15:0] sample_base);
+        begin
+            make_preview_subsample = {
+                sample_base + 16'd7, ~(sample_base + 16'd7),
+                sample_base + 16'd6, ~(sample_base + 16'd6),
+                sample_base + 16'd5, ~(sample_base + 16'd5),
+                sample_base + 16'd4, ~(sample_base + 16'd4),
+                sample_base + 16'd3, ~(sample_base + 16'd3),
+                sample_base + 16'd2, ~(sample_base + 16'd2),
+                sample_base + 16'd1, ~(sample_base + 16'd1),
+                sample_base + 16'd0, ~(sample_base + 16'd0)
+            };
+        end
+    endfunction
+
+    wire [1023:0] adc_test_tdata = {
+        make_preview_subsample(test_sample_counter[15:0] + 16'd24),
+        make_preview_subsample(test_sample_counter[15:0] + 16'd16),
+        make_preview_subsample(test_sample_counter[15:0] + 16'd8),
+        make_preview_subsample(test_sample_counter[15:0])
     };
     wire [31:0] adc_test_tuser = test_sample_counter[31:0];
     wire adc_test_tvalid = rst_n;
@@ -211,13 +234,13 @@ module t510_fengine_synthetic_board_top (
         .s_axis_adc_tvalid(adc_test_tvalid),
         .s_axis_adc_tlast(adc_test_tlast),
         .s_axis_adc_tready(adc_test_tready),
-        .s_axis_preview_tdata0(adc_test_tdata),
-        .s_axis_preview_tdata1(adc_test_tdata),
-        .s_axis_preview_tdata2(adc_test_tdata),
-        .s_axis_preview_tdata3(adc_test_tdata),
+        .s_axis_preview_tdata0(adc_test_tdata[255:0]),
+        .s_axis_preview_tdata1(adc_test_tdata[511:256]),
+        .s_axis_preview_tdata2(adc_test_tdata[767:512]),
+        .s_axis_preview_tdata3(adc_test_tdata[1023:768]),
         .s_axis_preview_sample0(test_sample_counter << 2),
         .s_axis_preview_tvalid(adc_test_tvalid && adc_test_tready),
-        .rfdc_status_flags({27'd0, pps_seen_latched, rst_n, 1'b1, 1'b1, adc_test_tready}),
+        .rfdc_status_flags({25'd0, pps_recent, pps_sync[1], pps_seen_latched, rst_n, 1'b1, 1'b1, adc_test_tready}),
         .rfdc_sample_count(test_sample_counter),
         .rfdc_dropped_count(32'd0),
         .rfdc_current_valid_mask(16'hffff),
@@ -248,7 +271,14 @@ module t510_fengine_synthetic_board_top (
         .m_axis_tx_tvalid(core_tx_tvalid),
         .m_axis_tx_tlast(core_tx_tlast),
         .m_axis_tx_tready(1'b1),
-        .tx_link_status_flags(32'h0000_0002),
+        .cmac_tx_clk(pl_clk),
+        .cmac_tx_rst_n(rst_n),
+        .cmac_tx_axis_tdata(),
+        .cmac_tx_axis_tkeep(),
+        .cmac_tx_axis_tvalid(),
+        .cmac_tx_axis_tlast(),
+        .cmac_tx_axis_tready(1'b1),
+        .tx_link_status_flags(32'h0000_101d),
         .tx_dry_run_packet_count(32'd0),
         .tx_dry_run_byte_count(32'd0),
         .dac_tone_enable(),
@@ -272,9 +302,9 @@ module t510_fengine_synthetic_board_top (
     assign qsfp0_lpmode = 1'b0;
     assign qsfp0_modsell = 1'b0;
 
-    assign pl_led0 = heartbeat[27];
-    assign pl_led1 = pps_seen_latched;
-    assign pl_led2 = !qsfp0_modprsl;
-    assign pl_led3 = tx_activity_latched | core_irq | !qsfp0_intl;
+    assign pl_led0 = rst_n;
+    assign pl_led1 = (pps_blink_cycles != 24'd0);
+    assign pl_led2 = pps_recent;
+    assign pl_led3 = core_irq | !pps_recent;
 
 endmodule

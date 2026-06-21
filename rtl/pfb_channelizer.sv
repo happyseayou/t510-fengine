@@ -30,26 +30,30 @@ module pfb_channelizer #(
     output wire [15:0]          packet_time_count
 );
 
-    localparam [31:0] PAYLOAD_BEATS = 32'd256;
+    localparam [31:0] PAYLOAD_CELLS = 32'd256;
+    localparam integer CELLS_PER_BEAT = DATA_W / (NINPUT * 32);
+    localparam [15:0] CELLS_PER_BEAT_U16 = CELLS_PER_BEAT;
     localparam [31:0] LOCAL_NCHAN   = NCHAN;
 
     logic [15:0] channel_offset;
     logic [15:0] time_offset;
-    wire [31:0] window_beats;
+    wire [31:0] window_cells;
     wire [31:0] chan_end;
     wire        config_valid;
     wire        output_fire;
     wire [31:0] current_chan;
     wire [31:0] current_power;
 
-    assign window_beats = cfg_chan_count * cfg_time_count;
+    assign window_cells = cfg_chan_count * cfg_time_count;
     assign chan_end     = cfg_chan0 + {16'd0, cfg_chan_count};
     assign config_valid = (cfg_taps != 16'd0) &&
                           (cfg_chan_count != 16'd0) &&
                           (cfg_time_count != 16'd0) &&
+                          (cfg_chan_count >= CELLS_PER_BEAT_U16) &&
+                          ((cfg_chan_count % CELLS_PER_BEAT_U16) == 16'd0) &&
                           (cfg_chan0 < LOCAL_NCHAN) &&
                           (chan_end <= LOCAL_NCHAN) &&
-                          (window_beats == PAYLOAD_BEATS);
+                          (window_cells == PAYLOAD_CELLS);
 
     assign s_axis_tready = enable && config_valid && m_axis_tready;
     assign m_axis_tdata  = s_axis_tdata;
@@ -75,15 +79,15 @@ module pfb_channelizer #(
     endfunction
 
     function automatic [31:0] beat_metric(input logic [DATA_W-1:0] data);
-        integer lane_idx;
+        integer word_idx;
         logic signed [15:0] i_word;
         logic signed [15:0] q_word;
         logic [31:0] sum;
         begin
             sum = 32'd0;
-            for (lane_idx = 0; lane_idx < NINPUT; lane_idx = lane_idx + 1) begin
-                i_word = data[lane_idx*32 +: 16];
-                q_word = data[lane_idx*32 + 16 +: 16];
+            for (word_idx = 0; word_idx < DATA_W / 32; word_idx = word_idx + 1) begin
+                i_word = data[word_idx*32 +: 16];
+                q_word = data[word_idx*32 + 16 +: 16];
                 sum = sum + {16'd0, abs16(i_word)} + {16'd0, abs16(q_word)};
             end
             beat_metric = sum;
@@ -121,7 +125,7 @@ module pfb_channelizer #(
                         peak_chan  <= current_chan;
                     end
 
-                    if (channel_offset == cfg_chan_count - 16'd1) begin
+                    if ((channel_offset + CELLS_PER_BEAT_U16) >= cfg_chan_count) begin
                         channel_offset <= 16'd0;
                         if (time_offset == cfg_time_count - 16'd1) begin
                             time_offset <= 16'd0;
@@ -130,7 +134,7 @@ module pfb_channelizer #(
                             time_offset <= time_offset + 16'd1;
                         end
                     end else begin
-                        channel_offset <= channel_offset + 16'd1;
+                        channel_offset <= channel_offset + CELLS_PER_BEAT_U16;
                     end
                 end
             end

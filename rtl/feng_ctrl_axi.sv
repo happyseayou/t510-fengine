@@ -28,6 +28,7 @@ module feng_ctrl_axi #(
     input  wire [1:0]                   active_sync_mode,
     input  wire                         waiting_for_epoch,
     input  wire                         pps_seen,
+    input  wire [63:0]                  pps_count,
     input  wire                         ref_locked,
     input  wire [31:0]                  error_flags,
     input  wire [31:0]                  monitor_sample_count,
@@ -106,6 +107,17 @@ module feng_ctrl_axi #(
     input  wire [31:0]                  dac_tx_witness_mode,
     input  wire [31:0]                  dac_tx_witness_ready_gap_count,
     input  wire [31:0]                  dac_tx_witness_rd_data,
+    input  wire                         rfdc_axis_raw_witness_armed,
+    input  wire                         rfdc_axis_raw_witness_valid,
+    input  wire                         rfdc_axis_raw_witness_capturing,
+    input  wire                         rfdc_axis_raw_witness_overflow,
+    input  wire                         rfdc_axis_raw_witness_tvalid_seen,
+    input  wire [8:0]                   rfdc_axis_raw_witness_beat_count,
+    input  wire [2:0]                   rfdc_axis_raw_witness_channel_select,
+    input  wire [63:0]                  rfdc_axis_raw_witness_sample0,
+    input  wire [31:0]                  rfdc_axis_raw_witness_rfdc_flags,
+    input  wire [15:0]                  rfdc_axis_raw_witness_valid_mask,
+    input  wire [31:0]                  rfdc_axis_raw_witness_rd_data,
     input  wire [NINPUT*32-1:0]         tx_spec_route_hit_counts,
     input  wire [NINPUT*32-1:0]         tx_time_route_hit_counts,
     input  wire [31:0]                  pfb_status,
@@ -190,6 +202,7 @@ module feng_ctrl_axi #(
     output logic [NINPUT*48-1:0]        tx_endpoint_mac_vec,
     output logic [NINPUT*16-1:0]        tx_endpoint_src_port_vec,
     output logic [NINPUT*16-1:0]        tx_endpoint_dst_port_vec,
+    output logic [31:0]                 qsfp_test_interval_cycles,
     output logic [NINPUT-1:0]           tx_spec_route_enable,
     output logic [NINPUT*32-1:0]        tx_spec_route_chan0_vec,
     output logic [NINPUT*16-1:0]        tx_spec_route_chan_count_vec,
@@ -236,15 +249,28 @@ module feng_ctrl_axi #(
     output logic                        dac_tx_witness_clear_pulse,
     output logic [8:0]                  dac_tx_witness_capture_words,
     output logic [9:0]                  dac_tx_witness_rd_word,
-    output logic [63:0]                 unix_seconds
+    output logic                        rfdc_axis_raw_witness_arm_pulse,
+    output logic                        rfdc_axis_raw_witness_clear_pulse,
+    output logic [2:0]                  rfdc_axis_raw_witness_channel_select_ctrl,
+    output logic [8:0]                  rfdc_axis_raw_witness_capture_beats,
+    output logic [9:0]                  rfdc_axis_raw_witness_rd_word,
+    output logic [63:0]                 unix_seconds,
+    output wire [1:0]                   science_bandwidth_mode_cfg,
+    output wire [2:0]                   science_output_mode_cfg
 );
 
-    localparam [31:0] CORE_VERSION = 32'h0001_000e;
+    localparam [31:0] CORE_VERSION = 32'h0001_001A;
     localparam [31:0] DEBUG_NFFT = 32'd1024;
     localparam [31:0] DEBUG_OBS_SAMPLE_RATE_HZ = 32'd61_440_000;
     localparam [31:0] PREVIEW_SAMPLE_RATE_HZ = 32'd245_760_000;
     localparam [31:0] PREVIEW_AXIS_BEAT_RATE_HZ = 32'd61_440_000;
     localparam [31:0] PREVIEW_MODE_FULLRATE_IQ = 32'd1;
+    localparam [31:0] SCIENCE_CAPABILITY_WORD = 32'h0000_0307;
+    localparam [2:0]  SCIENCE_MODE_OFF              = 3'd0;
+    localparam [2:0]  SCIENCE_MODE_TIME_ONLY        = 3'd1;
+    localparam [2:0]  SCIENCE_MODE_SPEC_ONLY        = 3'd2;
+    localparam [2:0]  SCIENCE_MODE_TIME_SPEC        = 3'd3;
+    localparam [2:0]  SCIENCE_MODE_TIME_MONITOR_SPEC = 3'd4;
     localparam [1:0]  SYNC_EXTERNAL_PPS   = 2'd0;
     localparam [1:0]  SYNC_SOFTWARE_EPOCH = 2'd1;
     localparam [1:0]  SYNC_FREE_RUN       = 2'd2;
@@ -254,6 +280,16 @@ module feng_ctrl_axi #(
 
     wire [63:0] tx_payload_witness_source_sample0 = tx_payload_witness_rfdc_sample_count << 2;
     wire [63:0] tx_payload_witness_preview_delta = tx_payload_witness_sample0 - preview_sample0;
+    logic [31:0] science_control;
+    logic [1:0]  science_bandwidth_mode;
+    logic [2:0]  science_output_mode;
+    wire         science_live_requested;
+    wire         science_time_enabled;
+    wire         science_spec_enabled;
+    wire         science_time_spec_rejected;
+    wire         science_cmac_live_ready;
+    wire [31:0] science_block_reason;
+    wire [31:0] science_status_word;
 
     logic [AXI_ADDR_W-1:0] awaddr_latched;
     logic                  awaddr_valid;
@@ -262,8 +298,8 @@ module feng_ctrl_axi #(
     logic                  wdata_valid;
     logic [AXI_ADDR_W-1:0] araddr_latched;
     logic                  read_pending;
-    logic [15:0]           write_addr;
-    logic [15:0]           read_addr;
+    logic [17:0]           write_addr;
+    logic [17:0]           read_addr;
 
     function automatic [31:0] lane_word(
         input [NINPUT*32-1:0] bus,
@@ -303,10 +339,114 @@ module feng_ctrl_axi #(
     assign ar_accept       = s_axi_arready && s_axi_arvalid && !s_axi_rvalid;
     assign have_write_addr = awaddr_valid || aw_accept;
     assign have_write_data = wdata_valid || w_accept;
+    assign science_live_requested = science_control[1] && !science_control[0];
+    assign science_bandwidth_mode_cfg = science_bandwidth_mode;
+    assign science_output_mode_cfg = science_output_mode;
+    assign science_time_enabled =
+        (science_output_mode == SCIENCE_MODE_TIME_ONLY) ||
+        (science_output_mode == SCIENCE_MODE_TIME_SPEC) ||
+        (science_output_mode == SCIENCE_MODE_TIME_MONITOR_SPEC);
+    assign science_spec_enabled =
+        (science_output_mode == SCIENCE_MODE_SPEC_ONLY) ||
+        (science_output_mode == SCIENCE_MODE_TIME_SPEC);
+    assign science_time_spec_rejected =
+        (science_bandwidth_mode == 2'd2) &&
+        (science_output_mode == SCIENCE_MODE_TIME_SPEC);
+    assign science_cmac_live_ready =
+        tx_link_status_flags[0] &&
+        tx_link_status_flags[2] &&
+        tx_link_status_flags[3] &&
+        tx_link_status_flags[4] &&
+        !tx_link_status_flags[5] &&
+        !tx_link_status_flags[6] &&
+        !tx_link_status_flags[1];
+    assign science_block_reason = {
+        25'd0,
+        science_control[0],
+        science_live_requested && !science_cmac_live_ready,
+        1'b0,
+        1'b1,
+        1'b0,
+        science_spec_enabled,
+        science_time_spec_rejected
+    };
+    assign science_status_word = {
+        16'd0,
+        science_output_mode,
+        3'd0,
+        science_bandwidth_mode,
+        2'd0,
+        science_cmac_live_ready,
+        1'b0,
+        1'b0,
+        science_time_spec_rejected,
+        science_spec_enabled,
+        science_time_enabled
+    };
 
-    function automatic [15:0] local_addr(input [AXI_ADDR_W-1:0] addr);
+    function automatic [17:0] local_addr(input [AXI_ADDR_W-1:0] addr);
         begin
-            local_addr = addr[15:0];
+            local_addr = addr[17:0];
+        end
+    endfunction
+
+    function automatic [31:0] science_sample_rate_hz(input logic [1:0] bw_mode);
+        begin
+            case (bw_mode)
+                2'd0: science_sample_rate_hz = 32'd30_720_000;
+                2'd1: science_sample_rate_hz = 32'd122_880_000;
+                2'd2: science_sample_rate_hz = 32'd245_760_000;
+                default: science_sample_rate_hz = 32'd30_720_000;
+            endcase
+        end
+    endfunction
+
+    function automatic [31:0] science_decim_factor(input logic [1:0] bw_mode);
+        begin
+            case (bw_mode)
+                2'd0: science_decim_factor = 32'd8;
+                2'd1: science_decim_factor = 32'd2;
+                2'd2: science_decim_factor = 32'd1;
+                default: science_decim_factor = 32'd8;
+            endcase
+        end
+    endfunction
+
+    function automatic [31:0] science_single_stream_mbps(input logic [1:0] bw_mode);
+        begin
+            case (bw_mode)
+                2'd0: science_single_stream_mbps = 32'd7_864;
+                2'd1: science_single_stream_mbps = 32'd31_457;
+                2'd2: science_single_stream_mbps = 32'd62_915;
+                default: science_single_stream_mbps = 32'd7_864;
+            endcase
+        end
+    endfunction
+
+    function automatic [31:0] science_monitor_spec_mbps(input logic [1:0] bw_mode);
+        begin
+            case (bw_mode)
+                2'd0: science_monitor_spec_mbps = 32'd123;
+                2'd1: science_monitor_spec_mbps = 32'd491;
+                2'd2: science_monitor_spec_mbps = 32'd983;
+                default: science_monitor_spec_mbps = 32'd123;
+            endcase
+        end
+    endfunction
+
+    function automatic [31:0] science_payload_rate_mbps(
+        input logic [1:0] bw_mode,
+        input logic [2:0] out_mode
+    );
+        begin
+            case (out_mode)
+                SCIENCE_MODE_TIME_ONLY,
+                SCIENCE_MODE_SPEC_ONLY: science_payload_rate_mbps = science_single_stream_mbps(bw_mode);
+                SCIENCE_MODE_TIME_SPEC: science_payload_rate_mbps = science_single_stream_mbps(bw_mode) << 1;
+                SCIENCE_MODE_TIME_MONITOR_SPEC: science_payload_rate_mbps =
+                    science_single_stream_mbps(bw_mode) + science_monitor_spec_mbps(bw_mode);
+                default: science_payload_rate_mbps = 32'd0;
+            endcase
         end
     endfunction
 
@@ -347,6 +487,10 @@ module feng_ctrl_axi #(
             dac_tx_witness_arm_pulse <= 1'b0;
             dac_tx_witness_clear_pulse <= 1'b0;
             dac_tx_witness_capture_words <= 9'd256;
+            rfdc_axis_raw_witness_arm_pulse <= 1'b0;
+            rfdc_axis_raw_witness_clear_pulse <= 1'b0;
+            rfdc_axis_raw_witness_channel_select_ctrl <= 3'd0;
+            rfdc_axis_raw_witness_capture_beats <= 9'd256;
             tx_clear_pulse     <= 1'b0;
             pfb_clear_pulse    <= 1'b0;
             sync_mode          <= SYNC_EXTERNAL_PPS;
@@ -364,6 +508,9 @@ module feng_ctrl_axi #(
             pfb_chan0          <= 32'd0;
             pfb_chan_count     <= 16'd64;
             pfb_time_count     <= 16'd4;
+            science_control    <= 32'h0000_0001;
+            science_bandwidth_mode <= 2'd1;
+            science_output_mode <= SCIENCE_MODE_OFF;
             chan_split         <= 32'd2048;
             src_ip             <= 32'h0a00_0101;
             dgx_a_ip           <= 32'h0a00_010a;
@@ -384,7 +531,7 @@ module feng_ctrl_axi #(
             };
             tx_endpoint_mac_vec <= {
                 48'd0, 48'd0, 48'd0, 48'd0, 48'd0,
-                48'h0200_0000_0010, 48'h0200_0000_000b, 48'h0200_0000_000a
+                48'h08c0_ebd5_95b2, 48'h0200_0000_000b, 48'h0200_0000_000a
             };
             tx_endpoint_src_port_vec <= {NINPUT{16'd4000}};
             tx_endpoint_dst_port_vec <= {
@@ -408,6 +555,7 @@ module feng_ctrl_axi #(
             tx_time_route_endpoint_vec <= {
                 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd2
             };
+            qsfp_test_interval_cycles <= 32'd322_266;
             rfdc_active_mask    <= 16'hffff;
             dac_tone_enable     <= 1'b1;
             dac_tone_amplitude  <= 16'd2048;
@@ -440,6 +588,8 @@ module feng_ctrl_axi #(
             tx_payload_witness_clear_pulse <= 1'b0;
             dac_tx_witness_arm_pulse <= 1'b0;
             dac_tx_witness_clear_pulse <= 1'b0;
+            rfdc_axis_raw_witness_arm_pulse <= 1'b0;
+            rfdc_axis_raw_witness_clear_pulse <= 1'b0;
             tx_clear_pulse <= 1'b0;
             pfb_clear_pulse <= 1'b0;
             s_axi_awready    <= !awaddr_valid && !s_axi_bvalid;
@@ -625,9 +775,29 @@ module feng_ctrl_axi #(
                             dac_tx_witness_capture_words <= 9'd256;
                         end
                     end
+                    16'he200: begin
+                        if ((w_accept ? s_axi_wdata[0] : wdata_latched[0])) begin
+                            rfdc_axis_raw_witness_arm_pulse <= 1'b1;
+                        end
+                        if ((w_accept ? s_axi_wdata[1] : wdata_latched[1])) begin
+                            rfdc_axis_raw_witness_clear_pulse <= 1'b1;
+                        end
+                    end
+                    16'he208: begin
+                        rfdc_axis_raw_witness_channel_select_ctrl <= (w_accept ? s_axi_wdata[2:0] : wdata_latched[2:0]);
+                    end
+                    16'he20c: begin
+                        if ((w_accept ? s_axi_wdata[8:0] : wdata_latched[8:0]) == 9'd0) begin
+                            rfdc_axis_raw_witness_capture_beats <= 9'd256;
+                        end else if ((w_accept ? s_axi_wdata[8:0] : wdata_latched[8:0]) <= 9'd256) begin
+                            rfdc_axis_raw_witness_capture_beats <= (w_accept ? s_axi_wdata[8:0] : wdata_latched[8:0]);
+                        end else begin
+                            rfdc_axis_raw_witness_capture_beats <= 9'd256;
+                        end
+                    end
                     16'hb000: begin
-                        tx_control[3:0] <= (w_accept ? s_axi_wdata[3:0] : wdata_latched[3:0]);
-                        if ((w_accept ? s_axi_wdata[4] : wdata_latched[4])) begin
+                        tx_control[4:0] <= (w_accept ? s_axi_wdata[4:0] : wdata_latched[4:0]);
+                        if ((w_accept ? s_axi_wdata[5] : wdata_latched[5])) begin
                             tx_clear_pulse <= 1'b1;
                         end
                     end
@@ -779,6 +949,32 @@ module feng_ctrl_axi #(
                             spec_time_count <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
                         end
                     end
+                    16'hd000: begin
+                        apply_wstrb(science_control, (w_accept ? s_axi_wdata : wdata_latched), (w_accept ? s_axi_wstrb : wstrb_latched));
+                    end
+                    16'hd008: begin
+                        case ((w_accept ? s_axi_wdata[1:0] : wdata_latched[1:0]))
+                            2'd0,
+                            2'd1,
+                            2'd2: science_bandwidth_mode <= (w_accept ? s_axi_wdata[1:0] : wdata_latched[1:0]);
+                            default: science_bandwidth_mode <= 2'd1;
+                        endcase
+                    end
+                    16'hd00c: begin
+                        case ((w_accept ? s_axi_wdata[2:0] : wdata_latched[2:0]))
+                            SCIENCE_MODE_OFF,
+                            SCIENCE_MODE_TIME_ONLY,
+                            SCIENCE_MODE_SPEC_ONLY,
+                            SCIENCE_MODE_TIME_SPEC,
+                            SCIENCE_MODE_TIME_MONITOR_SPEC: science_output_mode <= (w_accept ? s_axi_wdata[2:0] : wdata_latched[2:0]);
+                            default: science_output_mode <= SCIENCE_MODE_OFF;
+                        endcase
+                    end
+                    16'hb700: begin
+                        if ((w_accept ? s_axi_wdata[31:0] : wdata_latched[31:0]) >= 32'd1024) begin
+                            qsfp_test_interval_cycles <= (w_accept ? s_axi_wdata[31:0] : wdata_latched[31:0]);
+                        end
+                    end
                     default: begin
                         if ((write_addr >= 16'hb100) && (write_addr < 16'hb200)) begin
                             write_idx = (write_addr - 16'hb100) >> 5;
@@ -857,6 +1053,7 @@ module feng_ctrl_axi #(
         tx_frame_capture_rd_word = 5'd0;
         tx_payload_witness_rd_word = 12'd0;
         dac_tx_witness_rd_word = 10'd0;
+        rfdc_axis_raw_witness_rd_word = 10'd0;
         if ((read_addr >= 16'h0800) && (read_addr < 16'h1800)) begin
             debug_time_rd_addr = (read_addr - 16'h0800) >> 2;
         end
@@ -876,11 +1073,14 @@ module feng_ctrl_axi #(
         if ((read_addr >= 16'hb040) && (read_addr < 16'hb0c0)) begin
             tx_frame_capture_rd_word = (read_addr - 16'hb040) >> 2;
         end
-        if ((read_addr >= 16'hd000) && (read_addr < 16'hf100)) begin
-            tx_payload_witness_rd_word = (read_addr - 16'hd000) >> 2;
+        if ((read_addr >= 18'h10000) && (read_addr < 18'h12100)) begin
+            tx_payload_witness_rd_word = (read_addr - 18'h10000) >> 2;
         end
         if ((read_addr >= 16'hc000) && (read_addr < 16'hd000)) begin
             dac_tx_witness_rd_word = (read_addr - 16'hc000) >> 2;
+        end
+        if ((read_addr >= 16'he800) && (read_addr < 16'hf800)) begin
+            rfdc_axis_raw_witness_rd_word = (read_addr - 16'he800) >> 2;
         end
 
         case (read_addr)
@@ -889,10 +1089,12 @@ module feng_ctrl_axi #(
             16'h0008: read_data_next = {30'd0, mode};
             16'h000c: read_data_next = {28'd0, soft_reset_pulse, stop_pulse, soft_epoch_pulse, arm_latched};
             16'h0010: read_data_next = {20'd0, fsm_state, 3'd0, waiting_for_epoch, active_sync_mode, streaming, armed};
-            16'h0014: read_data_next = {30'd0, ref_locked, pps_seen};
+            16'h0014: read_data_next = {29'd0, (pps_count != 64'd0), ref_locked, pps_seen};
             16'h0018: read_data_next = {31'd0, ref_locked};
             16'h001c: read_data_next = error_flags;
             16'h0020: read_data_next = {14'd0, clock_ref, 14'd0, sync_mode};
+            16'h0024: read_data_next = pps_count[31:0];
+            16'h0028: read_data_next = pps_count[63:32];
             16'h00f0: read_data_next = (s_axi_arvalid ? s_axi_araddr[31:0] : araddr_latched[31:0]);
             16'h00f4: read_data_next = awaddr_latched[31:0];
             16'h0100: read_data_next = 32'd8;
@@ -1020,7 +1222,28 @@ module feng_ctrl_axi #(
             16'hb61c: read_data_next = dac_tx_witness_phase0;
             16'hb620: read_data_next = dac_tx_witness_mode;
             16'hb624: read_data_next = dac_tx_witness_ready_gap_count;
-            16'hb000: read_data_next = {28'd0, tx_control[3:0]};
+            16'he200: read_data_next = 32'd0;
+            16'he204: read_data_next = {
+                5'd0,
+                rfdc_axis_raw_witness_channel_select,
+                7'd0,
+                rfdc_axis_raw_witness_beat_count,
+                3'd0,
+                rfdc_axis_raw_witness_tvalid_seen,
+                rfdc_axis_raw_witness_overflow,
+                rfdc_axis_raw_witness_capturing,
+                rfdc_axis_raw_witness_valid,
+                rfdc_axis_raw_witness_armed
+            };
+            16'he208: read_data_next = {29'd0, rfdc_axis_raw_witness_channel_select_ctrl};
+            16'he20c: read_data_next = {23'd0, rfdc_axis_raw_witness_capture_beats};
+            16'he210: read_data_next = rfdc_axis_raw_witness_sample0[31:0];
+            16'he214: read_data_next = rfdc_axis_raw_witness_sample0[63:32];
+            16'he218: read_data_next = rfdc_axis_raw_witness_rfdc_flags;
+            16'he21c: read_data_next = {21'd0, rfdc_axis_raw_witness_beat_count, 2'b00};
+            16'he220: read_data_next = 32'd1024;
+            16'he224: read_data_next = {16'd0, rfdc_axis_raw_witness_valid_mask};
+            16'hb000: read_data_next = {27'd0, tx_control[4:0]};
             16'hb004: read_data_next = tx_preflight_status_flags;
             16'hb008: read_data_next = tx_frame_built_count;
             16'hb00c: read_data_next = tx_frame_sent_count;
@@ -1034,6 +1257,7 @@ module feng_ctrl_axi #(
             16'hb02c: read_data_next = {28'd0, tx_selected_route_is_time, tx_selected_route_id};
             16'hb030: read_data_next = 32'd0;
             16'hb034: read_data_next = {11'd0, tx_frame_capture_word_count, 14'd0, tx_frame_capture_valid, tx_frame_capture_armed};
+            16'hb700: read_data_next = qsfp_test_interval_cycles;
             16'h0400: read_data_next = 32'd0;
             16'h0404: read_data_next = {29'd0, debug_done, debug_error, debug_busy};
             16'h0408: read_data_next = DEBUG_NFFT;
@@ -1139,6 +1363,15 @@ module feng_ctrl_axi #(
             16'h0924: read_data_next = pfb_overflow_count;
             16'h0928: read_data_next = pfb_peak_chan;
             16'h092c: read_data_next = pfb_peak_power;
+            16'hd000: read_data_next = science_control;
+            16'hd004: read_data_next = science_status_word;
+            16'hd008: read_data_next = {30'd0, science_bandwidth_mode};
+            16'hd00c: read_data_next = {29'd0, science_output_mode};
+            16'hd010: read_data_next = science_sample_rate_hz(science_bandwidth_mode);
+            16'hd014: read_data_next = science_decim_factor(science_bandwidth_mode);
+            16'hd018: read_data_next = science_payload_rate_mbps(science_bandwidth_mode, science_output_mode);
+            16'hd01c: read_data_next = science_block_reason;
+            16'hd020: read_data_next = SCIENCE_CAPABILITY_WORD;
             default: begin
                 if ((read_addr >= 16'h0500) && (read_addr < 16'h0520)) begin
                     lane_idx = (read_addr - 16'h0500) >> 2;
@@ -1186,10 +1419,12 @@ module feng_ctrl_axi #(
                     read_data_next = preview_rd_data;
                 end else if ((read_addr >= 16'ha800) && (read_addr < 16'hac00)) begin
                     read_data_next = preview_event_rd_data;
-                end else if ((read_addr >= 16'hd000) && (read_addr < 16'hf100)) begin
+                end else if ((read_addr >= 18'h10000) && (read_addr < 18'h12100)) begin
                     read_data_next = tx_payload_witness_rd_data;
                 end else if ((read_addr >= 16'hc000) && (read_addr < 16'hd000)) begin
                     read_data_next = dac_tx_witness_rd_data;
+                end else if ((read_addr >= 16'he800) && (read_addr < 16'hf800)) begin
+                    read_data_next = rfdc_axis_raw_witness_rd_data;
                 end else begin
                     read_data_next = 32'd0;
                 end

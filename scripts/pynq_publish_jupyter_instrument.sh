@@ -22,7 +22,7 @@ Published T510 F-engine Jupyter instrument to:
 
 Open from PYNQ Jupyter:
   t510_fengine/notebooks/13_astronomer_rf_observation_console.ipynb
-This is the Stage 19 astronomer console with LMK/RFDC MTS recovery, DAC TX witness, and Preview-to-UDP Stability Gate advanced panels.
+This is the Stage 23 astronomer console with real I/Q-derived RF equivalent view, three science bandwidth modes, external sync diagnostics, and QSFP/CMAC gate status panels.
 Previous Stage 9 entry:
   t510_fengine/notebooks/12_rf_instrument_console_v2.ipynb
 Previous Stage 8 entry:

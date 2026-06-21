@@ -15,7 +15,16 @@ set rfdc_axis_clks [get_clocks -quiet -of_objects [get_pins -quiet {
     u_rfdc_bd/t510_rfdc_bd_i/clk_wiz_0/inst/mmcme4_adv_inst/CLKOUT0
     u_rfdc_bd/t510_rfdc_bd_i/clk_wiz_0/inst/mmcme4_adv_inst/CLKOUT1
 }]]
+set cmac_clks [get_clocks -quiet {
+    qsfp0_mgt_refclk_p
+    qpll0outclk_out*
+    qpll0outrefclk_out*
+    GTYE4_CHANNEL_TXOUTCLKPCS*
+    rxoutclk_out*
+    txoutclk_out*
+}]
 
 set_clock_groups -asynchronous \
     -group $ctrl_clks \
-    -group $rfdc_axis_clks
+    -group $rfdc_axis_clks \
+    -group $cmac_clks

@@ -31,6 +31,7 @@ module tb_feng_ctrl_axi;
     logic [1:0]   active_sync_mode = 2'd0;
     logic         waiting_for_epoch = 1'b0;
     logic         pps_seen = 1'b0;
+    logic [63:0]  pps_count = 64'h0000_0001_0000_0002;
     logic         ref_locked = 1'b0;
     logic [31:0]  error_flags = 32'd0;
     logic [31:0]  monitor_sample_count = 32'd0;
@@ -101,6 +102,16 @@ module tb_feng_ctrl_axi;
     logic [31:0]  dac_tx_witness_phase0 = 32'h4000_0000;
     logic [31:0]  dac_tx_witness_mode = 32'd1;
     logic [31:0]  dac_tx_witness_ready_gap_count = 32'd0;
+    logic         rfdc_axis_raw_witness_armed = 1'b0;
+    logic         rfdc_axis_raw_witness_valid = 1'b1;
+    logic         rfdc_axis_raw_witness_capturing = 1'b0;
+    logic         rfdc_axis_raw_witness_overflow = 1'b0;
+    logic         rfdc_axis_raw_witness_tvalid_seen = 1'b1;
+    logic [8:0]   rfdc_axis_raw_witness_beat_count = 9'd4;
+    logic [2:0]   rfdc_axis_raw_witness_channel_select = 3'd3;
+    logic [63:0]  rfdc_axis_raw_witness_sample0 = 64'h0000_0001_0000_0200;
+    logic [31:0]  rfdc_axis_raw_witness_rfdc_flags = 32'h0000_001f;
+    logic [15:0]  rfdc_axis_raw_witness_valid_mask = 16'h00ff;
     logic [31:0]  pfb_status = 32'h0000_0003;
     logic [31:0]  pfb_frame_count = 32'd0;
     logic [31:0]  pfb_overflow_count = 32'd0;
@@ -174,7 +185,15 @@ module tb_feng_ctrl_axi;
     wire [8:0]  dac_tx_witness_capture_words;
     wire [9:0]  dac_tx_witness_rd_word;
     wire [31:0] dac_tx_witness_rd_data;
+    wire        rfdc_axis_raw_witness_arm_pulse;
+    wire        rfdc_axis_raw_witness_clear_pulse;
+    wire [2:0]  rfdc_axis_raw_witness_channel_select_ctrl;
+    wire [8:0]  rfdc_axis_raw_witness_capture_beats;
+    wire [9:0]  rfdc_axis_raw_witness_rd_word;
+    wire [31:0] rfdc_axis_raw_witness_rd_data;
     wire [31:0] dac_phase_epoch;
+    wire [1:0]  science_bandwidth_mode_cfg;
+    wire [2:0]  science_output_mode_cfg;
     wire        preview_audit_clear_pulse;
     wire [1:0]  preview_audit_source_select;
     wire        preview_audit_event_enable;
@@ -186,6 +205,7 @@ module tb_feng_ctrl_axi;
     assign tx_frame_capture_rd_data = 32'hfb00_0000 | {27'd0, tx_frame_capture_rd_word};
     assign tx_payload_witness_rd_data = 32'hd000_0000 | {20'd0, tx_payload_witness_rd_word};
     assign dac_tx_witness_rd_data = 32'hdc00_0000 | {22'd0, dac_tx_witness_rd_word};
+    assign rfdc_axis_raw_witness_rd_data = 32'he800_0000 | {22'd0, rfdc_axis_raw_witness_rd_word};
 
     feng_ctrl_axi dut (
         .s_axi_aclk(clk),
@@ -213,6 +233,7 @@ module tb_feng_ctrl_axi;
         .active_sync_mode(active_sync_mode),
         .waiting_for_epoch(waiting_for_epoch),
         .pps_seen(pps_seen),
+        .pps_count(pps_count),
         .ref_locked(ref_locked),
         .error_flags(error_flags),
         .monitor_sample_count(monitor_sample_count),
@@ -291,6 +312,17 @@ module tb_feng_ctrl_axi;
         .dac_tx_witness_mode(dac_tx_witness_mode),
         .dac_tx_witness_ready_gap_count(dac_tx_witness_ready_gap_count),
         .dac_tx_witness_rd_data(dac_tx_witness_rd_data),
+        .rfdc_axis_raw_witness_armed(rfdc_axis_raw_witness_armed),
+        .rfdc_axis_raw_witness_valid(rfdc_axis_raw_witness_valid),
+        .rfdc_axis_raw_witness_capturing(rfdc_axis_raw_witness_capturing),
+        .rfdc_axis_raw_witness_overflow(rfdc_axis_raw_witness_overflow),
+        .rfdc_axis_raw_witness_tvalid_seen(rfdc_axis_raw_witness_tvalid_seen),
+        .rfdc_axis_raw_witness_beat_count(rfdc_axis_raw_witness_beat_count),
+        .rfdc_axis_raw_witness_channel_select(rfdc_axis_raw_witness_channel_select),
+        .rfdc_axis_raw_witness_sample0(rfdc_axis_raw_witness_sample0),
+        .rfdc_axis_raw_witness_rfdc_flags(rfdc_axis_raw_witness_rfdc_flags),
+        .rfdc_axis_raw_witness_valid_mask(rfdc_axis_raw_witness_valid_mask),
+        .rfdc_axis_raw_witness_rd_data(rfdc_axis_raw_witness_rd_data),
         .tx_spec_route_hit_counts({32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd22, 32'd11}),
         .tx_time_route_hit_counts({32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd33}),
         .pfb_status(pfb_status),
@@ -421,7 +453,14 @@ module tb_feng_ctrl_axi;
         .dac_tx_witness_clear_pulse(dac_tx_witness_clear_pulse),
         .dac_tx_witness_capture_words(dac_tx_witness_capture_words),
         .dac_tx_witness_rd_word(dac_tx_witness_rd_word),
-        .unix_seconds(unix_seconds)
+        .rfdc_axis_raw_witness_arm_pulse(rfdc_axis_raw_witness_arm_pulse),
+        .rfdc_axis_raw_witness_clear_pulse(rfdc_axis_raw_witness_clear_pulse),
+        .rfdc_axis_raw_witness_channel_select_ctrl(rfdc_axis_raw_witness_channel_select_ctrl),
+        .rfdc_axis_raw_witness_capture_beats(rfdc_axis_raw_witness_capture_beats),
+        .rfdc_axis_raw_witness_rd_word(rfdc_axis_raw_witness_rd_word),
+        .unix_seconds(unix_seconds),
+        .science_bandwidth_mode_cfg(science_bandwidth_mode_cfg),
+        .science_output_mode_cfg(science_output_mode_cfg)
     );
 
     task automatic reset_dut;
@@ -630,6 +669,34 @@ module tb_feng_ctrl_axi;
         end
     endtask
 
+    task automatic expect_rfdc_axis_raw_witness_pulses;
+        integer idx;
+        bit seen_arm;
+        bit seen_clear;
+        begin
+            seen_arm = 1'b0;
+            seen_clear = 1'b0;
+            fork
+                begin
+                    axi_write(16'he200, 32'h0000_0003);
+                end
+                begin
+                    for (idx = 0; idx < 12; idx = idx + 1) begin
+                        @(posedge clk);
+                        if (rfdc_axis_raw_witness_arm_pulse) begin
+                            seen_arm = 1'b1;
+                        end
+                        if (rfdc_axis_raw_witness_clear_pulse) begin
+                            seen_clear = 1'b1;
+                        end
+                    end
+                end
+            join
+            `TB_CHECK(seen_arm, "RFDC AXIS raw witness arm pulse was not observed")
+            `TB_CHECK(seen_clear, "RFDC AXIS raw witness clear pulse was not observed")
+        end
+    endtask
+
     task automatic expect_tx_clear_pulse;
         integer idx;
         bit seen;
@@ -637,7 +704,7 @@ module tb_feng_ctrl_axi;
             seen = 1'b0;
             fork
                 begin
-                    axi_write(16'hb000, 32'h0000_001d);
+                    axi_write(16'hb000, 32'h0000_002d);
                 end
                 begin
                     for (idx = 0; idx < 12; idx = idx + 1) begin
@@ -681,7 +748,7 @@ module tb_feng_ctrl_axi;
         reset_dut();
 
         axi_read(16'h0000, rd);
-        `TB_CHECK_EQ(rd, 32'h0001_000d, "CORE_VERSION")
+        `TB_CHECK_EQ(rd, 32'h0001_001A, "CORE_VERSION")
         axi_read(16'h0008, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default MODE")
         axi_read(16'h0114, rd);
@@ -706,6 +773,25 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(rd, 32'h0000_ffff, "default RFDC active mask")
         axi_read(16'hb000, rd);
         `TB_CHECK_EQ(rd, 32'h0000_000d, "default TX control")
+        axi_read(16'hd000, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0001, "default science control forces dry-run")
+        axi_read(16'hd004, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0100, "default science status is 100MHz/OFF")
+        axi_read(16'hd008, rd);
+        `TB_CHECK_EQ(rd, 32'd1, "default science bandwidth is 100MHz")
+        `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd1, "default science bandwidth output")
+        axi_read(16'hd00c, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "default science mode is OFF")
+        `TB_CHECK_EQ(science_output_mode_cfg, 3'd0, "default science mode output")
+        axi_read(16'hd010, rd);
+        `TB_CHECK_EQ(rd, 32'd122_880_000, "default science sample rate")
+        axi_read(16'hd014, rd);
+        `TB_CHECK_EQ(rd, 32'd2, "default science decim factor")
+        axi_read(16'hd01c, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0048, "default science block reasons keep dry-run/wide-science blockers only")
+        `TB_CHECK_EQ(rd[4], 1'b0, "RFDC science bus truncation block is cleared")
+        axi_read(16'hd020, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0307, "science capability word")
         axi_read(16'hb100, rd);
         `TB_CHECK_EQ(rd, 32'd1, "default endpoint0 enabled")
         axi_read(16'hb104, rd);
@@ -756,7 +842,7 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(rd, 32'hffff_ff00, "paired sample0 delta low")
         axi_read(16'h07f8, rd);
         `TB_CHECK_EQ(rd, 32'hffff_ffff, "paired sample0 delta high")
-        axi_read(16'hd000, rd);
+        axi_read(32'h0001_0000, rd);
         `TB_CHECK_EQ(rd, 32'hd000_0000, "TX payload witness buffer read")
         axi_write(16'h0798, 32'd1);
         `TB_CHECK_EQ(tx_payload_witness_stream_filter, 2'd1, "TX payload witness stream filter output")
@@ -784,6 +870,54 @@ module tb_feng_ctrl_axi;
         axi_write(16'hb608, 32'd64);
         `TB_CHECK_EQ(dac_tx_witness_capture_words, 9'd64, "DAC TX witness capture words output")
         expect_dac_tx_witness_pulses();
+        axi_read(16'he204, rd);
+        `TB_CHECK_EQ(rd, 32'h0300_0412, "RFDC AXIS raw witness status")
+        axi_read(16'he20c, rd);
+        `TB_CHECK_EQ(rd, 32'd256, "default RFDC AXIS raw witness capture beats")
+        axi_read(16'he210, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0200, "RFDC AXIS raw witness sample0 low")
+        axi_read(16'he214, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0001, "RFDC AXIS raw witness sample0 high")
+        axi_read(16'he218, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_001f, "RFDC AXIS raw witness flags")
+        axi_read(16'he21c, rd);
+        `TB_CHECK_EQ(rd, 32'd16, "RFDC AXIS raw witness word count")
+        axi_read(16'he220, rd);
+        `TB_CHECK_EQ(rd, 32'd1024, "RFDC AXIS raw witness buffer words")
+        axi_read(16'he224, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_00ff, "RFDC AXIS raw witness valid mask")
+        axi_read(16'he800, rd);
+        `TB_CHECK_EQ(rd, 32'he800_0000, "RFDC AXIS raw witness buffer read")
+        axi_write(16'he208, 32'd5);
+        `TB_CHECK_EQ(rfdc_axis_raw_witness_channel_select_ctrl, 3'd5, "RFDC AXIS raw witness channel output")
+        axi_write(16'he20c, 32'd32);
+        `TB_CHECK_EQ(rfdc_axis_raw_witness_capture_beats, 9'd32, "RFDC AXIS raw witness capture beats output")
+        expect_rfdc_axis_raw_witness_pulses();
+
+        axi_write(16'hd008, 32'd0);
+        axi_write(16'hd00c, 32'd3);
+        axi_read(16'hd004, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_6003, "20MHz TIME_SPEC enables time and spec")
+        axi_read(16'hd010, rd);
+        `TB_CHECK_EQ(rd, 32'd30_720_000, "20MHz science sample rate")
+        axi_read(16'hd014, rd);
+        `TB_CHECK_EQ(rd, 32'd8, "20MHz science decim factor")
+        axi_read(16'hd01c, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_004a, "20MHz TIME_SPEC blocks dry-run/wide-science/SPEC-scaffold")
+        `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd0, "20MHz science bandwidth output")
+        `TB_CHECK_EQ(science_output_mode_cfg, 3'd3, "TIME_SPEC science mode output")
+
+        axi_write(16'hd008, 32'd2);
+        axi_read(16'hd004, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_6207, "200MHz TIME_SPEC is explicitly rejected")
+        axi_read(16'hd010, rd);
+        `TB_CHECK_EQ(rd, 32'd245_760_000, "200MHz science sample rate")
+        axi_read(16'hd014, rd);
+        `TB_CHECK_EQ(rd, 32'd1, "200MHz science decim factor")
+        axi_read(16'hd01c, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_004b, "200MHz TIME_SPEC block reasons")
+        `TB_CHECK_EQ(rd[0], 1'b1, "200MHz TIME_SPEC rejection bit set")
+        `TB_CHECK_EQ(rd[4], 1'b0, "RFDC bus truncation remains cleared at 200MHz")
 
         for (mode_idx = 0; mode_idx < 4; mode_idx = mode_idx + 1) begin
             axi_write(16'h0008, mode_idx[31:0]);
@@ -929,9 +1063,13 @@ module tb_feng_ctrl_axi;
         axi_read(16'h0010, rd);
         `TB_CHECK_EQ(rd, 32'h0000_061b, "FSM status readback")
         axi_read(16'h0014, rd);
-        `TB_CHECK_EQ(rd, 32'd3, "sync status readback")
+        `TB_CHECK_EQ(rd, 32'd7, "sync status readback")
         axi_read(16'h001c, rd);
         `TB_CHECK_EQ(rd, 32'hdead_beef, "error flags readback")
+        axi_read(16'h0024, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0002, "PPS count low readback")
+        axi_read(16'h0028, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0001, "PPS count high readback")
         axi_read(16'h0300, rd);
         `TB_CHECK_EQ(rd, 32'd99, "monitor sample count readback")
         axi_read(16'h0304, rd);

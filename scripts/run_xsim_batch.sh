@@ -19,6 +19,7 @@ mkdir -p "${WORK_DIR}"
 rtl_files=(
   rtl/sync_fsm.sv
   rtl/axis_stream_duplicator.sv
+  rtl/science_rate_selector.sv
   rtl/requantizer.sv
   rtl/monitor_counters.sv
   rtl/time_packetizer.sv
@@ -31,6 +32,8 @@ rtl_files=(
   rtl/tx_header_capture.sv
   rtl/tx_payload_witness_capture.sv
   rtl/dac_tx_witness_capture.sv
+  rtl/rfdc_axis_raw_witness_capture.sv
+  rtl/t510_qsfp_test_frame_gen.sv
   rtl/fft_debug_observer.sv
   rtl/multi_preview_observer.sv
   rtl/t510_dac_loopback_source.sv
@@ -38,6 +41,7 @@ rtl_files=(
   rtl/axi4_to_axil_bridge.sv
   rtl/rfdc_adc_axis_adapter.sv
   rtl/t510_fengine_top.sv
+  rtl/t510_cmac_qsfp0.sv
   rtl/t510_fengine_synthetic_board_top.sv
 )
 
@@ -46,6 +50,7 @@ tb_files=(
   sim/tb_axi4_to_axil_bridge.sv
   sim/tb_sync_fsm.sv
   sim/tb_rfdc_adc_axis_adapter.sv
+  sim/tb_science_rate_selector.sv
   sim/tb_axis_stream_duplicator.sv
   sim/tb_time_packetizer.sv
   sim/tb_pfb_channelizer.sv
@@ -54,8 +59,10 @@ tb_files=(
   sim/tb_axis_packet_fifo.sv
   sim/tb_tx_route_selector.sv
   sim/tb_udp_frame_builder.sv
+  sim/tb_t510_qsfp_test_frame_gen.sv
   sim/tb_tx_payload_witness_capture.sv
   sim/tb_dac_tx_witness_capture.sv
+  sim/tb_rfdc_axis_raw_witness_capture.sv
   sim/tb_fft_debug_observer.sv
   sim/tb_t510_dac_loopback_source.sv
   sim/tb_rfdc_fullrate_preview.sv
@@ -71,6 +78,7 @@ if [[ ${#tb_tops[@]} -eq 0 ]]; then
     tb_axi4_to_axil_bridge
     tb_sync_fsm
     tb_rfdc_adc_axis_adapter
+    tb_science_rate_selector
     tb_axis_stream_duplicator
     tb_time_packetizer
     tb_pfb_channelizer
@@ -79,8 +87,10 @@ if [[ ${#tb_tops[@]} -eq 0 ]]; then
     tb_axis_packet_fifo
     tb_tx_route_selector
     tb_udp_frame_builder
+    tb_t510_qsfp_test_frame_gen
     tb_tx_payload_witness_capture
     tb_dac_tx_witness_capture
+    tb_rfdc_axis_raw_witness_capture
     tb_fft_debug_observer
     tb_t510_dac_loopback_source
     tb_rfdc_fullrate_preview

@@ -34,10 +34,12 @@ module time_packetizer #(
     output logic [63:0]         frame_id_debug
 );
 
-    localparam [1:0] ST_IDLE    = 2'd0;
-    localparam [1:0] ST_CAPTURE = 2'd1;
-    localparam [1:0] ST_HEADER  = 2'd2;
-    localparam [1:0] ST_PAYLOAD = 2'd3;
+    localparam [2:0] ST_IDLE         = 3'd0;
+    localparam [2:0] ST_CAPTURE      = 3'd1;
+    localparam [2:0] ST_HEADER       = 3'd2;
+    localparam [2:0] ST_PRELOAD_WAIT = 3'd3;
+    localparam [2:0] ST_PRELOAD_LOAD = 3'd4;
+    localparam [2:0] ST_PAYLOAD      = 3'd5;
 
     localparam [31:0] T510_MAGIC      = 32'h5435_3130;
     localparam [15:0] STREAM_TYPE     = 16'd1;
@@ -45,18 +47,27 @@ module time_packetizer #(
     localparam [31:0] PAYLOAD_BYTES   = 32'd8192;
     localparam [15:0] LOCAL_NINPUT    = 16'd8;
     localparam integer MAX_PAYLOAD_BEATS = PAYLOAD_BYTES / (DATA_W / 8);
+    localparam integer ADDR_W = $clog2(MAX_PAYLOAD_BEATS);
+    localparam integer SUBWORDS_PER_BEAT = DATA_W / OUT_W;
+    localparam integer SUBWORD_W = (SUBWORDS_PER_BEAT <= 1) ? 1 : $clog2(SUBWORDS_PER_BEAT);
+    localparam [SUBWORD_W-1:0] LAST_SUBWORD = SUBWORDS_PER_BEAT - 1;
 
-    logic [1:0]                state;
+    logic [2:0]                state;
     logic [4:0]                header_idx;
-    logic [1:0]                payload_subword;
+    logic [SUBWORD_W-1:0]      payload_subword;
     logic [15:0]               payload_beats;
     logic [15:0]               capture_idx;
     logic [15:0]               payload_read_idx;
     logic [DATA_W-1:0]         payload_reg;
+    logic [ADDR_W-1:0]         payload_rd_addr;
+    wire  [DATA_W-1:0]         payload_mem_rd_data;
     logic [31:0]               seq_no;
     logic [63:0]               sample0;
     logic [63:0]               frame_id;
-    logic [DATA_W-1:0]         payload_mem [0:MAX_PAYLOAD_BEATS-1];
+    wire                       capture_write_en =
+        ((state == ST_IDLE) || (state == ST_CAPTURE)) && enable && s_axis_tvalid;
+    wire [ADDR_W-1:0]          capture_write_addr =
+        (state == ST_IDLE) ? {ADDR_W{1'b0}} : capture_idx[ADDR_W-1:0];
 
     function automatic [15:0] capture_limit(input [15:0] requested);
         begin
@@ -95,6 +106,7 @@ module time_packetizer #(
             capture_idx          <= 16'd0;
             payload_read_idx     <= 16'd0;
             payload_reg          <= {DATA_W{1'b0}};
+            payload_rd_addr      <= {ADDR_W{1'b0}};
             seq_no               <= 32'd0;
             sample0              <= 64'd0;
             frame_id             <= 64'd0;
@@ -110,6 +122,7 @@ module time_packetizer #(
                 capture_idx          <= 16'd0;
                 payload_read_idx     <= 16'd0;
                 payload_reg          <= {DATA_W{1'b0}};
+                payload_rd_addr      <= {ADDR_W{1'b0}};
                 seq_no               <= 32'd0;
                 sample0              <= 64'd0;
                 frame_id             <= 64'd0;
@@ -117,7 +130,6 @@ module time_packetizer #(
             case (state)
                 ST_IDLE: begin
                     if (enable && s_axis_tvalid) begin
-                        payload_mem[0]   <= s_axis_tdata;
                         payload_beats    <= capture_limit(time_payload_nsamp);
                         capture_idx      <= 16'd1;
                         payload_subword  <= 2'd0;
@@ -135,7 +147,6 @@ module time_packetizer #(
 
                 ST_CAPTURE: begin
                     if (enable && s_axis_tvalid) begin
-                        payload_mem[capture_idx] <= s_axis_tdata;
                         if ((capture_idx + 16'd1) >= payload_beats) begin
                             state       <= ST_HEADER;
                             header_idx  <= 5'd0;
@@ -149,11 +160,11 @@ module time_packetizer #(
                 ST_HEADER: begin
                     if (m_axis_tready) begin
                         if (header_idx == HEADER_WORDS - 1) begin
-                            state            <= ST_PAYLOAD;
+                            state            <= ST_PRELOAD_WAIT;
                             header_idx       <= 5'd0;
                             payload_read_idx <= 16'd0;
                             payload_subword  <= 2'd0;
-                            payload_reg      <= payload_mem[0];
+                            payload_rd_addr  <= {ADDR_W{1'b0}};
                         end else begin
                             header_idx <= header_idx + 5'd1;
                         end
@@ -161,10 +172,19 @@ module time_packetizer #(
                     end
                 end
 
+                ST_PRELOAD_WAIT: begin
+                    state <= ST_PRELOAD_LOAD;
+                end
+
+                ST_PRELOAD_LOAD: begin
+                    payload_reg <= payload_mem_rd_data;
+                    state       <= ST_PAYLOAD;
+                end
+
                 ST_PAYLOAD: begin
                     if (m_axis_tready) begin
                         udp_byte_count <= udp_byte_count + 32'd8;
-                        if (payload_subword == 2'd3) begin
+                        if (payload_subword == LAST_SUBWORD) begin
                             if ((payload_read_idx + 16'd1) >= payload_beats) begin
                                 state            <= ST_IDLE;
                                 payload_read_idx <= 16'd0;
@@ -172,11 +192,12 @@ module time_packetizer #(
                                 frame_id         <= frame_id + 64'd1;
                             end else begin
                                 payload_read_idx <= payload_read_idx + 16'd1;
-                                payload_reg      <= payload_mem[payload_read_idx + 16'd1];
-                                payload_subword  <= 2'd0;
+                                payload_rd_addr  <= payload_read_idx + 16'd1;
+                                payload_subword  <= {SUBWORD_W{1'b0}};
+                                state            <= ST_PRELOAD_WAIT;
                             end
                         end else begin
-                            payload_subword <= payload_subword + 2'd1;
+                            payload_subword <= payload_subword + 1'b1;
                         end
                     end
                 end
@@ -203,10 +224,15 @@ module time_packetizer #(
                 m_axis_tdata  = header_word(header_idx);
                 m_axis_tvalid = 1'b1;
             end
+            ST_PRELOAD_WAIT: begin
+            end
+            ST_PRELOAD_LOAD: begin
+            end
             ST_PAYLOAD: begin
                 m_axis_tdata  = payload_reg[payload_subword*OUT_W +: OUT_W];
                 m_axis_tvalid = 1'b1;
-                m_axis_tlast  = ((payload_read_idx + 16'd1) >= payload_beats) && (payload_subword == 2'd3);
+                m_axis_tlast  = ((payload_read_idx + 16'd1) >= payload_beats) &&
+                                (payload_subword == LAST_SUBWORD);
             end
             default: begin
             end
@@ -216,5 +242,48 @@ module time_packetizer #(
     assign seq_no_debug   = seq_no;
     assign sample0_debug  = sample0;
     assign frame_id_debug = frame_id;
+
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(ADDR_W),
+        .ADDR_WIDTH_B(ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(DATA_W),
+        .CASCADE_HEIGHT(0),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(MAX_PAYLOAD_BEATS * DATA_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(DATA_W),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(DATA_W),
+        .WRITE_MODE_B("read_first")
+    ) u_payload_bram (
+        .dbiterrb(),
+        .doutb(payload_mem_rd_data),
+        .sbiterrb(),
+        .addra(capture_write_addr),
+        .addrb(payload_rd_addr),
+        .clka(clk),
+        .clkb(clk),
+        .dina(s_axis_tdata),
+        .ena(1'b1),
+        .enb(1'b1),
+        .injectdbiterra(1'b0),
+        .injectsbiterra(1'b0),
+        .regceb(1'b1),
+        .rstb(!rst_n),
+        .sleep(1'b0),
+        .wea(capture_write_en)
+    );
 
 endmodule

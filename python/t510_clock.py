@@ -291,6 +291,18 @@ class T510ClockController:
         }
         try:
             status["gpio"] = self.read_gpio_status()
+            gpio = status["gpio"]  # type: ignore[assignment]
+            ref0 = int(gpio["ref_select0"]["value"])  # type: ignore[index]
+            ref1 = int(gpio["ref_select1"]["value"])  # type: ignore[index]
+            status["ref_select0"] = ref0
+            status["ref_select1"] = ref1
+            status["selected_ref"] = "tcxo_10mhz" if (ref0, ref1) == (0, 0) else "external_10mhz"
+            status["lmk_clkin"] = {
+                (0, 0): "CLKin0",
+                (1, 0): "CLKin1",
+                (0, 1): "CLKin2",
+                (1, 1): "CLKin3",
+            }.get((ref0, ref1), "unknown")
         except Exception as exc:
             status["errors"].append(f"gpio_status: {exc}")  # type: ignore[index]
         try:
@@ -306,19 +318,21 @@ class T510ClockController:
             status["errors"].append(f"lmk_register_read: {exc}")  # type: ignore[index]
         return status
 
-    def configure_tcxo_245p76(
+    def _configure_245p76_profile(
         self,
         *,
+        ref: str,
+        lmk_clkin: str,
+        ref_select0: int,
+        ref_select1: int,
         poll_lock: bool = True,
         max_attempts: int = 24,
         register_delay_s: float = 0.005,
     ) -> dict[str, int | bool | str]:
         self._bind_spidev()
 
-        # T510 clock schematic: SEL0/SEL1 = 0/0 selects CLKin0, the onboard
-        # 10 MHz oscillator used for no-external-reference lab bring-up.
-        self._gpio(self.LMK_REF_SELECT0, 0)
-        self._gpio(self.LMK_REF_SELECT1, 0)
+        self._gpio(self.LMK_REF_SELECT0, int(ref_select0) & 0x1)
+        self._gpio(self.LMK_REF_SELECT1, int(ref_select1) & 0x1)
         self._gpio(self.LMK_SYNC, 0)
         self._gpio(self.LMK_RESET, 1)
         time.sleep(0.05)
@@ -326,10 +340,12 @@ class T510ClockController:
         time.sleep(0.05)
 
         result: dict[str, int | bool | str] = {
-            "ref": "tcxo_10mhz",
-            "lmk_clkin": "CLKin0",
-            "profile_id": self.PROFILE_ID,
+            "ref": ref,
+            "lmk_clkin": lmk_clkin,
+            "profile_id": f"{ref}_245p76_sysref_req",
             "spi": self.LMK_SPI_DEVNODE,
+            "ref_select0": int(ref_select0) & 0x1,
+            "ref_select1": int(ref_select1) & 0x1,
             "configured": False,
             "pll1_lock": 0,
             "pll2_lock": 0,
@@ -357,3 +373,63 @@ class T510ClockController:
                     break
         result["configured"] = bool(result["pll1_lock"] and result["pll2_lock"])
         return result
+
+    def configure_tcxo_245p76(
+        self,
+        *,
+        poll_lock: bool = True,
+        max_attempts: int = 24,
+        register_delay_s: float = 0.005,
+    ) -> dict[str, int | bool | str]:
+        # T510 clock schematic bring-up path used so far: SEL0/SEL1 = 0/0
+        # selects the onboard 10 MHz oscillator on CLKin0.
+        return self._configure_245p76_profile(
+            ref="tcxo_10mhz",
+            lmk_clkin="CLKin0",
+            ref_select0=0,
+            ref_select1=0,
+            poll_lock=poll_lock,
+            max_attempts=max_attempts,
+            register_delay_s=register_delay_s,
+        )
+
+    def configure_external_10mhz_245p76(
+        self,
+        *,
+        poll_lock: bool = True,
+        max_attempts: int = 16,
+        register_delay_s: float = 0.005,
+    ) -> dict[str, object]:
+        """Configure the LMK profile from the external 10 MHz reference input.
+
+        Board revisions in the lab have used different CLKin select wiring
+        during bring-up. Try the non-TCXO selector states and keep the first
+        full PLL lock, while returning every attempt for diagnostics.
+        """
+        attempts: list[dict[str, int | bool | str]] = []
+        selector_candidates = (
+            (1, 0, "CLKin1"),
+            (0, 1, "CLKin2"),
+            (1, 1, "CLKin3"),
+        )
+        best: dict[str, int | bool | str] | None = None
+        for ref_select0, ref_select1, lmk_clkin in selector_candidates:
+            result = self._configure_245p76_profile(
+                ref="external_10mhz",
+                lmk_clkin=lmk_clkin,
+                ref_select0=ref_select0,
+                ref_select1=ref_select1,
+                poll_lock=poll_lock,
+                max_attempts=max_attempts,
+                register_delay_s=register_delay_s,
+            )
+            attempts.append(result)
+            if result.get("configured"):
+                best = result
+                break
+            if best is None or int(result.get("pll1_lock", 0)) + int(result.get("pll2_lock", 0)) > int(best.get("pll1_lock", 0)) + int(best.get("pll2_lock", 0)):
+                best = result
+        selected = dict(best or {})
+        selected["attempts_detail"] = attempts
+        selected["configured"] = bool(selected.get("configured", False))
+        return selected

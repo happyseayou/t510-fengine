@@ -165,6 +165,7 @@ module tb_axi4_to_axil_bridge;
         .active_sync_mode(2'd0),
         .waiting_for_epoch(1'b0),
         .pps_seen(1'b0),
+        .pps_count(64'd0),
         .ref_locked(1'b1),
         .error_flags(32'd0),
         .monitor_sample_count(32'h1234_5678),
@@ -374,7 +375,7 @@ module tb_axi4_to_axil_bridge;
         repeat (4) @(posedge clk);
 
         axi4_read_single(32'h8004_0000, rd);
-        `TB_CHECK_EQ(rd, 32'h0001_000d, "version via AXI4 bridge")
+        `TB_CHECK_EQ(rd, 32'h0001_001A, "version via AXI4 bridge")
 
         axi4_write_single(32'h8004_0004, 32'h0000_0510);
         axi4_read_single(32'h8004_0004, rd);
@@ -388,7 +389,7 @@ module tb_axi4_to_axil_bridge;
         `TB_CHECK_EQ(rd, 32'h8004_00f0, "debug AR via AXI4 bridge")
 
         axi4_read_burst4(32'h8004_0000, b0, b1, b2, b3);
-        `TB_CHECK_EQ(b0, 32'h0001_000d, "burst beat 0 version")
+        `TB_CHECK_EQ(b0, 32'h0001_001A, "burst beat 0 version")
         `TB_CHECK_EQ(b1, 32'h0000_0510, "burst beat 1 board_id")
         `TB_CHECK_EQ(b2, 32'h0000_0001, "burst beat 2 mode")
         `TB_CHECK_EQ(b3, 32'h0000_0000, "burst beat 3 control")

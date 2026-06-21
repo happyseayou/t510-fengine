@@ -4,6 +4,7 @@ set repo_root [file normalize [file join $origin_dir ".."]]
 set rtl_files [list \
     [file join $repo_root rtl sync_fsm.sv] \
     [file join $repo_root rtl axis_stream_duplicator.sv] \
+    [file join $repo_root rtl science_rate_selector.sv] \
     [file join $repo_root rtl requantizer.sv] \
     [file join $repo_root rtl monitor_counters.sv] \
     [file join $repo_root rtl time_packetizer.sv] \
@@ -16,12 +17,15 @@ set rtl_files [list \
     [file join $repo_root rtl tx_header_capture.sv] \
     [file join $repo_root rtl tx_payload_witness_capture.sv] \
     [file join $repo_root rtl dac_tx_witness_capture.sv] \
+    [file join $repo_root rtl rfdc_axis_raw_witness_capture.sv] \
+    [file join $repo_root rtl t510_qsfp_test_frame_gen.sv] \
     [file join $repo_root rtl fft_debug_observer.sv] \
     [file join $repo_root rtl multi_preview_observer.sv] \
     [file join $repo_root rtl feng_ctrl_axi.sv] \
     [file join $repo_root rtl axi4_to_axil_bridge.sv] \
     [file join $repo_root rtl rfdc_adc_axis_adapter.sv] \
     [file join $repo_root rtl t510_fengine_top.sv] \
+    [file join $repo_root rtl t510_cmac_qsfp0.sv] \
     [file join $repo_root rtl t510_fengine_synthetic_board_top.sv] \
 ]
 
@@ -31,6 +35,7 @@ set sim_files [list \
     [file join $repo_root sim tb_axi4_to_axil_bridge.sv] \
     [file join $repo_root sim tb_sync_fsm.sv] \
     [file join $repo_root sim tb_rfdc_adc_axis_adapter.sv] \
+    [file join $repo_root sim tb_science_rate_selector.sv] \
     [file join $repo_root sim tb_axis_stream_duplicator.sv] \
     [file join $repo_root sim tb_time_packetizer.sv] \
     [file join $repo_root sim tb_pfb_channelizer.sv] \
@@ -39,8 +44,10 @@ set sim_files [list \
     [file join $repo_root sim tb_axis_packet_fifo.sv] \
     [file join $repo_root sim tb_tx_route_selector.sv] \
     [file join $repo_root sim tb_udp_frame_builder.sv] \
+    [file join $repo_root sim tb_t510_qsfp_test_frame_gen.sv] \
     [file join $repo_root sim tb_tx_payload_witness_capture.sv] \
     [file join $repo_root sim tb_dac_tx_witness_capture.sv] \
+    [file join $repo_root sim tb_rfdc_axis_raw_witness_capture.sv] \
     [file join $repo_root sim tb_fft_debug_observer.sv] \
     [file join $repo_root sim tb_t510_fengine_top_smoke.sv] \
     [file join $repo_root sim tb_t510_fengine_board_top.sv] \
@@ -51,6 +58,7 @@ set tb_tops [list \
     tb_axi4_to_axil_bridge \
     tb_sync_fsm \
     tb_rfdc_adc_axis_adapter \
+    tb_science_rate_selector \
     tb_axis_stream_duplicator \
     tb_time_packetizer \
     tb_pfb_channelizer \
@@ -59,8 +67,10 @@ set tb_tops [list \
     tb_axis_packet_fifo \
     tb_tx_route_selector \
     tb_udp_frame_builder \
+    tb_t510_qsfp_test_frame_gen \
     tb_tx_payload_witness_capture \
     tb_dac_tx_witness_capture \
+    tb_rfdc_axis_raw_witness_capture \
     tb_fft_debug_observer \
     tb_t510_fengine_top_smoke \
     tb_t510_fengine_board_top \

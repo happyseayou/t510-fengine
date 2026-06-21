@@ -50,10 +50,13 @@ module spectral_packetizer #(
     localparam [31:0] PAYLOAD_BYTES = 32'd8192;
     localparam integer PAYLOAD_BEATS = PAYLOAD_BYTES / (DATA_W / 8);
     localparam integer ADDR_W = $clog2(PAYLOAD_BEATS);
+    localparam integer SUBWORDS_PER_BEAT = DATA_W / OUT_W;
+    localparam integer SUBWORD_W = (SUBWORDS_PER_BEAT <= 1) ? 1 : $clog2(SUBWORDS_PER_BEAT);
+    localparam [SUBWORD_W-1:0] LAST_SUBWORD = SUBWORDS_PER_BEAT - 1;
 
     logic [2:0]                state;
     logic [4:0]                header_idx;
-    logic [1:0]                payload_subword;
+    logic [SUBWORD_W-1:0]      payload_subword;
     logic [15:0]               capture_idx;
     logic [15:0]               payload_read_idx;
     logic [DATA_W-1:0]         payload_reg;
@@ -168,7 +171,7 @@ module spectral_packetizer #(
                 ST_PAYLOAD: begin
                     if (m_axis_tready) begin
                         udp_byte_count <= udp_byte_count + 32'd8;
-                        if (payload_subword == 2'd3) begin
+                        if (payload_subword == LAST_SUBWORD) begin
                             if ((payload_read_idx + 16'd1) >= PAYLOAD_BEATS[15:0]) begin
                                 state            <= ST_IDLE;
                                 payload_read_idx <= 16'd0;
@@ -177,11 +180,11 @@ module spectral_packetizer #(
                             end else begin
                                 payload_read_idx <= payload_read_idx + 16'd1;
                                 payload_rd_addr  <= payload_read_idx + 16'd1;
-                                payload_subword  <= 2'd0;
+                                payload_subword  <= {SUBWORD_W{1'b0}};
                                 state            <= ST_PRELOAD_WAIT;
                             end
                         end else begin
-                            payload_subword <= payload_subword + 2'd1;
+                            payload_subword <= payload_subword + 1'b1;
                         end
                     end
                 end
@@ -215,7 +218,8 @@ module spectral_packetizer #(
             ST_PAYLOAD: begin
                 m_axis_tdata  = payload_reg[payload_subword*OUT_W +: OUT_W];
                 m_axis_tvalid = 1'b1;
-                m_axis_tlast  = ((payload_read_idx + 16'd1) >= PAYLOAD_BEATS[15:0]) && (payload_subword == 2'd3);
+                m_axis_tlast  = ((payload_read_idx + 16'd1) >= PAYLOAD_BEATS[15:0]) &&
+                                (payload_subword == LAST_SUBWORD);
             end
             default: begin
             end

@@ -46,6 +46,12 @@ module t510_fengine_board_top (
     input  wire pps_in,
     input  wire qsfp0_modprsl,
     input  wire qsfp0_intl,
+    input  wire qsfp0_mgt_refclk_p,
+    input  wire qsfp0_mgt_refclk_n,
+    input  wire [3:0] qsfp0_rxp,
+    input  wire [3:0] qsfp0_rxn,
+    output wire [3:0] qsfp0_txp,
+    output wire [3:0] qsfp0_txn,
     output wire qsfp0_resetl,
     output wire qsfp0_lpmode,
     output wire qsfp0_modsell,
@@ -204,7 +210,7 @@ module t510_fengine_board_top (
     wire        core_axil_rvalid;
     wire        core_axil_rready;
 
-    wire [255:0] adc_axis_tdata;
+    wire [1023:0] adc_axis_tdata;
     wire [31:0]  adc_axis_tuser;
     wire [63:0]  adc_axis_sample0;
     wire         adc_axis_tvalid;
@@ -227,6 +233,39 @@ module t510_fengine_board_top (
     wire [7:0]  core_tx_tkeep;
     wire        core_tx_tvalid;
     wire        core_tx_tlast;
+    wire        cmac_tx_clk;
+    wire        cmac_tx_rst_n;
+    wire [511:0] cmac_tx_axis_tdata;
+    wire [63:0]  cmac_tx_axis_tkeep;
+    wire          cmac_tx_axis_tvalid;
+    wire          cmac_tx_axis_tlast;
+    wire          cmac_tx_axis_tready;
+    wire          cmac_gt_refclk_seen;
+    wire          cmac_gt_powergood;
+    wire          cmac_gt_tx_reset_done;
+    wire          cmac_gt_rx_reset_done;
+    wire          cmac_gt_locked;
+    wire          cmac_reset_done;
+    wire          cmac_tx_ready;
+    wire          cmac_local_fault;
+    wire          cmac_remote_fault;
+    wire          cmac_link_up;
+    wire          cmac_tx_underflow;
+    wire          cmac_tx_overflow;
+    wire          cmac_rx_aligned;
+    wire          cmac_rx_status;
+    wire          cmac_rx_local_fault;
+    wire          cmac_rx_internal_local_fault;
+    wire          cmac_tx_local_fault_detail;
+    wire          cmac_an_autoneg_complete;
+    wire          cmac_an_lp_ability_valid;
+    wire          cmac_an_lp_autoneg_able;
+    wire          cmac_an_lp_ability_100gbase_cr4;
+    wire          cmac_an_rs_fec_enable;
+    wire [3:0]    cmac_lt_signal_detect;
+    wire [3:0]    cmac_lt_training;
+    wire [3:0]    cmac_lt_training_fail;
+    wire [3:0]    cmac_lt_frame_lock;
     wire        core_irq;
     wire        all_dac_ready;
     wire        core_dac_tone_enable;
@@ -288,14 +327,51 @@ module t510_fengine_board_top (
     (* ASYNC_REG = "TRUE" *) logic [31:0]  dac_phase_epoch_meta = 32'd0;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  dac_phase_epoch_sync = 32'd0;
 
+    localparam [27:0] PPS_RECENT_TIMEOUT_CYCLES = 28'd122_880_000;
+    localparam [23:0] PPS_BLINK_CYCLES          = 24'd6_144_000;
+
     logic [27:0] heartbeat = 28'd0;
     logic [1:0]  pps_sync = 2'b00;
     logic        pps_d = 1'b0;
     logic        pps_seen_latched = 1'b0;
+    logic [27:0] pps_age_cycles = PPS_RECENT_TIMEOUT_CYCLES;
+    logic [23:0] pps_blink_cycles = 24'd0;
     logic        tx_activity_latched = 1'b0;
     logic [31:0] tx_word_count = 32'd0;
     logic [31:0] tx_packet_count = 32'd0;
-    wire [31:0]  tx_link_status_flags = 32'h0000_0002;
+    wire         qsfp0_module_present = !qsfp0_modprsl;
+    wire [31:0]  tx_link_status_flags = {
+        (&cmac_lt_frame_lock),
+        (|cmac_lt_training_fail),
+        (|cmac_lt_training),
+        (&cmac_lt_signal_detect),
+        cmac_an_rs_fec_enable,
+        cmac_an_lp_ability_100gbase_cr4,
+        cmac_an_lp_autoneg_able,
+        cmac_an_lp_ability_valid,
+        cmac_an_autoneg_complete,
+        cmac_tx_local_fault_detail,
+        cmac_rx_internal_local_fault,
+        cmac_rx_local_fault,
+        cmac_rx_status,
+        cmac_rx_aligned,
+        cmac_tx_overflow,
+        cmac_tx_underflow,
+        cmac_gt_rx_reset_done,
+        cmac_gt_tx_reset_done,
+        cmac_gt_refclk_seen,
+        qsfp0_module_present,
+        5'd0,
+        cmac_remote_fault,
+        cmac_local_fault,
+        cmac_tx_ready,
+        cmac_gt_locked,
+        cmac_reset_done,
+        1'b0,
+        cmac_link_up
+    };
+    wire         ref_chain_locked = data_rst_n && all_dac_ready;
+    wire         pps_recent = pps_seen_latched && (pps_age_cycles < PPS_RECENT_TIMEOUT_CYCLES);
 
     assign core_s_axi_awaddr_offset = core_s_axi_awaddr_full[15:0];
     assign core_s_axi_araddr_offset = core_s_axi_araddr_full[15:0];
@@ -314,6 +390,8 @@ module t510_fengine_board_top (
             pps_sync <= 2'b00;
             pps_d <= 1'b0;
             pps_seen_latched <= 1'b0;
+            pps_age_cycles <= PPS_RECENT_TIMEOUT_CYCLES;
+            pps_blink_cycles <= 24'd0;
             tx_activity_latched <= 1'b0;
             tx_word_count <= 32'd0;
             tx_packet_count <= 32'd0;
@@ -323,6 +401,15 @@ module t510_fengine_board_top (
             pps_d <= pps_sync[1];
             if (pps_sync[1] && !pps_d) begin
                 pps_seen_latched <= 1'b1;
+                pps_age_cycles <= 28'd0;
+                pps_blink_cycles <= PPS_BLINK_CYCLES;
+            end else begin
+                if (pps_age_cycles != PPS_RECENT_TIMEOUT_CYCLES) begin
+                    pps_age_cycles <= pps_age_cycles + 28'd1;
+                end
+                if (pps_blink_cycles != 24'd0) begin
+                    pps_blink_cycles <= pps_blink_cycles - 24'd1;
+                end
             end
             if (core_tx_tvalid) begin
                 tx_activity_latched <= 1'b1;
@@ -765,13 +852,57 @@ module t510_fengine_board_top (
         .m_axil_rready(core_axil_rready)
     );
 
+    t510_cmac_qsfp0 u_cmac_qsfp0 (
+        .init_clk(ctrl_clk),
+        .reset_n(ctrl_rst_n),
+        .gt_ref_clk_p(qsfp0_mgt_refclk_p),
+        .gt_ref_clk_n(qsfp0_mgt_refclk_n),
+        .gt_rxp_in(qsfp0_rxp),
+        .gt_rxn_in(qsfp0_rxn),
+        .gt_txp_out(qsfp0_txp),
+        .gt_txn_out(qsfp0_txn),
+        .tx_clk(cmac_tx_clk),
+        .tx_rst_n(cmac_tx_rst_n),
+        .tx_axis_tdata(cmac_tx_axis_tdata),
+        .tx_axis_tkeep(cmac_tx_axis_tkeep),
+        .tx_axis_tvalid(cmac_tx_axis_tvalid),
+        .tx_axis_tlast(cmac_tx_axis_tlast),
+        .tx_axis_tready(cmac_tx_axis_tready),
+        .gt_refclk_seen(cmac_gt_refclk_seen),
+        .gt_powergood(cmac_gt_powergood),
+        .gt_tx_reset_done(cmac_gt_tx_reset_done),
+        .gt_rx_reset_done(cmac_gt_rx_reset_done),
+        .gt_locked(cmac_gt_locked),
+        .cmac_reset_done(cmac_reset_done),
+        .cmac_tx_ready(cmac_tx_ready),
+        .local_fault(cmac_local_fault),
+        .remote_fault(cmac_remote_fault),
+        .link_up(cmac_link_up),
+        .tx_underflow(cmac_tx_underflow),
+        .tx_overflow(cmac_tx_overflow),
+        .rx_aligned(cmac_rx_aligned),
+        .rx_status(cmac_rx_status),
+        .rx_local_fault(cmac_rx_local_fault),
+        .rx_internal_local_fault(cmac_rx_internal_local_fault),
+        .tx_local_fault_detail(cmac_tx_local_fault_detail),
+        .an_autoneg_complete(cmac_an_autoneg_complete),
+        .an_lp_ability_valid(cmac_an_lp_ability_valid),
+        .an_lp_autoneg_able(cmac_an_lp_autoneg_able),
+        .an_lp_ability_100gbase_cr4(cmac_an_lp_ability_100gbase_cr4),
+        .an_rs_fec_enable(cmac_an_rs_fec_enable),
+        .lt_signal_detect(cmac_lt_signal_detect),
+        .lt_training(cmac_lt_training),
+        .lt_training_fail(cmac_lt_training_fail),
+        .lt_frame_lock(cmac_lt_frame_lock)
+    );
+
     t510_fengine_top u_core (
         .clk(adc_m_axis_clk),
         .rst_n(data_rst_n),
         .ctrl_clk(ctrl_clk),
         .ctrl_rst_n(ctrl_rst_n),
         .pps_in(pps_sync[1]),
-        .ref_lock_in(data_rst_n),
+        .ref_lock_in(ref_chain_locked),
         .rfdc_ready_in(all_adc_valid),
         .s_axi_awaddr(core_axil_awaddr),
         .s_axi_awvalid(core_axil_awvalid),
@@ -803,9 +934,11 @@ module t510_fengine_board_top (
         .s_axis_preview_sample0(adc_preview_sample0),
         .s_axis_preview_tvalid(adc_preview_tvalid),
         .rfdc_status_flags({
-            27'd0,
+            25'd0,
+            pps_recent,
+            pps_sync[1],
             pps_seen_latched,
-            data_rst_n,
+            ref_chain_locked,
             all_dac_ready,
             all_adc_valid,
             adc_axis_tready
@@ -840,6 +973,13 @@ module t510_fengine_board_top (
         .m_axis_tx_tvalid(core_tx_tvalid),
         .m_axis_tx_tlast(core_tx_tlast),
         .m_axis_tx_tready(1'b1),
+        .cmac_tx_clk(cmac_tx_clk),
+        .cmac_tx_rst_n(cmac_tx_rst_n),
+        .cmac_tx_axis_tdata(cmac_tx_axis_tdata),
+        .cmac_tx_axis_tkeep(cmac_tx_axis_tkeep),
+        .cmac_tx_axis_tvalid(cmac_tx_axis_tvalid),
+        .cmac_tx_axis_tlast(cmac_tx_axis_tlast),
+        .cmac_tx_axis_tready(cmac_tx_axis_tready),
         .tx_link_status_flags(tx_link_status_flags),
         .tx_dry_run_packet_count(tx_packet_count),
         .tx_dry_run_byte_count(tx_word_count << 3),
@@ -860,10 +1000,10 @@ module t510_fengine_board_top (
         .irq(core_irq)
     );
 
-    assign pl_led0 = heartbeat[27];
-    assign pl_led1 = all_adc_valid;
-    assign pl_led2 = all_dac_ready;
-    assign pl_led3 = tx_activity_latched | core_irq | !qsfp0_intl | !qsfp0_modprsl;
+    assign pl_led0 = ref_chain_locked;
+    assign pl_led1 = (pps_blink_cycles != 24'd0);
+    assign pl_led2 = pps_recent;
+    assign pl_led3 = core_irq | !ref_chain_locked | !pps_recent;
 
 endmodule
 

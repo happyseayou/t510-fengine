@@ -51,18 +51,25 @@ module tb_t510_fengine_board_top;
         `TB_CHECK(qsfp0_resetl, "QSFP reset deasserted")
         `TB_CHECK(!qsfp0_lpmode, "QSFP low-power mode disabled")
         `TB_CHECK(!qsfp0_modsell, "QSFP module selected")
-        `TB_CHECK(pl_led2, "QSFP present LED")
-        `TB_CHECK(!pl_led1, "no PPS LED latch in free-run smoke")
+        `TB_CHECK(pl_led0, "reference/clock-chain LED asserted after reset")
+        `TB_CHECK(!pl_led1, "PPS blink LED idle before PPS")
+        `TB_CHECK(!pl_led2, "PPS recent LED low before PPS")
+        `TB_CHECK(pl_led3, "sync error LED asserted before PPS")
 
         timeout = 0;
-        while (!pl_led3 && timeout < 5000) begin
+        while (!dut.tx_activity_latched && timeout < 5000) begin
             @(posedge pl_clk_p);
             timeout = timeout + 1;
         end
-        `TB_CHECK(pl_led3, "TX activity LED asserted in free-run")
         `TB_CHECK(dut.tx_activity_latched, "TX activity latched internally")
         `TB_CHECK(dut.tx_word_count > 32'd0, "TX word count increments")
         `TB_CHECK(dut.test_sample_counter > 64'd0, "test ADC source accepted")
+
+        pulse_pps();
+        repeat (8) @(posedge pl_clk_p);
+        `TB_CHECK(pl_led1, "PPS blink LED asserted after PPS edge")
+        `TB_CHECK(pl_led2, "PPS recent LED asserted after PPS edge")
+        `TB_CHECK(!pl_led3, "sync error LED clears after recent PPS")
 
         `TB_PASS("tb_t510_fengine_board_top")
     end

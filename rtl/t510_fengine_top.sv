@@ -23,7 +23,7 @@ module t510_fengine_top (
     output wire [1:0]   s_axi_rresp,
     output wire         s_axi_rvalid,
     input  wire         s_axi_rready,
-    input  wire [255:0] s_axis_adc_tdata,
+    input  wire [1023:0] s_axis_adc_tdata,
     input  wire [31:0]  s_axis_adc_tuser,
     input  wire [63:0]  s_axis_adc_sample0,
     input  wire         s_axis_adc_tvalid,
@@ -66,6 +66,13 @@ module t510_fengine_top (
     output wire         m_axis_tx_tvalid,
     output wire         m_axis_tx_tlast,
     input  wire         m_axis_tx_tready,
+    input  wire         cmac_tx_clk,
+    input  wire         cmac_tx_rst_n,
+    output wire [511:0] cmac_tx_axis_tdata,
+    output wire [63:0]  cmac_tx_axis_tkeep,
+    output wire         cmac_tx_axis_tvalid,
+    output wire         cmac_tx_axis_tlast,
+    input  wire         cmac_tx_axis_tready,
     input  wire [31:0]  tx_link_status_flags,
     input  wire [31:0]  tx_dry_run_packet_count,
     input  wire [31:0]  tx_dry_run_byte_count,
@@ -132,6 +139,7 @@ module t510_fengine_top (
     wire [383:0] ctrl_tx_endpoint_mac_vec;
     wire [127:0] ctrl_tx_endpoint_src_port_vec;
     wire [127:0] ctrl_tx_endpoint_dst_port_vec;
+    wire [31:0] ctrl_qsfp_test_interval_cycles;
     wire [7:0]  ctrl_tx_spec_route_enable;
     wire [255:0] ctrl_tx_spec_route_chan0_vec;
     wire [127:0] ctrl_tx_spec_route_chan_count_vec;
@@ -174,6 +182,11 @@ module t510_fengine_top (
     wire [1:0]  ctrl_tx_payload_witness_stream_filter;
     wire [10:0] ctrl_tx_payload_witness_capture_words;
     wire [11:0] ctrl_tx_payload_witness_rd_word;
+    wire        ctrl_rfdc_axis_raw_witness_arm_pulse;
+    wire        ctrl_rfdc_axis_raw_witness_clear_pulse;
+    wire [2:0]  ctrl_rfdc_axis_raw_witness_channel_select;
+    wire [8:0]  ctrl_rfdc_axis_raw_witness_capture_beats;
+    wire [9:0]  ctrl_rfdc_axis_raw_witness_rd_word;
     wire [63:0] ctrl_unix_seconds;
 
     (* ASYNC_REG = "TRUE" *) logic [15:0] board_id_meta;
@@ -254,17 +267,20 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [2:0]  soft_reset_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_clear_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_cmac_sync;
     logic        soft_epoch_toggle_seen;
     logic        stop_toggle_seen;
     logic        soft_reset_toggle_seen;
     logic        pfb_clear_toggle_seen;
     logic        tx_clear_toggle_seen;
+    logic        tx_clear_toggle_cmac_seen;
     wire         arm_latched;
     wire         soft_epoch_pulse;
     wire         stop_pulse;
     wire         soft_reset_pulse;
     wire         pfb_clear_pulse;
     wire         tx_clear_pulse;
+    wire         tx_clear_pulse_cmac;
     logic [1:0]  mode_prev;
     logic [31:0] mode_switch_reset_count;
     wire         mode_change_pulse;
@@ -318,40 +334,62 @@ module t510_fengine_top (
     wire [31:0] preview_event_info_ctrl;
     wire [31:0] preview_event_rfdc_flags_ctrl;
     wire [31:0] preview_event_dac_phase_epoch_ctrl;
+    wire        rfdc_axis_raw_witness_armed_ctrl;
+    wire        rfdc_axis_raw_witness_valid_ctrl;
+    wire        rfdc_axis_raw_witness_capturing_ctrl;
+    wire        rfdc_axis_raw_witness_overflow_ctrl;
+    wire        rfdc_axis_raw_witness_tvalid_seen_ctrl;
+    wire [8:0]  rfdc_axis_raw_witness_beat_count_ctrl;
+    wire [2:0]  rfdc_axis_raw_witness_channel_select_ctrl;
+    wire [63:0] rfdc_axis_raw_witness_sample0_ctrl;
+    wire [31:0] rfdc_axis_raw_witness_rfdc_flags_ctrl;
+    wire [15:0] rfdc_axis_raw_witness_valid_mask_ctrl;
+    wire [31:0] rfdc_axis_raw_witness_rd_data_ctrl;
 
     wire spec_enable;
     wire time_enable;
     wire snapshot_enable;
     wire monitor_enable;
 
-    wire [255:0] spec_tdata;
+    localparam integer SCIENCE_DATA_W = 1024;
+
+    wire [SCIENCE_DATA_W-1:0] science_tdata;
+    wire [31:0]  science_tuser;
+    wire [63:0]  science_sample0;
+    wire         science_tvalid;
+    wire         science_tlast;
+    wire         science_tready;
+    wire [31:0]  science_output_beat_count;
+    wire [31:0]  science_dropped_beat_count;
+
+    wire [SCIENCE_DATA_W-1:0] spec_tdata;
     wire [31:0]  spec_tuser;
     wire [63:0]  spec_sample0;
     wire         spec_tvalid;
     wire         spec_tlast;
     wire         spec_tready;
-    wire [255:0] time_tdata;
+    wire [SCIENCE_DATA_W-1:0] time_tdata;
     wire [31:0]  time_tuser;
     wire [63:0]  time_sample0_sideband;
     wire         time_tvalid;
     wire         time_tlast;
     wire         time_tready;
-    wire [255:0] snapshot_tdata;
+    wire [SCIENCE_DATA_W-1:0] snapshot_tdata;
     wire [31:0]  snapshot_tuser;
     wire [63:0]  snapshot_sample0;
     wire         snapshot_tvalid;
     wire         snapshot_tlast;
     wire         snapshot_tready;
-    wire [255:0] monitor_tdata;
+    wire [SCIENCE_DATA_W-1:0] monitor_tdata;
     wire [31:0]  monitor_tuser;
     wire [63:0]  monitor_sample0;
     wire         monitor_tvalid;
     wire         monitor_tlast;
     wire         monitor_tready;
 
-    wire [255:0] quant_spec_tdata;
+    wire [SCIENCE_DATA_W-1:0] quant_spec_tdata;
     wire         quant_clip_any;
-    wire [255:0] pfb_spec_tdata;
+    wire [SCIENCE_DATA_W-1:0] pfb_spec_tdata;
     wire [63:0]  pfb_spec_sample0;
     wire         pfb_spec_tvalid;
     wire         pfb_spec_tready;
@@ -363,6 +401,10 @@ module t510_fengine_top (
     wire [31:0] pfb_packet_chan0;
     wire [15:0] pfb_packet_chan_count;
     wire [15:0] pfb_packet_time_count;
+    wire [1:0] ctrl_science_bandwidth_mode_cfg;
+    wire [2:0] ctrl_science_output_mode_cfg;
+    (* ASYNC_REG = "TRUE" *) logic [1:0] science_bandwidth_mode_meta;
+    (* ASYNC_REG = "TRUE" *) logic [1:0] science_bandwidth_mode;
 
     wire [63:0] spec_axis_tdata;
     wire [7:0]  spec_axis_tkeep;
@@ -422,7 +464,48 @@ module t510_fengine_top (
     wire [31:0] tx_preflight_status_flags;
     wire        tx_dry_run_active;
     wire        tx_qsfp_link_up;
+    wire        tx_qsfp_module_present;
     wire        tx_cmac_tx_ready;
+    wire        tx_cmac_live_ready;
+    wire        tx_qsfp_test_enable;
+    wire [31:0] tx_count_packet_status;
+    wire [31:0] tx_count_byte_status;
+    wire [31:0] tx_cmac_test_packet_count;
+    wire [31:0] tx_cmac_test_byte_count;
+    wire [47:0] tx_qsfp_test_dst_mac;
+    wire [31:0] tx_qsfp_test_dst_ip;
+    wire [15:0] tx_qsfp_test_src_port;
+    wire [15:0] tx_qsfp_test_dst_port;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_link_status_flags_data_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_link_status_flags_data;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_link_status_flags_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_link_status_flags_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_control_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_control_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [47:0] src_mac_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [47:0] src_mac_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] src_ip_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] src_ip_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [47:0] tx_qsfp_test_dst_mac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [47:0] tx_qsfp_test_dst_mac_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_qsfp_test_dst_ip_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_qsfp_test_dst_ip_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] tx_qsfp_test_src_port_meta;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] tx_qsfp_test_src_port_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] tx_qsfp_test_dst_port_meta;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] tx_qsfp_test_dst_port_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_qsfp_test_interval_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_qsfp_test_interval_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_link_status_flags_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_link_status_flags_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] rfdc_sample_count_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] rfdc_sample_count_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] ctrl_board_id_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] ctrl_board_id_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_cmac_test_packet_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_cmac_test_packet_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_cmac_test_byte_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] tx_cmac_test_byte_count_ctrl;
     wire [31:0] tx_frame_capture_rd_data_ctrl;
     wire        tx_frame_capture_armed_ctrl;
     wire        tx_frame_capture_valid_ctrl;
@@ -545,24 +628,64 @@ module t510_fengine_top (
     assign monitor_enable  = armed;
     assign pps_seen        = pps_sync[1];
     assign udp_epoch_mode  = (sync_mode == 2'd0) ? 16'd0 : 16'd1;
-    assign tx_qsfp_link_up = tx_link_status_flags[0];
-    assign tx_cmac_tx_ready = tx_link_status_flags[4];
-    assign tx_dry_run_active = tx_control[0] || tx_link_status_flags[1] || !tx_qsfp_link_up || !tx_control[1] || !tx_cmac_tx_ready;
+    assign tx_qsfp_link_up = tx_link_status_flags_data[0];
+    assign tx_qsfp_module_present = tx_link_status_flags_data[12];
+    assign tx_cmac_tx_ready = tx_link_status_flags_data[4];
+    assign tx_cmac_live_ready =
+        tx_link_status_flags_data[0] &&
+        tx_link_status_flags_data[2] &&
+        tx_link_status_flags_data[3] &&
+        tx_link_status_flags_data[4] &&
+        !tx_link_status_flags_data[5] &&
+        !tx_link_status_flags_data[6] &&
+        !tx_link_status_flags_data[1];
+    assign tx_dry_run_active =
+        tx_control[0] ||
+        tx_link_status_flags_data[1] ||
+        ((!tx_qsfp_link_up) && !tx_control[4]) ||
+        !tx_control[1] ||
+        !tx_cmac_tx_ready;
+    assign tx_count_packet_status = tx_dry_run_active ? tx_dry_run_packet_count : tx_cmac_test_packet_count_ctrl;
+    assign tx_count_byte_status = tx_dry_run_active ? tx_dry_run_byte_count : tx_cmac_test_byte_count_ctrl;
     assign tx_preflight_status_flags = {
-        20'd0,
+        14'd0,
+        tx_link_status_flags_data[17],
+        tx_link_status_flags_data[16],
+        tx_link_status_flags_data[15],
+        tx_link_status_flags_data[14],
+        tx_link_status_flags_data[13],
+        tx_qsfp_module_present,
         tx_control[1],
         tx_control[0],
         tx_control[2],
         (tx_route_error_count != 32'd0),
         (tx_route_miss_count != 32'd0),
-        tx_link_status_flags[6],
-        tx_link_status_flags[5],
+        tx_link_status_flags_data[6],
+        tx_link_status_flags_data[5],
         tx_cmac_tx_ready,
-        tx_link_status_flags[3],
-        tx_link_status_flags[2],
+        tx_link_status_flags_data[3],
+        tx_link_status_flags_data[2],
         tx_dry_run_active,
         tx_qsfp_link_up
     };
+    assign tx_qsfp_test_dst_mac = tx_endpoint_mac_vec[2*48 +: 48];
+    assign tx_qsfp_test_dst_ip = tx_endpoint_ip_vec[2*32 +: 32];
+    assign tx_qsfp_test_src_port = tx_endpoint_src_port_vec[2*16 +: 16];
+    assign tx_qsfp_test_dst_port = tx_endpoint_dst_port_vec[2*16 +: 16];
+    assign tx_qsfp_test_enable =
+        tx_control_cmac[1] &&
+        tx_control_cmac[2] &&
+        !tx_control_cmac[0] &&
+        tx_link_status_flags_cmac[4] &&
+        (
+            tx_control_cmac[4] ||
+            (
+                tx_link_status_flags_cmac[0] &&
+                !tx_link_status_flags_cmac[5] &&
+                !tx_link_status_flags_cmac[6]
+            )
+        ) &&
+        cmac_tx_rst_n;
     assign udp_packet_flags = {
         10'd0,
         (time_dropped_count != 32'd0),
@@ -580,6 +703,7 @@ module t510_fengine_top (
     assign soft_reset_pulse = soft_reset_toggle_sync[2] ^ soft_reset_toggle_seen;
     assign pfb_clear_pulse = pfb_clear_toggle_sync[2] ^ pfb_clear_toggle_seen;
     assign tx_clear_pulse = tx_clear_toggle_sync[2] ^ tx_clear_toggle_seen;
+    assign tx_clear_pulse_cmac = tx_clear_toggle_cmac_sync[2] ^ tx_clear_toggle_cmac_seen;
     assign mode_change_pulse = (mode != mode_prev);
     assign packet_stream_reset_pulse = epoch_reset_pulse || stop_pulse || soft_reset_pulse || tx_clear_pulse || mode_change_pulse;
     assign rfdc_active_port_mask = rfdc_active_mask;
@@ -653,6 +777,8 @@ module t510_fengine_top (
             pfb_chan_count         <= 16'd64;
             pfb_time_count_meta    <= 16'd4;
             pfb_time_count         <= 16'd4;
+            science_bandwidth_mode_meta <= 2'd1;
+            science_bandwidth_mode <= 2'd1;
             chan_split_meta        <= 32'd0;
             chan_split             <= 32'd0;
             src_ip_meta            <= 32'd0;
@@ -708,11 +834,15 @@ module t510_fengine_top (
             pps_count              <= 64'd0;
             dac_phase_epoch_data_meta <= 32'd0;
             dac_phase_epoch_data      <= 32'd0;
+            tx_link_status_flags_data_meta <= 32'd0;
+            tx_link_status_flags_data      <= 32'd0;
         end else begin
             pps_sync                <= {pps_sync[0], pps_in};
             if (pps_sync[0] && !pps_sync[1]) begin
                 pps_count <= pps_count + 64'd1;
             end
+            tx_link_status_flags_data_meta <= tx_link_status_flags;
+            tx_link_status_flags_data      <= tx_link_status_flags_data_meta;
             board_id_meta           <= ctrl_board_id;
             board_id                <= board_id_meta;
             mode_meta               <= ctrl_mode;
@@ -746,6 +876,8 @@ module t510_fengine_top (
             pfb_chan_count          <= pfb_chan_count_meta;
             pfb_time_count_meta     <= ctrl_pfb_time_count;
             pfb_time_count          <= pfb_time_count_meta;
+            science_bandwidth_mode_meta <= ctrl_science_bandwidth_mode_cfg;
+            science_bandwidth_mode <= science_bandwidth_mode_meta;
             chan_split_meta         <= ctrl_chan_split;
             chan_split              <= chan_split_meta;
             src_ip_meta             <= ctrl_src_ip;
@@ -797,6 +929,60 @@ module t510_fengine_top (
             tx_clear_toggle_seen    <= tx_clear_toggle_sync[2];
             dac_phase_epoch_data_meta <= ctrl_dac_phase_epoch;
             dac_phase_epoch_data      <= dac_phase_epoch_data_meta;
+        end
+    end
+
+    always_ff @(posedge cmac_tx_clk) begin
+        if (!cmac_tx_rst_n) begin
+            src_mac_cmac_meta <= 48'd0;
+            src_mac_cmac <= 48'd0;
+            src_ip_cmac_meta <= 32'd0;
+            src_ip_cmac <= 32'd0;
+            tx_qsfp_test_dst_mac_meta <= 48'd0;
+            tx_qsfp_test_dst_mac_cmac <= 48'd0;
+            tx_qsfp_test_dst_ip_meta <= 32'd0;
+            tx_qsfp_test_dst_ip_cmac <= 32'd0;
+            tx_qsfp_test_src_port_meta <= 16'd4000;
+            tx_qsfp_test_src_port_cmac <= 16'd4000;
+            tx_qsfp_test_dst_port_meta <= 16'd4300;
+            tx_qsfp_test_dst_port_cmac <= 16'd4300;
+            tx_qsfp_test_interval_meta <= 32'd322_266;
+            tx_qsfp_test_interval_cmac <= 32'd322_266;
+            tx_link_status_flags_cmac_meta <= 32'd0;
+            tx_link_status_flags_cmac <= 32'd0;
+            tx_control_cmac_meta <= 32'h0000_000d;
+            tx_control_cmac <= 32'h0000_000d;
+            rfdc_sample_count_cmac_meta <= 64'd0;
+            rfdc_sample_count_cmac <= 64'd0;
+            ctrl_board_id_cmac_meta <= 16'd0;
+            ctrl_board_id_cmac <= 16'd0;
+            tx_clear_toggle_cmac_sync <= 3'b000;
+            tx_clear_toggle_cmac_seen <= 1'b0;
+        end else begin
+            src_mac_cmac_meta <= src_mac;
+            src_mac_cmac <= src_mac_cmac_meta;
+            src_ip_cmac_meta <= src_ip;
+            src_ip_cmac <= src_ip_cmac_meta;
+            tx_qsfp_test_dst_mac_meta <= tx_qsfp_test_dst_mac;
+            tx_qsfp_test_dst_mac_cmac <= tx_qsfp_test_dst_mac_meta;
+            tx_qsfp_test_dst_ip_meta <= tx_qsfp_test_dst_ip;
+            tx_qsfp_test_dst_ip_cmac <= tx_qsfp_test_dst_ip_meta;
+            tx_qsfp_test_src_port_meta <= tx_qsfp_test_src_port;
+            tx_qsfp_test_src_port_cmac <= tx_qsfp_test_src_port_meta;
+            tx_qsfp_test_dst_port_meta <= tx_qsfp_test_dst_port;
+            tx_qsfp_test_dst_port_cmac <= tx_qsfp_test_dst_port_meta;
+            tx_qsfp_test_interval_meta <= ctrl_qsfp_test_interval_cycles;
+            tx_qsfp_test_interval_cmac <= tx_qsfp_test_interval_meta;
+            tx_link_status_flags_cmac_meta <= tx_link_status_flags;
+            tx_link_status_flags_cmac <= tx_link_status_flags_cmac_meta;
+            tx_control_cmac_meta <= tx_control;
+            tx_control_cmac <= tx_control_cmac_meta;
+            rfdc_sample_count_cmac_meta <= rfdc_sample_count;
+            rfdc_sample_count_cmac <= rfdc_sample_count_cmac_meta;
+            ctrl_board_id_cmac_meta <= ctrl_board_id;
+            ctrl_board_id_cmac <= ctrl_board_id_cmac_meta;
+            tx_clear_toggle_cmac_sync <= {tx_clear_toggle_cmac_sync[1:0], ctrl_tx_clear_toggle};
+            tx_clear_toggle_cmac_seen <= tx_clear_toggle_cmac_sync[2];
         end
     end
 
@@ -870,6 +1056,12 @@ module t510_fengine_top (
             tx_route_miss_count_ctrl            <= 32'd0;
             tx_route_error_count_ctrl_meta      <= 32'd0;
             tx_route_error_count_ctrl           <= 32'd0;
+            tx_cmac_test_packet_count_ctrl_meta <= 32'd0;
+            tx_cmac_test_packet_count_ctrl      <= 32'd0;
+            tx_cmac_test_byte_count_ctrl_meta   <= 32'd0;
+            tx_cmac_test_byte_count_ctrl        <= 32'd0;
+            tx_link_status_flags_ctrl_meta      <= 32'd0;
+            tx_link_status_flags_ctrl           <= 32'd0;
             tx_selected_endpoint_id_ctrl_meta   <= 3'd0;
             tx_selected_endpoint_id_ctrl        <= 3'd0;
             tx_selected_route_id_ctrl_meta      <= 3'd0;
@@ -949,6 +1141,12 @@ module t510_fengine_top (
             tx_route_miss_count_ctrl            <= tx_route_miss_count_ctrl_meta;
             tx_route_error_count_ctrl_meta      <= tx_route_error_count;
             tx_route_error_count_ctrl           <= tx_route_error_count_ctrl_meta;
+            tx_cmac_test_packet_count_ctrl_meta <= tx_cmac_test_packet_count;
+            tx_cmac_test_packet_count_ctrl      <= tx_cmac_test_packet_count_ctrl_meta;
+            tx_cmac_test_byte_count_ctrl_meta   <= tx_cmac_test_byte_count;
+            tx_cmac_test_byte_count_ctrl        <= tx_cmac_test_byte_count_ctrl_meta;
+            tx_link_status_flags_ctrl_meta      <= tx_link_status_flags;
+            tx_link_status_flags_ctrl           <= tx_link_status_flags_ctrl_meta;
             tx_selected_endpoint_id_ctrl_meta   <= tx_selected_endpoint_id;
             tx_selected_endpoint_id_ctrl        <= tx_selected_endpoint_id_ctrl_meta;
             tx_selected_route_id_ctrl_meta      <= tx_selected_route_id;
@@ -981,12 +1179,38 @@ module t510_fengine_top (
         .epoch_reset_pulse(epoch_reset_pulse)
     );
 
+    science_rate_selector #(
+        .NINPUT(8),
+        .SUBSAMPLES_PER_BEAT(4),
+        .SAMPLE_W(32),
+        .USER_W(32),
+        .SAMPLE0_W(64)
+    ) u_science_rate_selector (
+        .clk(clk),
+        .rst_n(rst_n),
+        .bandwidth_mode(science_bandwidth_mode),
+        .s_axis_tdata(s_axis_adc_tdata),
+        .s_axis_tuser(s_axis_adc_tuser),
+        .s_axis_sample0(s_axis_adc_sample0),
+        .s_axis_tvalid(s_axis_adc_tvalid),
+        .s_axis_tlast(s_axis_adc_tlast),
+        .s_axis_tready(s_axis_adc_tready),
+        .m_axis_tdata(science_tdata),
+        .m_axis_tuser(science_tuser),
+        .m_axis_sample0(science_sample0),
+        .m_axis_tvalid(science_tvalid),
+        .m_axis_tlast(science_tlast),
+        .m_axis_tready(science_tready),
+        .output_beat_count(science_output_beat_count),
+        .dropped_beat_count(science_dropped_beat_count)
+    );
+
     monitor_counters u_monitor_counters (
         .clk(clk),
         .rst_n(rst_n),
         .clear(epoch_reset_pulse),
         .sample_valid(s_axis_adc_tvalid && s_axis_adc_tready),
-        .sample_tdata(s_axis_adc_tdata),
+        .sample_tdata(s_axis_adc_tdata[255:0]),
         .sample_count(monitor_sample_count),
         .clip_counts(clip_counts),
         .mean_mags(mean_mags)
@@ -999,7 +1223,7 @@ module t510_fengine_top (
         .ctrl_rst_n(ctrl_rst_n),
         .streaming(streaming),
         .active_port_mask(rfdc_active_mask),
-        .s_axis_adc_tdata(s_axis_adc_tdata),
+        .s_axis_adc_tdata(s_axis_adc_tdata[255:0]),
         .s_axis_adc_tvalid(s_axis_adc_tvalid && s_axis_adc_tready),
         .ctrl_capture_start_pulse(ctrl_debug_capture_start_pulse),
         .ctrl_capture_clear_pulse(ctrl_debug_capture_clear_pulse),
@@ -1065,7 +1289,44 @@ module t510_fengine_top (
         .ctrl_event_dac_phase_epoch(preview_event_dac_phase_epoch_ctrl)
     );
 
-    axis_stream_duplicator u_axis_stream_duplicator (
+    rfdc_axis_raw_witness_capture #(
+        .CAPTURE_BEATS(256)
+    ) u_rfdc_axis_raw_witness_capture (
+        .clk(clk),
+        .rst_n(rst_n),
+        .ctrl_clk(ctrl_clk),
+        .ctrl_rst_n(ctrl_rst_n),
+        .arm_pulse_ctrl(ctrl_rfdc_axis_raw_witness_arm_pulse),
+        .clear_pulse_ctrl(ctrl_rfdc_axis_raw_witness_clear_pulse),
+        .channel_select_ctrl(ctrl_rfdc_axis_raw_witness_channel_select),
+        .capture_beats_ctrl(ctrl_rfdc_axis_raw_witness_capture_beats),
+        .s_axis_adc_tdata0(s_axis_preview_tdata0),
+        .s_axis_adc_tdata1(s_axis_preview_tdata1),
+        .s_axis_adc_tdata2(s_axis_preview_tdata2),
+        .s_axis_adc_tdata3(s_axis_preview_tdata3),
+        .s_axis_adc_sample0(s_axis_preview_sample0),
+        .s_axis_adc_tvalid(s_axis_preview_tvalid),
+        .rfdc_status_flags(rfdc_status_flags),
+        .rfdc_current_valid_mask(rfdc_current_valid_mask),
+        .ctrl_rd_word(ctrl_rfdc_axis_raw_witness_rd_word),
+        .ctrl_rd_data(rfdc_axis_raw_witness_rd_data_ctrl),
+        .ctrl_armed(rfdc_axis_raw_witness_armed_ctrl),
+        .ctrl_valid(rfdc_axis_raw_witness_valid_ctrl),
+        .ctrl_capturing(rfdc_axis_raw_witness_capturing_ctrl),
+        .ctrl_overflow(rfdc_axis_raw_witness_overflow_ctrl),
+        .ctrl_tvalid_seen(rfdc_axis_raw_witness_tvalid_seen_ctrl),
+        .ctrl_beat_count(rfdc_axis_raw_witness_beat_count_ctrl),
+        .ctrl_channel_select(rfdc_axis_raw_witness_channel_select_ctrl),
+        .ctrl_sample0(rfdc_axis_raw_witness_sample0_ctrl),
+        .ctrl_rfdc_flags(rfdc_axis_raw_witness_rfdc_flags_ctrl),
+        .ctrl_valid_mask(rfdc_axis_raw_witness_valid_mask_ctrl)
+    );
+
+    axis_stream_duplicator #(
+        .DATA_W(SCIENCE_DATA_W),
+        .USER_W(32),
+        .SAMPLE0_W(64)
+    ) u_axis_stream_duplicator (
         .clk(clk),
         .rst_n(rst_n),
         .spec_enable(spec_enable),
@@ -1075,12 +1336,12 @@ module t510_fengine_top (
         .time_drop_when_full(1'b1),
         .snapshot_drop_when_full(1'b1),
         .monitor_drop_when_full(1'b1),
-        .s_axis_tdata(s_axis_adc_tdata),
-        .s_axis_tuser(s_axis_adc_tuser),
-        .s_axis_sample0(s_axis_adc_sample0),
-        .s_axis_tvalid(s_axis_adc_tvalid),
-        .s_axis_tlast(s_axis_adc_tlast),
-        .s_axis_tready(s_axis_adc_tready),
+        .s_axis_tdata(science_tdata),
+        .s_axis_tuser(science_tuser),
+        .s_axis_sample0(science_sample0),
+        .s_axis_tvalid(science_tvalid),
+        .s_axis_tlast(science_tlast),
+        .s_axis_tready(science_tready),
         .m_spec_tdata(spec_tdata),
         .m_spec_tuser(spec_tuser),
         .m_spec_sample0(spec_sample0),
@@ -1110,7 +1371,10 @@ module t510_fengine_top (
         .dropped_monitor_count()
     );
 
-    requantizer u_requantizer (
+    requantizer #(
+        .DATA_W(SCIENCE_DATA_W),
+        .LANE_W(16)
+    ) u_requantizer (
         .in_tdata(spec_tdata),
         .in_tvalid(spec_tvalid),
         .quant_mode(quant_mode),
@@ -1119,7 +1383,7 @@ module t510_fengine_top (
     );
 
     pfb_channelizer #(
-        .DATA_W(256),
+        .DATA_W(SCIENCE_DATA_W),
         .NINPUT(8),
         .NCHAN(4096)
     ) u_pfb_channelizer (
@@ -1150,7 +1414,11 @@ module t510_fengine_top (
         .packet_time_count(pfb_packet_time_count)
     );
 
-    spectral_packetizer u_spectral_packetizer (
+    spectral_packetizer #(
+        .DATA_W(SCIENCE_DATA_W),
+        .OUT_W(64),
+        .HEADER_WORDS(16)
+    ) u_spectral_packetizer (
         .clk(clk),
         .rst_n(rst_n),
         .enable(spec_enable),
@@ -1184,7 +1452,11 @@ module t510_fengine_top (
         .chan0_debug(spec_chan0)
     );
 
-    time_packetizer u_time_packetizer (
+    time_packetizer #(
+        .DATA_W(SCIENCE_DATA_W),
+        .OUT_W(64),
+        .HEADER_WORDS(16)
+    ) u_time_packetizer (
         .clk(clk),
         .rst_n(rst_n),
         .enable(time_enable),
@@ -1420,6 +1692,31 @@ module t510_fengine_top (
         .frame_byte_count(tx_frame_byte_count)
     );
 
+    t510_qsfp_test_frame_gen u_qsfp_test_frame_gen (
+        .clk(cmac_tx_clk),
+        .rst_n(cmac_tx_rst_n),
+        .enable(tx_qsfp_test_enable),
+        .clear(tx_clear_pulse_cmac),
+        .interval_cycles(tx_qsfp_test_interval_cmac),
+        .src_mac(src_mac_cmac),
+        .src_ip(src_ip_cmac),
+        .dst_mac(tx_qsfp_test_dst_mac_cmac),
+        .dst_ip(tx_qsfp_test_dst_ip_cmac),
+        .src_udp_port(tx_qsfp_test_src_port_cmac),
+        .dst_udp_port(tx_qsfp_test_dst_port_cmac),
+        .core_version(32'h0001_001A),
+        .board_id(ctrl_board_id_cmac),
+        .status_flags(tx_link_status_flags_cmac),
+        .sample_count(rfdc_sample_count_cmac),
+        .m_axis_tdata(cmac_tx_axis_tdata),
+        .m_axis_tkeep(cmac_tx_axis_tkeep),
+        .m_axis_tvalid(cmac_tx_axis_tvalid),
+        .m_axis_tlast(cmac_tx_axis_tlast),
+        .m_axis_tready(cmac_tx_axis_tready),
+        .packet_count(tx_cmac_test_packet_count),
+        .byte_count(tx_cmac_test_byte_count)
+    );
+
     tx_header_capture #(
         .DATA_W(64),
         .HEADER_WORDS(16)
@@ -1466,6 +1763,7 @@ module t510_fengine_top (
         .active_sync_mode(status_bits_ctrl[3:2]),
         .waiting_for_epoch(status_bits_ctrl[4]),
         .pps_seen(pps_seen_ctrl),
+        .pps_count(pps_count),
         .ref_locked(ref_lock_ctrl),
         .error_flags(error_flags),
         .monitor_sample_count(monitor_sample_count_ctrl),
@@ -1487,15 +1785,15 @@ module t510_fengine_top (
         .rfdc_dropped_count(rfdc_dropped_count_ctrl),
         .rfdc_current_valid_mask(rfdc_current_valid_mask_ctrl),
         .rfdc_seen_valid_mask(rfdc_seen_valid_mask_ctrl),
-        .tx_link_status_flags(tx_link_status_flags),
-        .tx_dry_run_packet_count(tx_dry_run_packet_count),
-        .tx_dry_run_byte_count(tx_dry_run_byte_count),
+        .tx_link_status_flags(tx_link_status_flags_ctrl),
+        .tx_dry_run_packet_count(tx_count_packet_status),
+        .tx_dry_run_byte_count(tx_count_byte_status),
         .tx_fifo_level_words(tx_fifo_level_words),
         .tx_fifo_high_water_words(tx_fifo_high_water_words),
         .tx_fifo_backpressure_cycles(tx_fifo_backpressure_cycles),
         .tx_preflight_status_flags(tx_preflight_status_flags_ctrl),
         .tx_frame_built_count(tx_frame_built_count_ctrl),
-        .tx_frame_sent_count(tx_dry_run_packet_count),
+        .tx_frame_sent_count(tx_count_packet_status),
         .tx_frame_dropped_count(tx_route_dropped_count_ctrl),
         .tx_frame_byte_count(tx_frame_byte_count_ctrl),
         .tx_route_miss_count(tx_route_miss_count_ctrl),
@@ -1544,6 +1842,17 @@ module t510_fengine_top (
         .dac_tx_witness_mode(dac_tx_witness_mode),
         .dac_tx_witness_ready_gap_count(dac_tx_witness_ready_gap_count),
         .dac_tx_witness_rd_data(dac_tx_witness_rd_data),
+        .rfdc_axis_raw_witness_armed(rfdc_axis_raw_witness_armed_ctrl),
+        .rfdc_axis_raw_witness_valid(rfdc_axis_raw_witness_valid_ctrl),
+        .rfdc_axis_raw_witness_capturing(rfdc_axis_raw_witness_capturing_ctrl),
+        .rfdc_axis_raw_witness_overflow(rfdc_axis_raw_witness_overflow_ctrl),
+        .rfdc_axis_raw_witness_tvalid_seen(rfdc_axis_raw_witness_tvalid_seen_ctrl),
+        .rfdc_axis_raw_witness_beat_count(rfdc_axis_raw_witness_beat_count_ctrl),
+        .rfdc_axis_raw_witness_channel_select(rfdc_axis_raw_witness_channel_select_ctrl),
+        .rfdc_axis_raw_witness_sample0(rfdc_axis_raw_witness_sample0_ctrl),
+        .rfdc_axis_raw_witness_rfdc_flags(rfdc_axis_raw_witness_rfdc_flags_ctrl),
+        .rfdc_axis_raw_witness_valid_mask(rfdc_axis_raw_witness_valid_mask_ctrl),
+        .rfdc_axis_raw_witness_rd_data(rfdc_axis_raw_witness_rd_data_ctrl),
         .tx_spec_route_hit_counts(tx_spec_route_hit_counts_ctrl),
         .tx_time_route_hit_counts(tx_time_route_hit_counts_ctrl),
         .pfb_status(pfb_status_ctrl),
@@ -1628,6 +1937,7 @@ module t510_fengine_top (
         .tx_endpoint_mac_vec(ctrl_tx_endpoint_mac_vec),
         .tx_endpoint_src_port_vec(ctrl_tx_endpoint_src_port_vec),
         .tx_endpoint_dst_port_vec(ctrl_tx_endpoint_dst_port_vec),
+        .qsfp_test_interval_cycles(ctrl_qsfp_test_interval_cycles),
         .tx_spec_route_enable(ctrl_tx_spec_route_enable),
         .tx_spec_route_chan0_vec(ctrl_tx_spec_route_chan0_vec),
         .tx_spec_route_chan_count_vec(ctrl_tx_spec_route_chan_count_vec),
@@ -1674,7 +1984,14 @@ module t510_fengine_top (
         .dac_tx_witness_clear_pulse(dac_tx_witness_clear_pulse),
         .dac_tx_witness_capture_words(dac_tx_witness_capture_words),
         .dac_tx_witness_rd_word(dac_tx_witness_rd_word),
-        .unix_seconds(ctrl_unix_seconds)
+        .rfdc_axis_raw_witness_arm_pulse(ctrl_rfdc_axis_raw_witness_arm_pulse),
+        .rfdc_axis_raw_witness_clear_pulse(ctrl_rfdc_axis_raw_witness_clear_pulse),
+        .rfdc_axis_raw_witness_channel_select_ctrl(ctrl_rfdc_axis_raw_witness_channel_select),
+        .rfdc_axis_raw_witness_capture_beats(ctrl_rfdc_axis_raw_witness_capture_beats),
+        .rfdc_axis_raw_witness_rd_word(ctrl_rfdc_axis_raw_witness_rd_word),
+        .unix_seconds(ctrl_unix_seconds),
+        .science_bandwidth_mode_cfg(ctrl_science_bandwidth_mode_cfg),
+        .science_output_mode_cfg(ctrl_science_output_mode_cfg)
     );
 
 endmodule

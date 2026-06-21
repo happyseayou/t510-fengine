@@ -8,7 +8,7 @@ module tb_rfdc_adc_axis_adapter;
     logic [15:0] valid = 16'h0000;
     logic [15:0] active_mask = 16'hffff;
     wire [15:0] ready;
-    wire [255:0] m_axis_tdata;
+    wire [1023:0] m_axis_tdata;
     wire [31:0] m_axis_tuser;
     wire [63:0] m_axis_sample0;
     wire m_axis_tvalid;
@@ -26,7 +26,7 @@ module tb_rfdc_adc_axis_adapter;
     wire [63:0] sample_count;
     wire [31:0] dropped_count;
     logic [31:0] fire_count = 32'd0;
-    logic [255:0] last_fire_tdata = 256'd0;
+    logic [1023:0] last_fire_tdata = 1024'd0;
     logic [31:0] last_fire_tuser = 32'd0;
     logic last_fire_tlast = 1'b0;
 
@@ -35,7 +35,7 @@ module tb_rfdc_adc_axis_adapter;
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             fire_count <= 32'd0;
-            last_fire_tdata <= 256'd0;
+            last_fire_tdata <= 1024'd0;
             last_fire_tuser <= 32'd0;
             last_fire_tlast <= 1'b0;
         end else if (m_axis_tvalid && m_axis_tready) begin
@@ -119,13 +119,17 @@ module tb_rfdc_adc_axis_adapter;
 
     task automatic set_low_words(input int base);
         integer i;
-        logic [31:0] word_value;
-        logic [47:0] index_value;
+        logic [15:0] word0;
+        logic [15:0] word1;
+        logic [15:0] word2;
+        logic [15:0] word3;
         begin
             for (i = 0; i < 16; i = i + 1) begin
-                word_value = base + i;
-                index_value = i;
-                d[i] = {48'hface_0000_0000 + index_value, word_value[15:0]};
+                word0 = base + i;
+                word1 = base + 16'h0100 + i;
+                word2 = base + 16'h0200 + i;
+                word3 = base + 16'h0300 + i;
+                d[i] = {word3, word2, word1, word0};
             end
         end
     endtask
@@ -157,12 +161,15 @@ module tb_rfdc_adc_axis_adapter;
         `TB_CHECK(m_axis_tvalid, "adapter emits beat when downstream ready")
         `TB_CHECK(preview_tvalid, "adapter emits full-rate preview beat")
         `TB_CHECK_EQ(fire_count, 32'd1, "first output fire count")
-        `TB_CHECK_EQ(last_fire_tdata, 256'h100f_100e_100d_100c_100b_100a_1009_1008_1007_1006_1005_1004_1003_1002_1001_1000, "adapter I/Q lane packing")
+        `TB_CHECK_EQ(last_fire_tdata[255:0], 256'h100f_100e_100d_100c_100b_100a_1009_1008_1007_1006_1005_1004_1003_1002_1001_1000, "adapter sub0 I/Q lane packing")
+        `TB_CHECK_EQ(last_fire_tdata[511:256], 256'h110f_110e_110d_110c_110b_110a_1109_1108_1107_1106_1105_1104_1103_1102_1101_1100, "adapter sub1 I/Q lane packing")
+        `TB_CHECK_EQ(last_fire_tdata[767:512], 256'h120f_120e_120d_120c_120b_120a_1209_1208_1207_1206_1205_1204_1203_1202_1201_1200, "adapter sub2 I/Q lane packing")
+        `TB_CHECK_EQ(last_fire_tdata[1023:768], 256'h130f_130e_130d_130c_130b_130a_1309_1308_1307_1306_1305_1304_1303_1302_1301_1300, "adapter sub3 I/Q lane packing")
         `TB_CHECK_EQ(last_fire_tuser, 32'd0, "first tuser sample count")
         `TB_CHECK_EQ(m_axis_sample0, 64'd4, "axis sample0 full-rate output advances after first beat")
         `TB_CHECK_EQ(preview_sample0, 64'd4, "preview sample0 continuous output advances after first beat")
         `TB_CHECK_EQ(preview_tdata0[31:0], 32'h1001_1000, "preview ADC0 sample lane0 I/Q")
-        `TB_CHECK_EQ(preview_tdata1[31:0], 32'h0001_0000, "preview ADC0 sample lane1 I/Q")
+        `TB_CHECK_EQ(preview_tdata1[31:0], 32'h1101_1100, "preview ADC0 sample lane1 I/Q")
         `TB_CHECK_EQ(seen_valid_mask, 16'hffff, "seen valid mask accumulates all valid")
         @(posedge clk);
         #1;
@@ -197,7 +204,14 @@ module tb_rfdc_adc_axis_adapter;
         #1;
         `TB_CHECK(all_adc_valid, "single ADC0 active mask accepts m00 only")
         `TB_CHECK_EQ(fire_count, fire_before + 1, "single ADC0 mask emits output")
-        `TB_CHECK_EQ(last_fire_tdata, 256'h0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_2000, "single ADC0 mask zeros inactive lanes")
+        `TB_CHECK_EQ(last_fire_tdata[31:0], 32'h0000_2000, "single ADC0 mask keeps sub0 I and zeros Q")
+        `TB_CHECK_EQ(last_fire_tdata[287:256], 32'h0000_2100, "single ADC0 mask keeps sub1 I and zeros Q")
+        `TB_CHECK_EQ(last_fire_tdata[543:512], 32'h0000_2200, "single ADC0 mask keeps sub2 I and zeros Q")
+        `TB_CHECK_EQ(last_fire_tdata[799:768], 32'h0000_2300, "single ADC0 mask keeps sub3 I and zeros Q")
+        `TB_CHECK_EQ(last_fire_tdata[255:32], 224'd0, "single ADC0 mask zeros inactive sub0 lanes")
+        `TB_CHECK_EQ(last_fire_tdata[511:288], 224'd0, "single ADC0 mask zeros inactive sub1 lanes")
+        `TB_CHECK_EQ(last_fire_tdata[767:544], 224'd0, "single ADC0 mask zeros inactive sub2 lanes")
+        `TB_CHECK_EQ(last_fire_tdata[1023:800], 224'd0, "single ADC0 mask zeros inactive sub3 lanes")
         `TB_CHECK_EQ(current_valid_mask, 16'h0001, "single ADC0 current valid mask")
 
         active_mask <= 16'h0003;
@@ -210,6 +224,7 @@ module tb_rfdc_adc_axis_adapter;
         #1;
         `TB_CHECK(all_adc_valid, "complex ch0 mask accepts m00 and m01")
         `TB_CHECK_EQ(last_fire_tdata[31:0], 32'h2001_2000, "complex ch0 lower I/Q packing")
+        `TB_CHECK_EQ(last_fire_tdata[287:256], 32'h2101_2100, "complex ch0 sub1 I/Q packing")
 
         `TB_PASS("tb_rfdc_adc_axis_adapter")
     end

@@ -4,7 +4,7 @@ module tb_t510_fengine_top_smoke;
 
     localparam [31:0] START_TUSER = 32'd64;
     localparam [63:0] START_SAMPLE0 = 64'h0000_0001_0000_0100;
-    localparam [63:0] EXPECTED_PACKET_SAMPLE0 = START_SAMPLE0 + 64'd4;
+    localparam [63:0] EXPECTED_PACKET_SAMPLE0 = START_SAMPLE0;
 
     logic clk = 1'b0;
     logic rst_n = 1'b0;
@@ -28,7 +28,7 @@ module tb_t510_fengine_top_smoke;
     wire [1:0]   s_axi_rresp;
     wire         s_axi_rvalid;
     logic        s_axi_rready = 1'b0;
-    logic [255:0] s_axis_adc_tdata = 256'd0;
+    logic [1023:0] s_axis_adc_tdata = 1024'd0;
     logic [31:0]  s_axis_adc_tuser = 32'd0;
     logic [63:0]  s_axis_adc_sample0 = START_SAMPLE0;
     logic         s_axis_adc_tvalid = 1'b0;
@@ -44,13 +44,24 @@ module tb_t510_fengine_top_smoke;
 
     always #5 clk = ~clk;
 
-    function automatic [255:0] make_sample(input integer beat);
+    function automatic [255:0] make_subsample(input integer beat, input integer sub);
+        begin
+            make_subsample = {
+                64'h3000_0000_0000_0003 + (beat * 16) + (sub * 4),
+                64'h3000_0000_0000_0002 + (beat * 16) + (sub * 4),
+                64'h3000_0000_0000_0001 + (beat * 16) + (sub * 4),
+                64'h3000_0000_0000_0000 + (beat * 16) + (sub * 4)
+            };
+        end
+    endfunction
+
+    function automatic [1023:0] make_sample(input integer beat);
         begin
             make_sample = {
-                64'h3000_0000_0000_0003 + beat,
-                64'h3000_0000_0000_0002 + beat,
-                64'h3000_0000_0000_0001 + beat,
-                64'h3000_0000_0000_0000 + beat
+                make_subsample(beat, 3),
+                make_subsample(beat, 2),
+                make_subsample(beat, 1),
+                make_subsample(beat, 0)
             };
         end
     endfunction
@@ -86,10 +97,10 @@ module tb_t510_fengine_top_smoke;
         .s_axis_adc_tvalid(s_axis_adc_tvalid),
         .s_axis_adc_tlast(s_axis_adc_tlast),
         .s_axis_adc_tready(s_axis_adc_tready),
-        .s_axis_preview_tdata0(s_axis_adc_tdata),
-        .s_axis_preview_tdata1(s_axis_adc_tdata),
-        .s_axis_preview_tdata2(s_axis_adc_tdata),
-        .s_axis_preview_tdata3(s_axis_adc_tdata),
+        .s_axis_preview_tdata0(s_axis_adc_tdata[255:0]),
+        .s_axis_preview_tdata1(s_axis_adc_tdata[511:256]),
+        .s_axis_preview_tdata2(s_axis_adc_tdata[767:512]),
+        .s_axis_preview_tdata3(s_axis_adc_tdata[1023:768]),
         .s_axis_preview_sample0(s_axis_adc_sample0),
         .s_axis_preview_tvalid(s_axis_adc_tvalid && s_axis_adc_tready),
         .rfdc_status_flags(32'h0000_000f),
@@ -123,7 +134,14 @@ module tb_t510_fengine_top_smoke;
         .m_axis_tx_tvalid(m_axis_tx_tvalid),
         .m_axis_tx_tlast(m_axis_tx_tlast),
         .m_axis_tx_tready(m_axis_tx_tready),
-        .tx_link_status_flags(32'h0000_0002),
+        .cmac_tx_clk(clk),
+        .cmac_tx_rst_n(rst_n),
+        .cmac_tx_axis_tdata(),
+        .cmac_tx_axis_tkeep(),
+        .cmac_tx_axis_tvalid(),
+        .cmac_tx_axis_tlast(),
+        .cmac_tx_axis_tready(1'b1),
+        .tx_link_status_flags(32'h0000_101c),
         .tx_dry_run_packet_count(32'd0),
         .tx_dry_run_byte_count(32'd0),
         .dac_tone_enable(),
@@ -284,7 +302,7 @@ module tb_t510_fengine_top_smoke;
             if (expect_tx) begin
                 `TB_CHECK_EQ(seen, 6, "top TX frame header observed")
                 if (expected_stream_type == 1) begin
-                    `TB_CHECK_EQ(word0, 64'h0002_1000_0000_0002, "top TIME frame dst/src MAC")
+                    `TB_CHECK_EQ(word0, 64'h0002_b295_d5eb_c008, "top TIME frame dst/src MAC")
                 end else begin
                     `TB_CHECK_EQ(word0, 64'h0002_0a00_0000_0002, "top SPEC frame dst/src MAC")
                 end
@@ -409,9 +427,9 @@ module tb_t510_fengine_top_smoke;
             `TB_CHECK_EQ(rd, EXPECTED_PACKET_SAMPLE0[63:32], "top witness SPEC sample0 high")
             axi_read(16'h07c0, rd);
             `TB_CHECK_EQ(rd, 32'd8192, "top witness payload bytes")
-            axi_read(16'hd000, rd);
+            axi_read(32'h0001_0000, rd);
             `TB_CHECK_EQ(rd, 32'h0002_0080, "top witness buffer word0 low")
-            axi_read(16'hd004, rd);
+            axi_read(32'h0001_0004, rd);
             `TB_CHECK_EQ(rd, 32'h5435_3130, "top witness buffer word0 high")
         end
     endtask

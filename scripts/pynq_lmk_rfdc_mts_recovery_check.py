@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 
-EXPECTED_CORE_VERSION = 0x0001_000E
+EXPECTED_CORE_VERSION = 0x0001_0011
 
 
 def _repo_root() -> Path:

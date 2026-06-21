@@ -341,7 +341,7 @@ proc create_t510_rfdc_bd {} {
     }
     if {$core_seg ne ""} {
         set_property OFFSET 0x80040000 $core_seg
-        set_property RANGE 64K $core_seg
+        set_property RANGE 128K $core_seg
     }
 
     validate_bd_design

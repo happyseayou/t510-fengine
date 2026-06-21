@@ -50,7 +50,7 @@ module rfdc_adc_axis_adapter (
     output wire         m33_axis_tready,
     input  wire         m33_axis_tvalid,
     input  wire [15:0]  active_port_mask,
-    output wire [255:0] m_axis_tdata,
+    output wire [1023:0] m_axis_tdata,
     output wire [31:0]  m_axis_tuser,
     output wire [63:0]  m_axis_sample0,
     output wire         m_axis_tvalid,
@@ -102,22 +102,10 @@ module rfdc_adc_axis_adapter (
     assign m33_axis_tready = 1'b1;
 
     assign m_axis_tdata = {
-        effective_active_mask[15] ? m33_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[14] ? m32_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[13] ? m31_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[12] ? m30_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[11] ? m23_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[10] ? m22_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[9]  ? m21_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[8]  ? m20_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[7]  ? m13_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[6]  ? m12_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[5]  ? m11_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[4]  ? m10_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[3]  ? m03_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[2]  ? m02_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[1]  ? m01_axis_tdata[15:0] : 16'd0,
-        effective_active_mask[0]  ? m00_axis_tdata[15:0] : 16'd0
+        m_preview_tdata3,
+        m_preview_tdata2,
+        m_preview_tdata1,
+        m_preview_tdata0
     };
     wire output_fire = sample_valid && m_axis_tready;
 

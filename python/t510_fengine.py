@@ -99,7 +99,8 @@ class ObservationSpectrumStabilizer:
             and abs(float(previous.get("x1", 1e30)) - float(rf_mhz[-1])) < 1e-9
         )
         if previous is not None and same_axis:
-            if abs(raw_peak_mhz - float(previous["peak_mhz"])) > self.peak_jump_mhz:
+            previous_gate_peak_mhz = float(previous.get("gate_peak_mhz", previous["peak_mhz"]))
+            if abs(raw_peak_mhz - previous_gate_peak_mhz) > self.peak_jump_mhz:
                 reasons.append(f"peak_jump>{self.peak_jump_mhz:.1f}MHz")
             if abs(raw_peak_dbfs - float(previous["raw_peak_dbfs"])) > self.amp_jump_db:
                 reasons.append(f"amp_jump>{self.amp_jump_db:.1f}dB")
@@ -118,15 +119,19 @@ class ObservationSpectrumStabilizer:
                 smooth_power = raw_power
                 smooth_rms_power = float(self._power_from_db(raw_rms_dbfs))
             display_dbfs = self._db_from_power(smooth_power)
-            display_peak_idx = int(np.argmax(smooth_power)) if smooth_power.size else 0
+            display_peak_idx = (
+                int(np.argmin(np.abs(rf_mhz - raw_peak_mhz)))
+                if smooth_power.size and rf_mhz.size else 0
+            )
             display_peak_dbfs = float(display_dbfs[display_peak_idx]) if display_dbfs.size else raw_peak_dbfs
-            display_peak_mhz = float(rf_mhz[display_peak_idx]) if rf_mhz.size else raw_peak_mhz
+            display_peak_mhz = raw_peak_mhz
             display_rms_dbfs = float(self._db_from_power(smooth_rms_power))
             self._channels[channel] = {
                 "size": int(rf_mhz.size),
                 "x0": float(rf_mhz[0]) if rf_mhz.size else 0.0,
                 "x1": float(rf_mhz[-1]) if rf_mhz.size else 0.0,
                 "peak_mhz": display_peak_mhz,
+                "gate_peak_mhz": raw_peak_mhz,
                 "peak_dbfs": display_peak_dbfs,
                 "raw_peak_dbfs": raw_peak_dbfs,
                 "raw_rms_dbfs": raw_rms_dbfs,
@@ -175,6 +180,8 @@ class RegisterMap:
     REF_STATUS: int = 0x0018
     ERROR_FLAGS: int = 0x001C
     SYNC_CONFIG: int = 0x0020
+    PPS_COUNT_LO: int = 0x0024
+    PPS_COUNT_HI: int = 0x0028
     SAMPLE_RATE_HZ: int = 0x0108
     QUANT_MODE: int = 0x010C
     SCALE_MODE: int = 0x0110
@@ -309,8 +316,29 @@ class RegisterMap:
     TX_PAIRED_SAMPLE0_DELTA_LO: int = 0x07F4
     TX_PAIRED_SAMPLE0_DELTA_HI: int = 0x07F8
     TX_PAIRED_RFDC_FLAGS: int = 0x07FC
-    TX_PAYLOAD_WITNESS_BUFFER_BASE: int = 0x0D000
+    TX_PAYLOAD_WITNESS_BUFFER_BASE: int = 0x10000
     TX_PAYLOAD_WITNESS_BUFFER_WORDS: int = 1056
+    RFDC_AXIS_RAW_WITNESS_CONTROL: int = 0x0E200
+    RFDC_AXIS_RAW_WITNESS_STATUS: int = 0x0E204
+    RFDC_AXIS_RAW_WITNESS_CHANNEL_SELECT: int = 0x0E208
+    RFDC_AXIS_RAW_WITNESS_CAPTURE_BEATS: int = 0x0E20C
+    RFDC_AXIS_RAW_WITNESS_SAMPLE0_LO: int = 0x0E210
+    RFDC_AXIS_RAW_WITNESS_SAMPLE0_HI: int = 0x0E214
+    RFDC_AXIS_RAW_WITNESS_RFDC_FLAGS: int = 0x0E218
+    RFDC_AXIS_RAW_WITNESS_WORD_COUNT: int = 0x0E21C
+    RFDC_AXIS_RAW_WITNESS_BUFFER_WORDS_REG: int = 0x0E220
+    RFDC_AXIS_RAW_WITNESS_VALID_MASK: int = 0x0E224
+    RFDC_AXIS_RAW_WITNESS_BUFFER_BASE: int = 0x0E800
+    RFDC_AXIS_RAW_WITNESS_BUFFER_WORDS: int = 1024
+    SCIENCE_CONTROL: int = 0x0D000
+    SCIENCE_STATUS: int = 0x0D004
+    SCIENCE_BANDWIDTH_MODE: int = 0x0D008
+    SCIENCE_OUTPUT_MODE: int = 0x0D00C
+    SCIENCE_SAMPLE_RATE_HZ: int = 0x0D010
+    SCIENCE_DECIM_FACTOR: int = 0x0D014
+    SCIENCE_PAYLOAD_RATE_MBPS: int = 0x0D018
+    SCIENCE_BLOCK_REASON: int = 0x0D01C
+    SCIENCE_CAPABILITY: int = 0x0D020
     DAC_TX_WITNESS_CONTROL: int = 0x0B600
     DAC_TX_WITNESS_STATUS: int = 0x0B604
     DAC_TX_WITNESS_CAPTURE_WORDS: int = 0x0B608
@@ -361,6 +389,7 @@ class RegisterMap:
     TX_SPEC_ROUTE_STRIDE: int = 0x0020
     TX_TIME_ROUTE_BASE: int = 0xB500
     TX_TIME_ROUTE_STRIDE: int = 0x0020
+    QSFP_TEST_INTERVAL_CYCLES: int = 0xB700
     MONITOR_CLIP_BASE: int = 0x0500
     MONITOR_MEAN_BASE: int = 0x0520
     DEBUG_TIME_BUFFER_BASE: int = 0x0800
@@ -383,16 +412,17 @@ class T510Clock:
         self.last_config: dict[str, Any] = {}
 
     def configure(self, ref: str) -> dict[str, Any]:
-        if ref != "tcxo_10mhz":
-            self.last_config = {"ref": ref, "configured": False, "reason": "external reference selected"}
-            return self.last_config
-
         try:
             from .t510_clock import T510ClockController
         except ImportError:
             from t510_clock import T510ClockController
 
-        self.last_config = T510ClockController().configure_tcxo_245p76()
+        if ref == "tcxo_10mhz":
+            self.last_config = T510ClockController().configure_tcxo_245p76()
+        elif ref == "external_10mhz":
+            self.last_config = T510ClockController().configure_external_10mhz_245p76()
+        else:
+            self.last_config = {"ref": ref, "configured": False, "reason": "unsupported reference selected"}
         if self.require_low_level:
             if not self.last_config.get("configured"):
                 raise RuntimeError(f"T510 clock configuration failed: {self.last_config}")
@@ -453,6 +483,41 @@ class T510FEngine:
         "constant": 1,
         "phasor": 1,
     }
+    SCIENCE_BANDWIDTHS: dict[int, dict[str, Any]] = {
+        20: {"code": 0, "pl_decim": 8, "sample_rate_hz": 30_720_000.0},
+        100: {"code": 1, "pl_decim": 2, "sample_rate_hz": 122_880_000.0},
+        200: {"code": 2, "pl_decim": 1, "sample_rate_hz": 245_760_000.0},
+    }
+    SCIENCE_BANDWIDTH_BY_CODE = {
+        int(item["code"]): bandwidth_mhz for bandwidth_mhz, item in SCIENCE_BANDWIDTHS.items()
+    }
+    SCIENCE_OUTPUT_MODES = {
+        "off": 0,
+        "time_only": 1,
+        "time": 1,
+        "spec_only": 2,
+        "spec": 2,
+        "time_spec": 3,
+        "dual": 3,
+        "time_monitor_spec": 4,
+        "monitor": 4,
+    }
+    SCIENCE_OUTPUT_MODE_NAMES = {
+        0: "OFF",
+        1: "TIME_ONLY",
+        2: "SPEC_ONLY",
+        3: "TIME_SPEC",
+        4: "TIME_MONITOR_SPEC",
+    }
+    SCIENCE_BLOCK_REASONS = {
+        0: "TIME_SPEC_200M_REJECTED",
+        1: "SPEC_SCIENCE_BLOCKED_PFB_SCAFFOLD",
+        2: "CMAC_LIVE_BLOCKED_NO_GT_DATAPATH",
+        3: "WIDE_512B_TX_PATH_NOT_IMPLEMENTED",
+        4: "RFDC_SCIENCE_BUS_TRUNCATED_TO_LOW16",
+        5: "CMAC_LINK_NOT_READY",
+        6: "FORCED_DRY_RUN",
+    }
 
     def __init__(
         self,
@@ -460,7 +525,7 @@ class T510FEngine:
         *,
         ctrl_ip: str = "core_s_axi",
         ctrl_base: int = 0x8004_0000,
-        ctrl_range: int = 0x0001_0000,
+        ctrl_range: int = 0x0002_0000,
         download: bool = True,
     ) -> None:
         if Overlay is None:
@@ -1384,6 +1449,129 @@ class T510FEngine:
         return self.clock.read_status(include_registers=include_registers)
 
     @staticmethod
+    def _sync_mode_name(value: int) -> str:
+        return {0: "external_pps", 1: "software_epoch", 2: "free_run"}.get(int(value), f"unknown_{int(value)}")
+
+    @staticmethod
+    def _clock_ref_name(value: int) -> str:
+        return {0: "external_10mhz", 1: "tcxo_10mhz", 2: "gps_10mhz"}.get(int(value), f"unknown_{int(value)}")
+
+    def read_external_sync_diagnostics(
+        self,
+        *,
+        interval_s: float = 1.2,
+        include_lmk_registers: bool = False,
+    ) -> dict[str, Any]:
+        """Read simple 10 MHz/PPS health evidence for LEDs and Jupyter."""
+        before = self.read_status()
+        lmk: dict[str, Any]
+        try:
+            lmk = self.read_lmk_status(include_registers=include_lmk_registers)
+        except Exception as exc:
+            lmk = {"configured": False, "errors": [str(exc)]}
+        time.sleep(max(float(interval_s), 0.0))
+        after = self.read_status()
+        pps_delta = self._counter_delta(after.get("pps_count", 0), before.get("pps_count", 0), bits=64)
+        selected_ref = str(lmk.get("selected_ref", lmk.get("ref", "")))
+        configured_ref = self._clock_ref_name(int(after.get("configured_clock_ref", 0)))
+        configured_sync = self._sync_mode_name(int(after.get("configured_sync_mode", 0)))
+        lmk_locked = bool(lmk.get("configured", False))
+        external_ref_selected = selected_ref == "external_10mhz" or configured_ref == "external_10mhz"
+        pps_ok = int(pps_delta) > 0 or bool(after.get("pps_recent", 0))
+        ref_ok = lmk_locked and bool(after.get("ref_status_locked", after.get("rfdc_clock_locked", 0)))
+        if not external_ref_selected:
+            classification = "EXTERNAL_10MHZ_NOT_SELECTED"
+        elif not lmk_locked:
+            classification = "EXTERNAL_10MHZ_LMK_UNLOCKED"
+        elif not pps_ok:
+            classification = "PPS_NOT_SEEN_OR_NOT_TOGGLING"
+        elif configured_sync != "external_pps":
+            classification = "EXTERNAL_SYNC_PRESENT_BUT_NOT_ARMED"
+        else:
+            classification = "EXTERNAL_10MHZ_PPS_OK"
+        return {
+            "classification": classification,
+            "ok": classification == "EXTERNAL_10MHZ_PPS_OK",
+            "configured_clock_ref": configured_ref,
+            "configured_sync_mode": configured_sync,
+            "external_ref_selected": bool(external_ref_selected),
+            "lmk_locked": bool(lmk_locked),
+            "ref_ok": bool(ref_ok),
+            "pps_ok": bool(pps_ok),
+            "pps_count_before": int(before.get("pps_count", 0)),
+            "pps_count_after": int(after.get("pps_count", 0)),
+            "pps_delta": int(pps_delta),
+            "pps_recent": bool(after.get("pps_recent", 0)),
+            "pps_input_high": bool(after.get("pps_input_high", 0)),
+            "led_semantics": {
+                "pl_led0": "RF/LMK-derived data clock chain ready",
+                "pl_led1": "PPS edge blink",
+                "pl_led2": "PPS seen recently",
+                "pl_led3": "sync error: no clock-chain lock or no recent PPS",
+            },
+            "lmk": lmk,
+            "before": before,
+            "after": after,
+        }
+
+    def wait_for_pps_increment(self, *, timeout: float = 3.0, poll_s: float = 0.05) -> dict[str, Any]:
+        start = self.read_status()
+        start_count = int(start.get("pps_count", 0))
+        deadline = time.monotonic() + float(timeout)
+        status = start
+        while time.monotonic() < deadline:
+            time.sleep(max(float(poll_s), 0.001))
+            status = self.read_status()
+            if int(status.get("pps_count", 0)) != start_count:
+                return {
+                    "ok": True,
+                    "start_count": start_count,
+                    "end_count": int(status.get("pps_count", 0)),
+                    "status": status,
+                }
+        return {
+            "ok": False,
+            "start_count": start_count,
+            "end_count": int(status.get("pps_count", 0)),
+            "status": status,
+        }
+
+    def read_qsfp_preflight_diagnostics(self) -> dict[str, Any]:
+        status = self.read_status()
+        tx = self.read_tx_status()
+        dry_run = bool(tx.get("udp_dry_run_active", 0) or status.get("tx_udp_dry_run_active", 0))
+        link_up = bool(tx.get("qsfp_link_up", 0) or status.get("qsfp_link_up", 0))
+        cmac_ready = bool(tx.get("cmac_tx_ready", 0) and tx.get("cmac_reset_done", 0) and tx.get("gt_locked", 0))
+        module_present = bool(tx.get("qsfp_module_present", 0) or status.get("tx_qsfp_module_present", 0))
+        if dry_run and not link_up and not cmac_ready:
+            classification = "CURRENT_BIT_DRY_RUN_NO_CMAC_GT_DATAPATH"
+        elif link_up and cmac_ready and not dry_run:
+            classification = "QSFP_LINK_READY_FOR_PCAP"
+        elif module_present and not cmac_ready:
+            classification = "QSFP_MODULE_PRESENT_BUT_CMAC_GT_NOT_READY"
+        elif link_up and dry_run:
+            classification = "QSFP_LINK_SEEN_BUT_TX_FORCED_DRY_RUN"
+        else:
+            classification = "QSFP_LINK_NOT_READY"
+        return {
+            "classification": classification,
+            "link_pcap_possible": classification == "QSFP_LINK_READY_FOR_PCAP",
+            "science_data_validated": False,
+            "module_present": module_present,
+            "status": status,
+            "tx": tx,
+            "default_receivers": [
+                {"stream": "spec_low", "ip": "10.0.1.10", "port": 4100},
+                {"stream": "spec_high", "ip": "10.0.1.11", "port": 4200},
+                {"stream": "time", "ip": "10.0.1.16", "port": 4300},
+            ],
+            "note": (
+                "This overlay still reports dry-run/no live CMAC data path unless "
+                "tx_status shows link, GT lock, CMAC reset done and TX ready with dry-run off."
+            ),
+        }
+
+    @staticmethod
     def _probe_library_symbols(path: str, patterns: tuple[str, ...]) -> dict[str, Any]:
         import subprocess
 
@@ -1593,16 +1781,25 @@ class T510FEngine:
         config["rfdc_driver"] = self.read_rfdc_driver_status(probe_symbols=False)
         return config
 
+    @staticmethod
+    def _normalize_input_source_mode(input_source_mode: str) -> str:
+        mode = str(input_source_mode).strip().lower()
+        if mode not in ("dac_loopback", "external_adc_tone"):
+            raise ValueError("input_source_mode must be dac_loopback or external_adc_tone")
+        return mode
+
     def apply_sysref_locked_observation_config(
         self,
         *,
         observe_center_hz: float,
         dac_signal_hz: float,
+        expected_signal_hz: float | None = None,
         view_bw_hz: float = 100_000_000.0,
         amplitude: int = 2048,
         phase_deg: float = 0.0,
         enable_mask: int = 0x01,
         phase_deg_per_channel: float = 0.0,
+        phase_deg_by_channel: Optional[Mapping[Any, Any] | Iterable[Any]] = None,
         adc_active_mask: int = 0x0003,
         initialize: bool = False,
         start: bool = False,
@@ -1614,34 +1811,44 @@ class T510FEngine:
         mts_dac_ref_tile: int = 0,
         force_clock_reconfigure: bool = False,
         dac_source_mode: str = "constant_phasor",
+        input_source_mode: str = "dac_loopback",
+        clock_ref: str = "tcxo_10mhz",
+        sync_mode: str = "free_run",
     ) -> dict[str, Any]:
         observe_center_hz = float(observe_center_hz)
         dac_signal_hz = float(dac_signal_hz)
+        expected_signal_hz = float(dac_signal_hz if expected_signal_hz is None else expected_signal_hz)
         view_bw_hz = float(view_bw_hz)
         dac_source_mode = str(dac_source_mode).strip().lower()
+        input_source_mode = self._normalize_input_source_mode(input_source_mode)
         if dac_source_mode not in ("constant_phasor", "single_tone"):
             raise ValueError("dac_source_mode must be constant_phasor or single_tone")
         if not 50_000_000.0 <= observe_center_hz <= 350_000_000.0:
             raise ValueError("observe_center_hz must be in the 50..350 MHz science band")
         if not 50_000_000.0 <= dac_signal_hz <= 350_000_000.0:
             raise ValueError("dac_signal_hz must be in the 50..350 MHz science band")
-        if not 5_000_000.0 <= view_bw_hz <= 100_000_000.0:
-            raise ValueError("view_bw_hz must be in the 5..100 MHz display band")
+        if not 50_000_000.0 <= expected_signal_hz <= 350_000_000.0:
+            raise ValueError("expected_signal_hz must be in the 50..350 MHz science band")
+        if not 5_000_000.0 <= view_bw_hz <= 200_000_000.0:
+            raise ValueError("view_bw_hz must be in the 5..200 MHz display band")
+        if input_source_mode == "dac_loopback" and abs(expected_signal_hz - dac_signal_hz) > 1.0:
+            raise ValueError("dac_loopback input_source_mode requires expected_signal_hz to match dac_signal_hz")
 
         if initialize:
             self.stop()
             time.sleep(0.05)
             clock = self.clock.read_status(include_registers=False)
-            if bool(force_clock_reconfigure) or not bool(clock.get("configured", False)):
-                clock = self.configure_clock(ref="tcxo_10mhz")
+            status_ref = str(clock.get("selected_ref", clock.get("ref", "")))
+            if bool(force_clock_reconfigure) or not bool(clock.get("configured", False)) or status_ref != str(clock_ref):
+                clock = self.configure_clock(ref=str(clock_ref))
             else:
-                self._write_sync_config(clock_ref=self.CLOCK_REFS["tcxo_10mhz"])
-                self.clock_reference = "tcxo_10mhz"
+                self._write_sync_config(clock_ref=self.CLOCK_REFS[str(clock_ref)])
+                self.clock_reference = str(clock_ref)
                 self.clock_status = dict(clock)
             if require_full_clock_lock and not clock.get("configured", False):
-                raise RuntimeError(f"RFDC_SYSREF_LOCK_FAILED: LMK TCXO clock did not lock: {clock}")
+                raise RuntimeError(f"RFDC_SYSREF_LOCK_FAILED: LMK {clock_ref} clock did not lock: {clock}")
             self.set_adc_active_mask(adc_active_mask)
-            self.set_sync_mode("free_run")
+            self.set_sync_mode(sync_mode)
             self.set_mode("spec")
         else:
             clock = getattr(self, "clock_status", {})
@@ -1667,6 +1874,9 @@ class T510FEngine:
             "f_center": observe_center_hz,
             "observe_center_hz": observe_center_hz,
             "dac_signal_hz": dac_signal_hz,
+            "expected_signal_hz": expected_signal_hz,
+            "input_signal_hz": expected_signal_hz,
+            "input_source_mode": input_source_mode,
             "bandwidth": view_bw_hz,
             "decimation": 20,
             "nco_configured": nco["configured"],
@@ -1678,6 +1888,7 @@ class T510FEngine:
             amplitude=int(amplitude),
             phase_offset_deg=float(phase_deg),
             phase_deg_per_channel=float(phase_deg_per_channel),
+            phase_deg_by_channel=phase_deg_by_channel,
             enable_mask=int(enable_mask),
             dac_sample_rate_hz=245_760_000.0,
             mode=dac_tone_mode,
@@ -1688,17 +1899,23 @@ class T510FEngine:
         config = {
             "observe_center_hz": observe_center_hz,
             "dac_signal_hz": dac_signal_hz,
+            "expected_signal_hz": expected_signal_hz,
+            "input_signal_hz": expected_signal_hz,
             "view_bw_hz": view_bw_hz,
-            "expected_baseband_hz": dac_signal_hz - observe_center_hz,
+            "expected_baseband_hz": expected_signal_hz - observe_center_hz,
             "dac_source_mode": dac_source_mode,
+            "input_source_mode": input_source_mode,
             "dac_nco_hz": dac_nco_hz,
             "dac_tone_hz": dac_tone_hz,
             "dac_tone_mode": dac_tone_mode,
             "amplitude": int(amplitude),
             "phase_deg": float(phase_deg),
             "phase_deg_per_channel": float(phase_deg_per_channel),
+            "phase_deg_by_channel": [float(value) for value in tone.get("phase_deg_by_channel", [])],
             "enable_mask": int(enable_mask),
             "adc_active_mask": int(adc_active_mask),
+            "clock_ref": str(clock_ref),
+            "sync_mode": str(sync_mode),
             "clock": dict(clock) if isinstance(clock, Mapping) else clock,
             "nco": nco,
             "tone": tone,
@@ -1708,6 +1925,17 @@ class T510FEngine:
         self.observation_instrument_config = config
         return config
 
+    def apply_external_pps_locked_observation_config(self, **kwargs: Any) -> dict[str, Any]:
+        """Stage 20 observation init using external 10 MHz and PPS as hard gates."""
+        kwargs.setdefault("clock_ref", "external_10mhz")
+        kwargs.setdefault("sync_mode", "external_pps")
+        kwargs.setdefault("require_full_clock_lock", True)
+        kwargs.setdefault("require_mts", True)
+        kwargs.setdefault("force_clock_reconfigure", True)
+        config = self.apply_mts_locked_observation_config(**kwargs)
+        config["stage20_external_pps_locked"] = True
+        return config
+
     @staticmethod
     def dac_phase_step_from_frequency(freq_hz: float, dac_sample_rate_hz: float = 245_760_000.0) -> int:
         if dac_sample_rate_hz <= 0:
@@ -1715,6 +1943,53 @@ class T510FEngine:
         if abs(float(freq_hz)) >= dac_sample_rate_hz:
             raise ValueError("|freq_hz| must be lower than dac_sample_rate_hz")
         return int(round((float(freq_hz) / float(dac_sample_rate_hz)) * (1 << 32))) & 0xFFFF_FFFF
+
+    @staticmethod
+    def _wrap_phase0_word(phase_deg: float) -> int:
+        return int(round(((float(phase_deg) % 360.0) / 360.0) * (1 << 32))) & 0xFFFF_FFFF
+
+    @staticmethod
+    def _normalize_phase_deg_by_channel(
+        phase_deg_by_channel: Optional[Mapping[Any, Any] | Iterable[Any]],
+        *,
+        phase_offset_deg: float = 0.0,
+        phase_deg_per_channel: float = 0.0,
+        count: int = 8,
+    ) -> list[float]:
+        fallback = [
+            float(phase_offset_deg) + float(phase_deg_per_channel) * channel
+            for channel in range(int(count))
+        ]
+        if phase_deg_by_channel is None:
+            return fallback
+        if isinstance(phase_deg_by_channel, Mapping):
+            phases = []
+            for channel in range(int(count)):
+                value = phase_deg_by_channel.get(channel)
+                if value is None:
+                    value = phase_deg_by_channel.get(str(channel), fallback[channel])
+                phases.append(float(value))
+            return phases
+        values = [float(value) for value in phase_deg_by_channel]
+        if len(values) > int(count):
+            raise ValueError(f"phase_deg_by_channel accepts at most {int(count)} entries")
+        return values + fallback[len(values):]
+
+    @staticmethod
+    def _configured_phase_deg_for_channel(
+        channel: int,
+        *,
+        configured_phase_deg: float = 0.0,
+        phase_deg_per_channel: float = 0.0,
+        phase_deg_by_channel: Optional[Mapping[Any, Any] | Iterable[Any]] = None,
+    ) -> float:
+        phases = T510FEngine._normalize_phase_deg_by_channel(
+            phase_deg_by_channel,
+            phase_offset_deg=float(configured_phase_deg),
+            phase_deg_per_channel=float(phase_deg_per_channel),
+            count=8,
+        )
+        return T510FEngine._wrap_phase_deg(phases[int(channel)])
 
     def set_dac_tone(
         self,
@@ -1770,6 +2045,7 @@ class T510FEngine:
         amplitude: int = 2048,
         phase_offset_deg: float = 0.0,
         phase_deg_per_channel: float = 0.0,
+        phase_deg_by_channel: Optional[Mapping[Any, Any] | Iterable[Any]] = None,
         enable_mask: int = 0xFF,
         dac_sample_rate_hz: float = 245_760_000.0,
         mode: str | int = "single_tone",
@@ -1778,11 +2054,16 @@ class T510FEngine:
             raise ValueError("DAC enable_mask must be in range 0x00..0xff")
         phase_step = self.dac_phase_step_from_frequency(freq_hz, dac_sample_rate_hz)
         self.set_dac_tone(enable=enable_mask != 0, amplitude=amplitude, phase_step=phase_step, mode=mode)
+        phase_deg_values = self._normalize_phase_deg_by_channel(
+            phase_deg_by_channel,
+            phase_offset_deg=float(phase_offset_deg),
+            phase_deg_per_channel=float(phase_deg_per_channel),
+            count=8,
+        )
         phase0_by_channel: dict[int, int] = {}
         for channel in range(8):
-            phase_deg = (float(phase_offset_deg) + float(phase_deg_per_channel) * channel) % 360.0
-            phase0 = int(round((phase_deg / 360.0) * (1 << 32)))
-            phase0 &= 0xFFFF_FFFF
+            phase_deg = phase_deg_values[channel]
+            phase0 = self._wrap_phase0_word(phase_deg)
             phase0_by_channel[channel] = phase0
             self.set_dac_tone(
                 enable=bool(enable_mask & (1 << channel)),
@@ -1800,6 +2081,7 @@ class T510FEngine:
             "phase_step": phase_step,
             "phase_offset_deg": float(phase_offset_deg),
             "phase_deg_per_channel": float(phase_deg_per_channel),
+            "phase_deg_by_channel": [float(value) for value in phase_deg_values],
             "phase0_by_channel": phase0_by_channel,
             "amplitude": int(amplitude),
             "enable_mask": int(enable_mask),
@@ -1815,6 +2097,7 @@ class T510FEngine:
         phase_deg: float = 0.0,
         enable_mask: int = 0x01,
         phase_deg_per_channel: float = 0.0,
+        phase_deg_by_channel: Optional[Mapping[Any, Any] | Iterable[Any]] = None,
         adc_active_mask: int = 0x0003,
         initialize: bool = False,
         start: bool = False,
@@ -1833,6 +2116,7 @@ class T510FEngine:
             amplitude=int(amplitude),
             phase_offset_deg=float(phase_deg),
             phase_deg_per_channel=float(phase_deg_per_channel),
+            phase_deg_by_channel=phase_deg_by_channel,
             enable_mask=int(enable_mask),
             dac_sample_rate_hz=245_760_000.0,
         )
@@ -1846,6 +2130,7 @@ class T510FEngine:
             "amplitude": int(amplitude),
             "phase_deg": float(phase_deg),
             "phase_deg_per_channel": float(phase_deg_per_channel),
+            "phase_deg_by_channel": [float(value) for value in tone.get("phase_deg_by_channel", [])],
             "enable_mask": int(enable_mask),
             "adc_active_mask": int(adc_active_mask),
             "nco": nco,
@@ -1860,24 +2145,33 @@ class T510FEngine:
         *,
         observe_center_hz: float,
         dac_signal_hz: float,
+        expected_signal_hz: float | None = None,
         view_bw_hz: float = 100_000_000.0,
         amplitude: int = 2048,
         phase_deg: float = 0.0,
         enable_mask: int = 0x01,
         phase_deg_per_channel: float = 0.0,
+        phase_deg_by_channel: Optional[Mapping[Any, Any] | Iterable[Any]] = None,
         adc_active_mask: int = 0x0003,
         initialize: bool = False,
         start: bool = False,
+        input_source_mode: str = "dac_loopback",
     ) -> dict[str, Any]:
         observe_center_hz = float(observe_center_hz)
         dac_signal_hz = float(dac_signal_hz)
+        expected_signal_hz = float(dac_signal_hz if expected_signal_hz is None else expected_signal_hz)
         view_bw_hz = float(view_bw_hz)
+        input_source_mode = self._normalize_input_source_mode(input_source_mode)
         if not 50_000_000.0 <= observe_center_hz <= 350_000_000.0:
             raise ValueError("observe_center_hz must be in the 50..350 MHz science band")
         if not 50_000_000.0 <= dac_signal_hz <= 350_000_000.0:
             raise ValueError("dac_signal_hz must be in the 50..350 MHz science band")
-        if not 5_000_000.0 <= view_bw_hz <= 100_000_000.0:
-            raise ValueError("view_bw_hz must be in the 5..100 MHz display band")
+        if not 50_000_000.0 <= expected_signal_hz <= 350_000_000.0:
+            raise ValueError("expected_signal_hz must be in the 50..350 MHz science band")
+        if not 5_000_000.0 <= view_bw_hz <= 200_000_000.0:
+            raise ValueError("view_bw_hz must be in the 5..200 MHz display band")
+        if input_source_mode == "dac_loopback" and abs(expected_signal_hz - dac_signal_hz) > 1.0:
+            raise ValueError("dac_loopback input_source_mode requires expected_signal_hz to match dac_signal_hz")
 
         if initialize:
             self.stop()
@@ -1899,6 +2193,9 @@ class T510FEngine:
             "f_center": observe_center_hz,
             "observe_center_hz": observe_center_hz,
             "dac_signal_hz": dac_signal_hz,
+            "expected_signal_hz": expected_signal_hz,
+            "input_signal_hz": expected_signal_hz,
+            "input_source_mode": input_source_mode,
             "bandwidth": view_bw_hz,
             "decimation": 20,
             "nco_configured": nco["configured"],
@@ -1909,6 +2206,7 @@ class T510FEngine:
             amplitude=int(amplitude),
             phase_offset_deg=float(phase_deg),
             phase_deg_per_channel=float(phase_deg_per_channel),
+            phase_deg_by_channel=phase_deg_by_channel,
             enable_mask=int(enable_mask),
             dac_sample_rate_hz=245_760_000.0,
             mode="constant_phasor",
@@ -1919,11 +2217,15 @@ class T510FEngine:
         config = {
             "observe_center_hz": observe_center_hz,
             "dac_signal_hz": dac_signal_hz,
+            "expected_signal_hz": expected_signal_hz,
+            "input_signal_hz": expected_signal_hz,
             "view_bw_hz": view_bw_hz,
-            "expected_baseband_hz": dac_signal_hz - observe_center_hz,
+            "expected_baseband_hz": expected_signal_hz - observe_center_hz,
+            "input_source_mode": input_source_mode,
             "amplitude": int(amplitude),
             "phase_deg": float(phase_deg),
             "phase_deg_per_channel": float(phase_deg_per_channel),
+            "phase_deg_by_channel": [float(value) for value in tone.get("phase_deg_by_channel", [])],
             "enable_mask": int(enable_mask),
             "adc_active_mask": int(adc_active_mask),
             "nco": nco,
@@ -2029,6 +2331,7 @@ class T510FEngine:
         cmac_enable: bool = False,
         frame_builder_enable: bool = True,
         drop_on_route_miss: bool = True,
+        diagnostic_ignore_link_gate: bool = False,
         clear_counters: bool = False,
     ) -> None:
         value = (
@@ -2036,9 +2339,445 @@ class T510FEngine:
             | (0x2 if cmac_enable else 0x0)
             | (0x4 if frame_builder_enable else 0x0)
             | (0x8 if drop_on_route_miss else 0x0)
-            | (0x10 if clear_counters else 0x0)
+            | (0x10 if diagnostic_ignore_link_gate else 0x0)
+            | (0x20 if clear_counters else 0x0)
         )
         self.ctrl.write(self.regs.TX_CONTROL, value)
+
+    @classmethod
+    def _normalize_science_bandwidth_mhz(cls, bandwidth_mhz: int | float | str) -> int:
+        try:
+            value = int(round(float(str(bandwidth_mhz).lower().replace("mhz", "").strip())))
+        except Exception as exc:
+            raise ValueError(f"Unsupported science bandwidth: {bandwidth_mhz!r}") from exc
+        if value not in cls.SCIENCE_BANDWIDTHS:
+            raise ValueError("science bandwidth must be one of 20, 100, 200 MHz")
+        return value
+
+    @classmethod
+    def _normalize_science_output_mode(cls, output_mode: str | int) -> tuple[str, int]:
+        if isinstance(output_mode, int):
+            code = int(output_mode)
+            if code not in cls.SCIENCE_OUTPUT_MODE_NAMES:
+                raise ValueError("science output mode code must be in range 0..4")
+            return cls.SCIENCE_OUTPUT_MODE_NAMES[code], code
+        key = str(output_mode).strip().lower().replace("-", "_").replace(" ", "_")
+        if key not in cls.SCIENCE_OUTPUT_MODES:
+            raise ValueError(
+                "science output mode must be OFF, TIME_ONLY, SPEC_ONLY, "
+                "TIME_SPEC, or TIME_MONITOR_SPEC"
+            )
+        code = int(cls.SCIENCE_OUTPUT_MODES[key])
+        return cls.SCIENCE_OUTPUT_MODE_NAMES[code], code
+
+    @classmethod
+    def _science_block_names(cls, mask: int) -> list[str]:
+        return [name for bit, name in cls.SCIENCE_BLOCK_REASONS.items() if int(mask) & (1 << bit)]
+
+    @classmethod
+    def estimate_science_payload_rate(
+        cls,
+        bandwidth_mhz: int | float | str,
+        output_mode: str | int,
+        *,
+        ninput: int = 8,
+        iq_bits: int = 16,
+        payload_bytes: int = 8192,
+    ) -> dict[str, Any]:
+        bandwidth = cls._normalize_science_bandwidth_mhz(bandwidth_mhz)
+        mode_name, mode_code = cls._normalize_science_output_mode(output_mode)
+        bw_cfg = cls.SCIENCE_BANDWIDTHS[bandwidth]
+        sample_rate_hz = float(bw_cfg["sample_rate_hz"])
+        full_stream_factor = 0.0
+        full_time = mode_code in (1, 3, 4)
+        full_spec = mode_code in (2, 3)
+        monitor_spec = mode_code == 4
+        if full_time:
+            full_stream_factor += 1.0
+        if full_spec:
+            full_stream_factor += 1.0
+        if monitor_spec:
+            full_stream_factor += 1.0 / 64.0
+
+        block_mask = 0
+        if bandwidth == 200 and mode_code == 3:
+            block_mask |= 1 << 0
+        payload_bps = sample_rate_hz * int(ninput) * 2.0 * int(iq_bits) * full_stream_factor
+        payload_mbps = payload_bps / 1_000_000.0
+        packet_rate = 0.0 if payload_bytes <= 0 else (payload_bps / 8.0) / float(payload_bytes)
+        # Ethernet/IP/UDP + T510 header + preamble/FCS/IFG estimate. This is a
+        # planning number; pcap validation remains the real gate.
+        wire_bytes = float(payload_bytes + 128 + 42 + 24)
+        wire_mbps_est = payload_mbps * (wire_bytes / max(float(payload_bytes), 1.0))
+        return {
+            "bandwidth_mhz": bandwidth,
+            "bandwidth_code": int(bw_cfg["code"]),
+            "output_mode": mode_name,
+            "output_mode_code": mode_code,
+            "pl_decim_factor": int(bw_cfg["pl_decim"]),
+            "sample_rate_hz": sample_rate_hz,
+            "complex_sample_rate_msps": sample_rate_hz / 1_000_000.0,
+            "ninput": int(ninput),
+            "iq_bits": int(iq_bits),
+            "full_time_stream": bool(full_time),
+            "full_spec_stream": bool(full_spec),
+            "monitor_spec_stream": bool(monitor_spec),
+            "payload_mbps": payload_mbps,
+            "wire_mbps_est": wire_mbps_est,
+            "packet_rate_est": packet_rate,
+            "payload_bytes": int(payload_bytes),
+            "allowed": block_mask == 0,
+            "block_reason_mask": block_mask,
+            "block_reasons": cls._science_block_names(block_mask),
+        }
+
+    def read_science_output_status(self) -> dict[str, Any]:
+        raw_control = int(self.ctrl.read(self.regs.SCIENCE_CONTROL))
+        raw_status = int(self.ctrl.read(self.regs.SCIENCE_STATUS))
+        raw_bw = int(self.ctrl.read(self.regs.SCIENCE_BANDWIDTH_MODE))
+        raw_mode = int(self.ctrl.read(self.regs.SCIENCE_OUTPUT_MODE))
+        raw_block = int(self.ctrl.read(self.regs.SCIENCE_BLOCK_REASON))
+        bandwidth = self.SCIENCE_BANDWIDTH_BY_CODE.get(raw_bw & 0x3, 20)
+        mode_name = self.SCIENCE_OUTPUT_MODE_NAMES.get(raw_mode & 0x7, f"UNKNOWN_{raw_mode & 0x7}")
+        status = {
+            "science_control": raw_control,
+            "science_status": raw_status,
+            "science_bandwidth_mode": raw_bw,
+            "science_output_mode_code": raw_mode,
+            "science_output_mode": mode_name,
+            "science_bandwidth_mhz": bandwidth,
+            "science_sample_rate_hz": int(self.ctrl.read(self.regs.SCIENCE_SAMPLE_RATE_HZ)),
+            "science_decim_factor": int(self.ctrl.read(self.regs.SCIENCE_DECIM_FACTOR)),
+            "science_payload_rate_mbps": int(self.ctrl.read(self.regs.SCIENCE_PAYLOAD_RATE_MBPS)),
+            "science_block_reason": raw_block,
+            "science_block_reasons": self._science_block_names(raw_block),
+            "science_capability": int(self.ctrl.read(self.regs.SCIENCE_CAPABILITY)),
+            "force_dry_run": raw_control & 0x1,
+            "cmac_enable": (raw_control >> 1) & 0x1,
+            "live_requested": (raw_control >> 2) & 0x1,
+            "time_enabled": raw_status & 0x1,
+            "spec_enabled": (raw_status >> 1) & 0x1,
+            "time_spec_rejected": (raw_status >> 2) & 0x1,
+            "spec_science_ready": (raw_status >> 3) & 0x1,
+            "wide_tx_ready": (raw_status >> 4) & 0x1,
+            "cmac_live_ready": (raw_status >> 5) & 0x1,
+        }
+        estimate_mode = (raw_mode & 0x7) if (raw_mode & 0x7) in self.SCIENCE_OUTPUT_MODE_NAMES else 0
+        status["estimate"] = self.estimate_science_payload_rate(bandwidth, estimate_mode)
+        return status
+
+    def configure_science_output(
+        self,
+        bandwidth_mhz: int | float | str,
+        output_mode: str | int,
+        *,
+        force_dry_run: bool = True,
+        cmac_enable: bool = False,
+        clear_counters: bool = False,
+        apply_stream_mode: bool = True,
+    ) -> dict[str, Any]:
+        estimate = self.estimate_science_payload_rate(bandwidth_mhz, output_mode)
+        if not estimate["allowed"]:
+            raise ValueError(
+                f"science output mode rejected: {', '.join(estimate['block_reasons'])}"
+            )
+
+        bandwidth_code = int(estimate["bandwidth_code"])
+        output_code = int(estimate["output_mode_code"])
+        control = (
+            (0x1 if force_dry_run else 0x0)
+            | (0x2 if cmac_enable else 0x0)
+            | (0x4 if not force_dry_run else 0x0)
+        )
+        self.ctrl.write(self.regs.SCIENCE_BANDWIDTH_MODE, bandwidth_code)
+        self.ctrl.write(self.regs.SCIENCE_OUTPUT_MODE, output_code)
+        self.ctrl.write(self.regs.SCIENCE_SAMPLE_RATE_HZ, int(round(float(estimate["sample_rate_hz"]))))
+        self.ctrl.write(self.regs.SCIENCE_DECIM_FACTOR, int(estimate["pl_decim_factor"]))
+        self.ctrl.write(self.regs.SCIENCE_PAYLOAD_RATE_MBPS, int(round(float(estimate["payload_mbps"]))))
+        self.ctrl.write(self.regs.SCIENCE_CONTROL, control)
+        self.ctrl.write(self.regs.SAMPLE_RATE_HZ, int(round(float(estimate["sample_rate_hz"]))))
+
+        if apply_stream_mode:
+            if output_code == 0:
+                self.set_mode("snapshot")
+            elif output_code == 1:
+                self.set_mode("time")
+            elif output_code == 2:
+                self.set_mode("spec")
+            else:
+                self.set_mode("dual")
+
+        self.configure_tx_control(
+            force_dry_run=bool(force_dry_run),
+            cmac_enable=bool(cmac_enable),
+            frame_builder_enable=True,
+            drop_on_route_miss=True,
+            clear_counters=bool(clear_counters),
+        )
+        status = self.read_science_output_status()
+        cmac = self.read_cmac_status()
+        live_requested = bool(cmac_enable and not force_dry_run)
+        blockers = list(status.get("science_block_reasons", []))
+        if live_requested:
+            if not bool(cmac.get("cmac_live_ready", False)):
+                blockers.append("CMAC_LINK_NOT_READY")
+            if output_code in (2, 3) and not bool(status.get("spec_science_ready", False)):
+                blockers.append("SPEC_SCIENCE_BLOCKED_PFB_SCAFFOLD")
+            if not bool(status.get("wide_tx_ready", False)):
+                blockers.append("WIDE_512B_TX_PATH_NOT_IMPLEMENTED")
+            if blockers:
+                raise RuntimeError(f"QSFP_LIVE_SCIENCE_BLOCKED: {', '.join(sorted(set(blockers)))}")
+        return {"estimate": estimate, "science_status": status, "cmac_status": cmac}
+
+    def read_cmac_status(self) -> dict[str, Any]:
+        status = self.read_status()
+        tx = self.read_tx_status()
+        core_version = int(status.get("core_version", 0))
+        an_lt_applicable = core_version in (0x0001_0014, 0x0001_0015)
+        module_present = bool(status.get("tx_qsfp_module_present", 0) or tx.get("qsfp_module_present", 0))
+        dry_run = bool(tx.get("udp_dry_run_active", 1))
+        cmac_live_ready = bool(
+            tx.get("qsfp_link_up", 0)
+            and tx.get("cmac_reset_done", 0)
+            and tx.get("gt_locked", 0)
+            and tx.get("cmac_tx_ready", 0)
+            and not tx.get("tx_local_fault", 0)
+            and not tx.get("tx_remote_fault", 0)
+            and not dry_run
+        )
+        if cmac_live_ready:
+            classification = "CMAC_100G_TX_READY"
+        elif not module_present:
+            classification = "QSFP_MODULE_NOT_PRESENT_OR_NOT_DETECTED"
+        elif not bool(tx.get("gt_refclk_seen", 0)):
+            classification = "QSFP_MODULE_PRESENT_BUT_GT_REFCLK_NOT_SEEN"
+        elif not bool(tx.get("gt_locked", 0)):
+            classification = "QSFP_MODULE_PRESENT_BUT_GT_NOT_LOCKED"
+        elif not bool(tx.get("cmac_reset_done", 0)):
+            classification = "QSFP_GT_LOCKED_BUT_CMAC_RESET_NOT_DONE"
+        elif not bool(tx.get("cmac_tx_ready", 0)):
+            classification = "QSFP_CMAC_RESET_DONE_BUT_TX_NOT_READY"
+        elif an_lt_applicable and not bool(tx.get("cmac_an_autoneg_complete", 0)):
+            classification = "QSFP_CMAC_AN_LT_NOT_COMPLETE"
+        elif an_lt_applicable and bool(tx.get("cmac_an_lp_ability_valid", 0)) and not bool(tx.get("cmac_an_lp_ability_100gbase_cr4", 0)):
+            classification = "QSFP_CMAC_PARTNER_NOT_ADVERTISING_100G_CR4"
+        elif an_lt_applicable and bool(tx.get("cmac_lt_training_fail_any", 0)):
+            classification = "QSFP_CMAC_LT_TRAINING_FAIL"
+        elif bool(tx.get("tx_local_fault", 0)):
+            classification = "QSFP_CMAC_LOCAL_FAULT"
+        elif bool(tx.get("tx_remote_fault", 0)):
+            classification = "QSFP_CMAC_REMOTE_FAULT"
+        elif dry_run:
+            classification = "QSFP_CMAC_READY_BUT_TX_FORCED_DRY_RUN"
+        elif module_present:
+            classification = "QSFP_MODULE_PRESENT_BUT_CMAC_NOT_READY"
+        else:
+            classification = "QSFP_MODULE_NOT_PRESENT_OR_NOT_DETECTED"
+        return {
+            "classification": classification,
+            "module_present": module_present,
+            "an_lt_applicable": an_lt_applicable,
+            "cmac_live_ready": cmac_live_ready,
+            "pcap_gate_possible": cmac_live_ready,
+            "accepted_packet_count": int(tx.get("tx_cmac_accepted_packet_count", 0)),
+            "accepted_byte_count": int(tx.get("tx_cmac_accepted_byte_count", 0)),
+            "an_autoneg_complete": bool(tx.get("cmac_an_autoneg_complete", 0)),
+            "an_lp_ability_valid": bool(tx.get("cmac_an_lp_ability_valid", 0)),
+            "an_lp_autoneg_able": bool(tx.get("cmac_an_lp_autoneg_able", 0)),
+            "an_lp_ability_100gbase_cr4": bool(tx.get("cmac_an_lp_ability_100gbase_cr4", 0)),
+            "an_rs_fec_enable": bool(tx.get("cmac_an_rs_fec_enable", 0)),
+            "lt_signal_detect_all": bool(tx.get("cmac_lt_signal_detect_all", 0)),
+            "lt_training_any": bool(tx.get("cmac_lt_training_any", 0)),
+            "lt_training_fail_any": bool(tx.get("cmac_lt_training_fail_any", 0)),
+            "lt_frame_lock_all": bool(tx.get("cmac_lt_frame_lock_all", 0)),
+            "tx": tx,
+            "status": status,
+            "science_status": self.read_science_output_status(),
+        }
+
+    def configure_qsfp_test_link(
+        self,
+        *,
+        dst_ip: str = "10.0.1.16",
+        dst_mac: str = "08:c0:eb:d5:95:b2",
+        dst_port: int = 4300,
+        src_ip: str = "10.0.1.1",
+        src_mac: str = "02:00:00:00:00:01",
+        src_port: int = 4000,
+        rate_pps: int | float = 1000,
+        force_dry_run: bool = False,
+        cmac_enable: bool = True,
+        diagnostic_ignore_link_gate: bool = False,
+        clear_counters: bool = True,
+    ) -> dict[str, Any]:
+        """Configure the Stage 24 low-rate CMAC heartbeat path.
+
+        This is intentionally separate from TIME/SPEC science output: it only
+        drives the 512-bit CMAC TX heartbeat/test-frame generator.
+        """
+        rate = max(float(rate_pps), 0.001)
+        interval_cycles = max(1024, int(round(322_265_625.0 / rate)))
+        self.ctrl.write(self.regs.SRC_IP, _ipv4_to_int(src_ip))
+        src_lo, src_hi = _mac_to_parts(src_mac)
+        self.ctrl.write(self.regs.SRC_MAC_LO, src_lo)
+        self.ctrl.write(self.regs.SRC_MAC_HI, src_hi)
+        self.ctrl.write(self.regs.TIME_DST_IP, _ipv4_to_int(dst_ip))
+        self.ctrl.write(self.regs.TIME_UDP_PORT, int(dst_port) & 0xFFFF)
+        self._write_tx_endpoint(
+            2,
+            enable=True,
+            ip=str(dst_ip),
+            mac=str(dst_mac),
+            dst_port=int(dst_port),
+            src_port=int(src_port),
+        )
+        self.ctrl.write(self.regs.QSFP_TEST_INTERVAL_CYCLES, interval_cycles)
+        self.configure_tx_control(
+            force_dry_run=bool(force_dry_run),
+            cmac_enable=bool(cmac_enable),
+            frame_builder_enable=True,
+            drop_on_route_miss=True,
+            diagnostic_ignore_link_gate=bool(diagnostic_ignore_link_gate),
+            clear_counters=bool(clear_counters),
+        )
+        return {
+            "dst_ip": str(dst_ip),
+            "dst_mac": str(dst_mac),
+            "dst_port": int(dst_port),
+            "src_ip": str(src_ip),
+            "src_mac": str(src_mac),
+            "src_port": int(src_port),
+            "rate_pps": rate,
+            "interval_cycles": interval_cycles,
+            "force_dry_run": bool(force_dry_run),
+            "cmac_enable": bool(cmac_enable),
+            "diagnostic_ignore_link_gate": bool(diagnostic_ignore_link_gate),
+            "tx_status": self.read_tx_status(),
+        }
+
+    def run_qsfp_link_bringup(
+        self,
+        *,
+        configure: bool = True,
+        dst_ip: str = "10.0.1.16",
+        dst_mac: str = "08:c0:eb:d5:95:b2",
+        dst_port: int = 4300,
+        src_ip: str = "10.0.1.1",
+        src_mac: str = "02:00:00:00:00:01",
+        src_port: int = 4000,
+        rate_pps: int | float = 1000,
+        seconds: float = 2.0,
+        diagnostic_ignore_link_gate: bool = False,
+    ) -> dict[str, Any]:
+        config = None
+        if configure:
+            config = self.configure_qsfp_test_link(
+                dst_ip=dst_ip,
+                dst_mac=dst_mac,
+                dst_port=dst_port,
+                src_ip=src_ip,
+                src_mac=src_mac,
+                src_port=src_port,
+                rate_pps=rate_pps,
+                force_dry_run=False,
+                cmac_enable=True,
+                diagnostic_ignore_link_gate=bool(diagnostic_ignore_link_gate),
+                clear_counters=True,
+            )
+        before = self.read_cmac_status()
+        before_packets = int(before.get("accepted_packet_count", 0))
+        before_bytes = int(before.get("accepted_byte_count", 0))
+        time.sleep(max(float(seconds), 0.0))
+        after = self.read_cmac_status()
+        an_lt_applicable = bool(after.get("an_lt_applicable", False))
+        after_packets = int(after.get("accepted_packet_count", 0))
+        after_bytes = int(after.get("accepted_byte_count", 0))
+        packet_delta = self._counter_delta(after_packets, before_packets)
+        byte_delta = self._counter_delta(after_bytes, before_bytes)
+
+        tx = after.get("tx", {})
+        errors: list[str] = []
+        if not bool(after.get("module_present", False)):
+            errors.append("QSFP_MODULE_NOT_PRESENT")
+        if not bool(tx.get("gt_refclk_seen", 0)):
+            errors.append("GT_REFCLK_NOT_SEEN")
+        if not bool(tx.get("gt_locked", 0)):
+            errors.append("GT_NOT_LOCKED")
+        if not bool(tx.get("gt_tx_reset_done", 0)):
+            errors.append("GT_TX_RESET_NOT_DONE")
+        if not bool(tx.get("gt_rx_reset_done", 0)):
+            errors.append("GT_RX_RESET_NOT_DONE")
+        if not bool(tx.get("cmac_reset_done", 0)):
+            errors.append("CMAC_RESET_NOT_DONE")
+        if not bool(tx.get("cmac_tx_ready", 0)):
+            errors.append("CMAC_TX_NOT_READY")
+        if bool(tx.get("tx_local_fault", 0)):
+            errors.append("CMAC_LOCAL_FAULT")
+        if bool(tx.get("tx_remote_fault", 0)):
+            errors.append("CMAC_REMOTE_FAULT")
+        if an_lt_applicable and not bool(tx.get("cmac_an_autoneg_complete", 0)):
+            errors.append("CMAC_AN_NOT_COMPLETE")
+        if an_lt_applicable and bool(tx.get("cmac_an_lp_ability_valid", 0)) and not bool(tx.get("cmac_an_lp_ability_100gbase_cr4", 0)):
+            errors.append("CMAC_PARTNER_NOT_100G_CR4")
+        if an_lt_applicable and not bool(tx.get("cmac_lt_signal_detect_all", 0)):
+            errors.append("CMAC_LT_SIGNAL_DETECT_NOT_ALL")
+        if an_lt_applicable and bool(tx.get("cmac_lt_training_fail_any", 0)):
+            errors.append("CMAC_LT_TRAINING_FAIL")
+        if an_lt_applicable and not bool(tx.get("cmac_lt_frame_lock_all", 0)):
+            errors.append("CMAC_LT_FRAME_LOCK_NOT_ALL")
+        if bool(tx.get("udp_dry_run_active", 1)):
+            errors.append("TX_STILL_DRY_RUN")
+        if bool(tx.get("tx_underflow", 0)):
+            errors.append("CMAC_TX_UNDERFLOW")
+        if bool(tx.get("tx_overflow", 0)):
+            errors.append("CMAC_TX_OVERFLOW")
+        if not errors and packet_delta <= 0:
+            errors.append("CMAC_ACCEPTED_COUNTER_NOT_INCREMENTING")
+
+        classification = "QSFP_HEARTBEAT_READY_FOR_PCAP" if not errors else "QSFP_HEARTBEAT_BLOCKED"
+        return {
+            "classification": classification,
+            "ok": classification == "QSFP_HEARTBEAT_READY_FOR_PCAP",
+            "pcap_validated": False,
+            "config": config,
+            "before": before,
+            "after": after,
+            "accepted_packet_delta": int(packet_delta),
+            "accepted_byte_delta": int(byte_delta),
+            "errors": errors,
+        }
+
+    def run_qsfp_live_validation(
+        self,
+        *,
+        bandwidth_mhz: int | float | str = 100,
+        output_mode: str | int = "time_only",
+    ) -> dict[str, Any]:
+        estimate = self.estimate_science_payload_rate(bandwidth_mhz, output_mode)
+        cmac = self.read_cmac_status()
+        science = self.read_science_output_status()
+        errors: list[str] = []
+        if not estimate["allowed"]:
+            errors.extend(estimate["block_reasons"])
+        if not bool(cmac.get("cmac_live_ready", False)):
+            errors.append("CMAC_LINK_NOT_READY")
+        if int(estimate["output_mode_code"]) in (2, 3) and not bool(science.get("spec_science_ready", False)):
+            errors.append("SPEC_SCIENCE_BLOCKED_PFB_SCAFFOLD")
+        if not bool(science.get("wide_tx_ready", False)):
+            errors.append("WIDE_512B_TX_PATH_NOT_IMPLEMENTED")
+        if errors:
+            classification = "QSFP_LIVE_SCIENCE_BLOCKED"
+        else:
+            classification = "QSFP_LIVE_READY_FOR_PCAP"
+        return {
+            "classification": classification,
+            "ok": classification == "QSFP_LIVE_READY_FOR_PCAP",
+            "pcap_validated": False,
+            "estimate": estimate,
+            "cmac_status": cmac,
+            "science_status": science,
+            "errors": sorted(set(errors)),
+        }
 
     def _write_tx_endpoint(
         self,
@@ -2130,10 +2869,12 @@ class T510FEngine:
 
     def read_tx_status(self) -> dict[str, Any]:
         raw = int(self.ctrl.read(self.regs.TX_STATUS))
+        link_raw = int(self.ctrl.read(self.regs.TX_LINK_STATUS_FLAGS))
         selected_route = int(self.ctrl.read(self.regs.TX_SELECTED_ROUTE))
         status: dict[str, Any] = {
             "tx_control": int(self.ctrl.read(self.regs.TX_CONTROL)),
             "tx_status": raw,
+            "tx_link_status_flags_raw": link_raw,
             "qsfp_link_up": raw & 0x1,
             "udp_dry_run_active": (raw >> 1) & 0x1,
             "cmac_reset_done": (raw >> 2) & 0x1,
@@ -2146,6 +2887,27 @@ class T510FEngine:
             "frame_builder_enabled": (raw >> 9) & 0x1,
             "force_dry_run": (raw >> 10) & 0x1,
             "cmac_enable": (raw >> 11) & 0x1,
+            "qsfp_module_present": (raw >> 12) & 0x1,
+            "gt_refclk_seen": (raw >> 13) & 0x1,
+            "gt_tx_reset_done": (raw >> 14) & 0x1,
+            "gt_rx_reset_done": (raw >> 15) & 0x1,
+            "tx_underflow": (raw >> 16) & 0x1,
+            "tx_overflow": (raw >> 17) & 0x1,
+            "diagnostic_ignore_link_gate": (int(self.ctrl.read(self.regs.TX_CONTROL)) >> 4) & 0x1,
+            "cmac_rx_aligned": (link_raw >> 18) & 0x1,
+            "cmac_rx_status": (link_raw >> 19) & 0x1,
+            "cmac_rx_local_fault_detail": (link_raw >> 20) & 0x1,
+            "cmac_rx_internal_local_fault": (link_raw >> 21) & 0x1,
+            "cmac_tx_local_fault_detail": (link_raw >> 22) & 0x1,
+            "cmac_an_autoneg_complete": (link_raw >> 23) & 0x1,
+            "cmac_an_lp_ability_valid": (link_raw >> 24) & 0x1,
+            "cmac_an_lp_autoneg_able": (link_raw >> 25) & 0x1,
+            "cmac_an_lp_ability_100gbase_cr4": (link_raw >> 26) & 0x1,
+            "cmac_an_rs_fec_enable": (link_raw >> 27) & 0x1,
+            "cmac_lt_signal_detect_all": (link_raw >> 28) & 0x1,
+            "cmac_lt_training_any": (link_raw >> 29) & 0x1,
+            "cmac_lt_training_fail_any": (link_raw >> 30) & 0x1,
+            "cmac_lt_frame_lock_all": (link_raw >> 31) & 0x1,
             "tx_frame_built_count": int(self.ctrl.read(self.regs.TX_FRAME_BUILT_COUNT)),
             "tx_frame_sent_count": int(self.ctrl.read(self.regs.TX_FRAME_SENT_COUNT)),
             "tx_frame_dropped_count": int(self.ctrl.read(self.regs.TX_FRAME_DROPPED_COUNT)),
@@ -2157,6 +2919,7 @@ class T510FEngine:
             "tx_selected_endpoint": int(self.ctrl.read(self.regs.TX_SELECTED_ENDPOINT)) & 0x7,
             "tx_selected_route": selected_route & 0x7,
             "tx_selected_route_is_time": (selected_route >> 3) & 0x1,
+            "qsfp_test_interval_cycles": int(self.ctrl.read(self.regs.QSFP_TEST_INTERVAL_CYCLES)),
         }
         return status
 
@@ -2305,6 +3068,8 @@ class T510FEngine:
             "ref_status": self.regs.REF_STATUS,
             "error_flags": self.regs.ERROR_FLAGS,
             "sync_config": self.regs.SYNC_CONFIG,
+            "pps_count_lo": self.regs.PPS_COUNT_LO,
+            "pps_count_hi": self.regs.PPS_COUNT_HI,
             "monitor_sample_count": self.regs.MONITOR_SAMPLE_COUNT,
             "spec_packet_count": self.regs.SPEC_PACKET_COUNT,
             "spec_udp_byte_count": self.regs.SPEC_UDP_BYTE_COUNT,
@@ -2364,6 +3129,15 @@ class T510FEngine:
             "tx_payload_witness_capture_words": self.regs.TX_PAYLOAD_WITNESS_CAPTURE_WORDS,
             "tx_paired_coherence_status": self.regs.TX_PAIRED_COHERENCE_STATUS,
             "tx_paired_rfdc_flags": self.regs.TX_PAIRED_RFDC_FLAGS,
+            "science_control": self.regs.SCIENCE_CONTROL,
+            "science_status": self.regs.SCIENCE_STATUS,
+            "science_bandwidth_mode": self.regs.SCIENCE_BANDWIDTH_MODE,
+            "science_output_mode": self.regs.SCIENCE_OUTPUT_MODE,
+            "science_sample_rate_hz": self.regs.SCIENCE_SAMPLE_RATE_HZ,
+            "science_decim_factor": self.regs.SCIENCE_DECIM_FACTOR,
+            "science_payload_rate_mbps": self.regs.SCIENCE_PAYLOAD_RATE_MBPS,
+            "science_block_reason": self.regs.SCIENCE_BLOCK_REASON,
+            "science_capability": self.regs.SCIENCE_CAPABILITY,
             "dac_tx_witness_status": self.regs.DAC_TX_WITNESS_STATUS,
             "dac_tx_witness_capture_words": self.regs.DAC_TX_WITNESS_CAPTURE_WORDS,
             "dac_tx_witness_buffer_words": self.regs.DAC_TX_WITNESS_BUFFER_WORDS_REG,
@@ -2373,6 +3147,13 @@ class T510FEngine:
             "dac_tx_witness_phase0": self.regs.DAC_TX_WITNESS_PHASE0,
             "dac_tx_witness_mode": self.regs.DAC_TX_WITNESS_MODE,
             "dac_tx_witness_ready_gap_count": self.regs.DAC_TX_WITNESS_READY_GAP_COUNT,
+            "rfdc_axis_raw_witness_status": self.regs.RFDC_AXIS_RAW_WITNESS_STATUS,
+            "rfdc_axis_raw_witness_channel_select_ctrl": self.regs.RFDC_AXIS_RAW_WITNESS_CHANNEL_SELECT,
+            "rfdc_axis_raw_witness_capture_beats": self.regs.RFDC_AXIS_RAW_WITNESS_CAPTURE_BEATS,
+            "rfdc_axis_raw_witness_rfdc_flags": self.regs.RFDC_AXIS_RAW_WITNESS_RFDC_FLAGS,
+            "rfdc_axis_raw_witness_word_count_reg": self.regs.RFDC_AXIS_RAW_WITNESS_WORD_COUNT,
+            "rfdc_axis_raw_witness_buffer_words": self.regs.RFDC_AXIS_RAW_WITNESS_BUFFER_WORDS_REG,
+            "rfdc_axis_raw_witness_valid_mask": self.regs.RFDC_AXIS_RAW_WITNESS_VALID_MASK,
             "dac_audit_phase_epoch_seen": self.regs.DAC_AUDIT_PHASE_EPOCH_SEEN,
             "dac_audit_ch0_phase_acc": self.regs.DAC_AUDIT_CH0_PHASE_ACC,
             "dac_audit_ch0_phase_step": self.regs.DAC_AUDIT_CH0_PHASE_STEP,
@@ -2399,6 +3180,7 @@ class T510FEngine:
             "tx_route_miss_count": self.regs.TX_ROUTE_MISS_COUNT,
             "tx_route_error_count": self.regs.TX_ROUTE_ERROR_COUNT,
             "tx_frame_capture_status": self.regs.TX_FRAME_CAPTURE_STATUS,
+            "qsfp_test_interval_cycles": self.regs.QSFP_TEST_INTERVAL_CYCLES,
         }
         status = {name: int(self.ctrl.read(offset)) for name, offset in keys.items()}
         raw_status = status["status"]
@@ -2409,6 +3191,14 @@ class T510FEngine:
         status["fsm_state"] = (raw_status >> 8) & 0xF
         status["configured_sync_mode"] = status["sync_config"] & 0x3
         status["configured_clock_ref"] = (status["sync_config"] >> 16) & 0x3
+        status["pps_count"] = (
+            int(status["pps_count_lo"])
+            | (int(status["pps_count_hi"]) << 32)
+        )
+        status["pps_status_input_high"] = status["pps_status"] & 0x1
+        status["pps_status_ref_locked"] = (status["pps_status"] >> 1) & 0x1
+        status["pps_status_count_nonzero"] = (status["pps_status"] >> 2) & 0x1
+        status["ref_status_locked"] = status["ref_status"] & 0x1
         status["rfdc_sample_count"] = (
             int(self.ctrl.read(self.regs.RFDC_SAMPLE_COUNT_LO))
             | (int(self.ctrl.read(self.regs.RFDC_SAMPLE_COUNT_HI)) << 32)
@@ -2432,6 +3222,8 @@ class T510FEngine:
         status["rfdc_dac_ready"] = (flags >> 2) & 0x1
         status["rfdc_clock_locked"] = (flags >> 3) & 0x1
         status["pps_seen"] = (flags >> 4) & 0x1
+        status["pps_input_high"] = (flags >> 5) & 0x1
+        status["pps_recent"] = (flags >> 6) & 0x1
         debug_status = status["debug_status"]
         status["debug_busy"] = debug_status & 0x1
         status["debug_error"] = (debug_status >> 1) & 0x1
@@ -2440,13 +3232,40 @@ class T510FEngine:
         status["qsfp_link_up"] = tx_flags & 0x1
         status["udp_dry_run"] = (tx_flags >> 1) & 0x1
         tx_status = status["tx_status"]
+        tx_link_raw = status["tx_link_status_flags"]
         status["tx_qsfp_link_up"] = tx_status & 0x1
         status["tx_udp_dry_run_active"] = (tx_status >> 1) & 0x1
         status["tx_cmac_reset_done"] = (tx_status >> 2) & 0x1
         status["tx_gt_locked"] = (tx_status >> 3) & 0x1
         status["tx_cmac_tx_ready"] = (tx_status >> 4) & 0x1
+        status["tx_local_fault"] = (tx_status >> 5) & 0x1
+        status["tx_remote_fault"] = (tx_status >> 6) & 0x1
         status["tx_route_miss_sticky"] = (tx_status >> 7) & 0x1
         status["tx_route_error_sticky"] = (tx_status >> 8) & 0x1
+        status["tx_frame_builder_enabled"] = (tx_status >> 9) & 0x1
+        status["tx_force_dry_run"] = (tx_status >> 10) & 0x1
+        status["tx_cmac_enable"] = (tx_status >> 11) & 0x1
+        status["tx_qsfp_module_present"] = (tx_status >> 12) & 0x1
+        status["tx_gt_refclk_seen"] = (tx_status >> 13) & 0x1
+        status["tx_gt_tx_reset_done"] = (tx_status >> 14) & 0x1
+        status["tx_gt_rx_reset_done"] = (tx_status >> 15) & 0x1
+        status["tx_underflow"] = (tx_status >> 16) & 0x1
+        status["tx_overflow"] = (tx_status >> 17) & 0x1
+        status["tx_diagnostic_ignore_link_gate"] = (status["tx_control"] >> 4) & 0x1
+        status["tx_cmac_rx_aligned"] = (tx_link_raw >> 18) & 0x1
+        status["tx_cmac_rx_status"] = (tx_link_raw >> 19) & 0x1
+        status["tx_cmac_rx_local_fault_detail"] = (tx_link_raw >> 20) & 0x1
+        status["tx_cmac_rx_internal_local_fault"] = (tx_link_raw >> 21) & 0x1
+        status["tx_cmac_tx_local_fault_detail"] = (tx_link_raw >> 22) & 0x1
+        status["tx_cmac_an_autoneg_complete"] = (tx_link_raw >> 23) & 0x1
+        status["tx_cmac_an_lp_ability_valid"] = (tx_link_raw >> 24) & 0x1
+        status["tx_cmac_an_lp_autoneg_able"] = (tx_link_raw >> 25) & 0x1
+        status["tx_cmac_an_lp_ability_100gbase_cr4"] = (tx_link_raw >> 26) & 0x1
+        status["tx_cmac_an_rs_fec_enable"] = (tx_link_raw >> 27) & 0x1
+        status["tx_cmac_lt_signal_detect_all"] = (tx_link_raw >> 28) & 0x1
+        status["tx_cmac_lt_training_any"] = (tx_link_raw >> 29) & 0x1
+        status["tx_cmac_lt_training_fail_any"] = (tx_link_raw >> 30) & 0x1
+        status["tx_cmac_lt_frame_lock_all"] = (tx_link_raw >> 31) & 0x1
         tx_header_status = status["tx_header_capture_status"]
         status["tx_header_capture_armed"] = tx_header_status & 0x1
         status["tx_header_capture_valid"] = (tx_header_status >> 1) & 0x1
@@ -2480,6 +3299,19 @@ class T510FEngine:
         status["dac_tx_witness_tready_seen"] = (dac_tx_status >> 5) & 0x1
         status["dac_tx_witness_ready_gap_seen"] = (dac_tx_status >> 6) & 0x1
         status["dac_tx_witness_word_count"] = (dac_tx_status >> 8) & 0x1FF
+        raw_witness_status = status["rfdc_axis_raw_witness_status"]
+        status["rfdc_axis_raw_witness_armed"] = raw_witness_status & 0x1
+        status["rfdc_axis_raw_witness_valid"] = (raw_witness_status >> 1) & 0x1
+        status["rfdc_axis_raw_witness_capturing"] = (raw_witness_status >> 2) & 0x1
+        status["rfdc_axis_raw_witness_overflow"] = (raw_witness_status >> 3) & 0x1
+        status["rfdc_axis_raw_witness_tvalid_seen"] = (raw_witness_status >> 4) & 0x1
+        status["rfdc_axis_raw_witness_beat_count"] = (raw_witness_status >> 8) & 0x1FF
+        status["rfdc_axis_raw_witness_channel_select"] = (raw_witness_status >> 24) & 0x7
+        status["rfdc_axis_raw_witness_word_count"] = status["rfdc_axis_raw_witness_beat_count"] * 4
+        status["rfdc_axis_raw_witness_sample0"] = (
+            int(self.ctrl.read(self.regs.RFDC_AXIS_RAW_WITNESS_SAMPLE0_LO))
+            | (int(self.ctrl.read(self.regs.RFDC_AXIS_RAW_WITNESS_SAMPLE0_HI)) << 32)
+        )
         status["tx_paired_source_sample0"] = (
             int(self.ctrl.read(self.regs.TX_PAIRED_SOURCE_SAMPLE0_LO))
             | (int(self.ctrl.read(self.regs.TX_PAIRED_SOURCE_SAMPLE0_HI)) << 32)
@@ -2541,6 +3373,18 @@ class T510FEngine:
         status["pfb_output_valid"] = (pfb_status >> 2) & 0x1
         status["pfb_overflow"] = (pfb_status >> 3) & 0x1
         status["pfb_window_active"] = (pfb_status >> 4) & 0x1
+        science_status = status["science_status"]
+        science_bw = int(status["science_bandwidth_mode"]) & 0x3
+        science_mode = int(status["science_output_mode"]) & 0x7
+        status["science_bandwidth_mhz"] = self.SCIENCE_BANDWIDTH_BY_CODE.get(science_bw, 20)
+        status["science_output_mode_name"] = self.SCIENCE_OUTPUT_MODE_NAMES.get(science_mode, f"UNKNOWN_{science_mode}")
+        status["science_time_enabled"] = science_status & 0x1
+        status["science_spec_enabled"] = (science_status >> 1) & 0x1
+        status["science_time_spec_rejected"] = (science_status >> 2) & 0x1
+        status["science_spec_ready"] = (science_status >> 3) & 0x1
+        status["science_wide_tx_ready"] = (science_status >> 4) & 0x1
+        status["science_cmac_live_ready"] = (science_status >> 5) & 0x1
+        status["science_block_reasons"] = self._science_block_names(status["science_block_reason"])
         return status
 
     def read_paired_coherence_status(self) -> dict[str, Any]:
@@ -2745,6 +3589,13 @@ class T510FEngine:
             "rates": rates,
             "udp_dry_run": bool(status.get("udp_dry_run", 0) or status.get("tx_udp_dry_run_active", 0)),
             "qsfp_link_up": bool(status.get("qsfp_link_up", 0) or status.get("tx_qsfp_link_up", 0)),
+            "qsfp_module_present": bool(status.get("tx_qsfp_module_present", 0)),
+            "cmac_live_ready": bool(status.get("tx_cmac_reset_done", 0) and status.get("tx_gt_locked", 0) and status.get("tx_cmac_tx_ready", 0)),
+            "science_payload_rate_mbps": float(status.get("science_payload_rate_mbps", 0)),
+            "science_sample_rate_hz": float(status.get("science_sample_rate_hz", 0)),
+            "science_bandwidth_mhz": int(status.get("science_bandwidth_mhz", 0)),
+            "science_output_mode": str(status.get("science_output_mode_name", "UNKNOWN")),
+            "science_block_reasons": list(status.get("science_block_reasons", [])),
         }
 
     def capture_tx_header(self, *, timeout: float = 1.0) -> dict[str, Any]:
@@ -2964,6 +3815,109 @@ class T510FEngine:
         }
 
     @staticmethod
+    def decode_rfdc_axis_raw_words(
+        witness: Mapping[str, Any] | list[int] | tuple[int, ...],
+    ) -> dict[str, Any]:
+        import numpy as np
+
+        if isinstance(witness, Mapping):
+            words = [int(word) & 0xFFFF_FFFF for word in witness.get("words32", witness.get("words", []))]
+        else:
+            words = [int(word) & 0xFFFF_FFFF for word in witness]
+
+        decoded: list[tuple[int, int]] = []
+        beat_index: list[int] = []
+        subsample_index: list[int] = []
+        lanes: list[list[tuple[int, int]]] = [[], [], [], []]
+        for idx, word in enumerate(words):
+            i_sample = T510FEngine._s16(word & 0xFFFF)
+            q_sample = T510FEngine._s16((word >> 16) & 0xFFFF)
+            pair = (i_sample, q_sample)
+            decoded.append(pair)
+            beat_index.append(idx // 4)
+            subsample_index.append(idx % 4)
+            lanes[idx % 4].append(pair)
+
+        return {
+            "iq": np.asarray(decoded, dtype=np.int16),
+            "beat_index": np.asarray(beat_index, dtype=np.int64),
+            "subsample_index": np.asarray(subsample_index, dtype=np.int64),
+            "lanes": [np.asarray(values, dtype=np.int16) for values in lanes],
+            "word_count": len(words),
+            "beat_count": len(words) // 4,
+        }
+
+    def capture_rfdc_axis_raw_witness(
+        self,
+        channel: int = 0,
+        *,
+        timeout: float = 1.0,
+        capture_beats: int = 256,
+    ) -> dict[str, Any]:
+        capture_beats = int(capture_beats)
+        channel = int(channel)
+        if not 0 <= channel <= 7:
+            raise ValueError("channel must be in range 0..7")
+        max_beats = self.regs.RFDC_AXIS_RAW_WITNESS_BUFFER_WORDS // 4
+        if not 1 <= capture_beats <= max_beats:
+            raise ValueError(
+                f"capture_beats must be in range 1..{max_beats}"
+            )
+
+        self.ctrl.write(self.regs.RFDC_AXIS_RAW_WITNESS_CHANNEL_SELECT, channel)
+        self.ctrl.write(self.regs.RFDC_AXIS_RAW_WITNESS_CAPTURE_BEATS, capture_beats)
+        self.ctrl.write(self.regs.RFDC_AXIS_RAW_WITNESS_CONTROL, 0x2)
+        self.ctrl.write(self.regs.RFDC_AXIS_RAW_WITNESS_CONTROL, 0x1)
+
+        deadline = time.monotonic() + float(timeout)
+        status = self.read_status()
+        while time.monotonic() < deadline:
+            status = self.read_status()
+            if status.get("rfdc_axis_raw_witness_valid"):
+                break
+            time.sleep(0.005)
+        else:
+            raise TimeoutError(
+                "RFDC AXIS raw witness capture timed out: "
+                f"RFDC_AXIS_RAW_WITNESS_STATUS=0x{status.get('rfdc_axis_raw_witness_status', 0):08x}"
+            )
+
+        beat_count = max(0, min(capture_beats, int(status.get("rfdc_axis_raw_witness_beat_count", 0))))
+        word_count = beat_count * 4
+        mmio_array = getattr(self.ctrl, "array", None)
+        if mmio_array is None:
+            mmio = getattr(self.ctrl, "mmio", None)
+            mmio_array = getattr(mmio, "array", None)
+        if mmio_array is not None:
+            import numpy as np
+
+            word_index = self.regs.RFDC_AXIS_RAW_WITNESS_BUFFER_BASE // 4
+            words32 = [
+                int(word)
+                for word in np.asarray(mmio_array[word_index:word_index + word_count], dtype=np.uint32).copy()
+            ]
+        else:
+            words32 = [
+                int(self.ctrl.read(self.regs.RFDC_AXIS_RAW_WITNESS_BUFFER_BASE + 4 * idx))
+                for idx in range(word_count)
+            ]
+
+        decoded = self.decode_rfdc_axis_raw_words(words32)
+        return {
+            "channel": channel,
+            "capture_beats": capture_beats,
+            "beat_count": beat_count,
+            "word_count": word_count,
+            "sample0": int(self.ctrl.read(self.regs.RFDC_AXIS_RAW_WITNESS_SAMPLE0_LO))
+            | (int(self.ctrl.read(self.regs.RFDC_AXIS_RAW_WITNESS_SAMPLE0_HI)) << 32),
+            "rfdc_flags": int(status.get("rfdc_axis_raw_witness_rfdc_flags", 0)),
+            "valid_mask": int(status.get("rfdc_axis_raw_witness_valid_mask", 0)),
+            "words32": words32,
+            "decoded": decoded,
+            "status": status,
+        }
+
+    @staticmethod
     def decode_dac_tx_words(
         witness: Mapping[str, Any] | list[int] | tuple[int, ...],
     ) -> dict[str, Any]:
@@ -3144,6 +4098,7 @@ class T510FEngine:
         sample_rate_hz: float = 245_760_000.0,
         observe_center_hz: float,
         dac_signal_hz: float,
+        expected_signal_hz: Optional[float] = None,
         configured_phase_deg: float = 0.0,
         alignment_anchor_deg: float = 0.0,
         sample_stride: Optional[int] = None,
@@ -3179,7 +4134,8 @@ class T510FEngine:
                 raise ValueError("sample_offsets length must match payload_iq sample count")
             stride = int(sample_stride if sample_stride is not None else 4)
 
-        expected_baseband_hz = float(dac_signal_hz) - float(observe_center_hz)
+        signal_hz = float(dac_signal_hz if expected_signal_hz is None else expected_signal_hz)
+        expected_baseband_hz = signal_hz - float(observe_center_hz)
         t_fit = offsets / sample_rate
         z = iq[:, 0] + 1j * iq[:, 1]
         expected_basis = np.exp(1j * 2.0 * np.pi * expected_baseband_hz * t_fit)
@@ -3224,6 +4180,8 @@ class T510FEngine:
             "sample_rate_hz": sample_rate,
             "sample_stride": stride,
             "sample_count": count,
+            "dac_signal_hz": float(dac_signal_hz),
+            "expected_signal_hz": signal_hz,
             "expected_baseband_hz": expected_baseband_hz,
             "measured_phase_deg": measured_phase_deg,
             "sample0_mod_phase_deg": float(sample0_phase_deg),
@@ -3611,11 +4569,14 @@ class T510FEngine:
         observe_center_hz: Optional[float] = None,
         view_bw_hz: Optional[float] = None,
         dac_signal_hz: Optional[float] = None,
+        expected_signal_hz: Optional[float] = None,
         configured_phase_deg: float = 0.0,
         display_phase_deg: Optional[float] = None,
         phase_deg_per_channel: float = 0.0,
+        phase_deg_by_channel: Optional[Mapping[Any, Any] | Iterable[Any]] = None,
         phase_ref_input: int = 0,
         oversample: float = 8.0,
+        input_source_mode: str = "dac_loopback",
     ) -> dict[str, Any]:
         """Separate configured, measured, sample0-coherent, and display phase.
 
@@ -3638,7 +4599,11 @@ class T510FEngine:
             view_bw_hz if view_bw_hz is not None else preview.get("bandwidth_hz", sample_rate)
         )
         display_phase_base = float(configured_phase_deg if display_phase_deg is None else display_phase_deg)
-        expected_baseband_hz = None if dac_signal_hz is None else float(dac_signal_hz) - observe_center_value
+        expected_signal_value = expected_signal_hz if expected_signal_hz is not None else dac_signal_hz
+        expected_baseband_hz = (
+            None if expected_signal_value is None else float(expected_signal_value) - observe_center_value
+        )
+        input_source_mode = T510FEngine._normalize_input_source_mode(input_source_mode)
         nfft = max(4096, int(2 ** math.ceil(math.log2(max(2.0, count * max(float(oversample), 1.0))))))
         nfft = min(65536, nfft)
         freq_hz = np.fft.fftshift(np.fft.fftfreq(nfft, d=1.0 / sample_rate))
@@ -3676,11 +4641,17 @@ class T510FEngine:
             measured_phase = float(np.angle(coeff, deg=True))
             sample0_correction = (360.0 * raw_peak_hz * (sample0 / sample_rate)) % 360.0
             coherent_phase = T510FEngine._wrap_phase_deg(measured_phase - sample0_correction)
-            configured_ch_phase = T510FEngine._wrap_phase_deg(
-                float(configured_phase_deg) + float(phase_deg_per_channel) * int(idx)
+            configured_ch_phase = T510FEngine._configured_phase_deg_for_channel(
+                int(idx),
+                configured_phase_deg=float(configured_phase_deg),
+                phase_deg_per_channel=float(phase_deg_per_channel),
+                phase_deg_by_channel=phase_deg_by_channel,
             )
-            display_ch_phase = T510FEngine._wrap_phase_deg(
-                display_phase_base + float(phase_deg_per_channel) * int(idx)
+            display_ch_phase = T510FEngine._configured_phase_deg_for_channel(
+                int(idx),
+                configured_phase_deg=display_phase_base,
+                phase_deg_per_channel=float(phase_deg_per_channel),
+                phase_deg_by_channel=phase_deg_by_channel,
             )
 
             guard = max(2, nfft // 128)
@@ -3710,6 +4681,10 @@ class T510FEngine:
                 "baseband_mhz": float(logical_peak_hz / 1_000_000.0),
                 "rf_peak_hz": float(observe_center_value + logical_peak_hz),
                 "rf_peak_mhz": float((observe_center_value + logical_peak_hz) / 1_000_000.0),
+                "dac_signal_hz": 0.0 if dac_signal_hz is None else float(dac_signal_hz),
+                "expected_signal_hz": 0.0 if expected_signal_value is None else float(expected_signal_value),
+                "input_signal_hz": 0.0 if expected_signal_value is None else float(expected_signal_value),
+                "input_source_mode": input_source_mode,
                 "expected_baseband_hz": 0.0 if expected_baseband_hz is None else float(expected_baseband_hz),
                 "peak_bin": int(peak_idx),
                 "peak_dbfs": float(peak_dbfs),
@@ -3747,8 +4722,17 @@ class T510FEngine:
             "observe_center_hz": observe_center_value,
             "view_bw_hz": view_bw_value,
             "dac_signal_hz": 0.0 if dac_signal_hz is None else float(dac_signal_hz),
+            "expected_signal_hz": 0.0 if expected_signal_value is None else float(expected_signal_value),
+            "input_signal_hz": 0.0 if expected_signal_value is None else float(expected_signal_value),
+            "input_source_mode": input_source_mode,
             "expected_baseband_hz": 0.0 if expected_baseband_hz is None else float(expected_baseband_hz),
             "configured_phase_deg": float(configured_phase_deg),
+            "phase_deg_by_channel": T510FEngine._normalize_phase_deg_by_channel(
+                phase_deg_by_channel,
+                phase_offset_deg=float(configured_phase_deg),
+                phase_deg_per_channel=float(phase_deg_per_channel),
+                count=8,
+            ),
             "display_rf_phase_deg": display_phase_base,
             "phase_ref_input": int(phase_ref_input),
             "phase_lock": "configured_rf",
@@ -3761,22 +4745,24 @@ class T510FEngine:
         preview: Mapping[str, Any],
         *,
         observe_center_hz: float,
-        dac_signal_hz: float,
+        dac_signal_hz: Optional[float] = None,
+        expected_signal_hz: Optional[float] = None,
         configured_phase_deg: float = 0.0,
         alignment_anchor_deg: Optional[float | Mapping[int, float]] = None,
         phase_deg_per_channel: float = 0.0,
+        phase_deg_by_channel: Optional[Mapping[Any, Any] | Iterable[Any]] = None,
         phase_ref_input: int = 0,
         time_window_us: float = 0.25,
         display_points: int = 512,
         fft_oversample: float = 8.0,
+        input_source_mode: str = "dac_loopback",
     ) -> dict[str, Any]:
-        """Build a measured RF-equivalent scope from raw IQ and sample0.
+        """Build phase diagnostics and a real sample0-indexed preview snapshot.
 
-        Unlike the configured RF scope, this view fits the raw ADC IQ at the
-        configured baseband offset and then subtracts the phase implied by the
-        capture frame's sample0. If the preview/sample0/RFDC path is coherent,
-        the measured waveform stays locked to the reference. If it is not, the
-        measured trace visibly moves relative to the dashed reference.
+        The phase metrics still fit the raw ADC IQ numerically, but every
+        waveform field returned by this view is copied from the RFDC preview
+        buffer. Jupyter must never use fitted or configured tones as visible
+        waveforms.
         """
         import math
         import numpy as np
@@ -3789,8 +4775,13 @@ class T510FEngine:
         if count <= 0:
             raise ValueError("preview count must be positive")
         observe_center_hz = float(observe_center_hz)
-        dac_signal_hz = float(dac_signal_hz)
-        expected_baseband_hz = dac_signal_hz - observe_center_hz
+        signal_hz = expected_signal_hz if expected_signal_hz is not None else dac_signal_hz
+        if signal_hz is None:
+            raise ValueError("expected_signal_hz or dac_signal_hz is required")
+        signal_hz = float(signal_hz)
+        dac_signal_value = float(0.0 if dac_signal_hz is None else dac_signal_hz)
+        expected_baseband_hz = signal_hz - observe_center_hz
+        input_source_mode = T510FEngine._normalize_input_source_mode(input_source_mode)
         time_window_us = float(time_window_us)
         if time_window_us <= 0.0:
             raise ValueError("time_window_us must be positive")
@@ -3801,8 +4792,6 @@ class T510FEngine:
         t_fit = np.arange(count, dtype=np.float64) / sample_rate
         expected_basis = np.exp(1j * 2.0 * np.pi * expected_baseband_hz * t_fit)
         expected_basis_norm = max(float(np.vdot(expected_basis, expected_basis).real), 1.0)
-        rf_time_us = np.linspace(0.0, time_window_us, display_points, dtype=np.float64)
-        rf_time_s = rf_time_us * 1.0e-6
         nfft = max(4096, int(2 ** math.ceil(math.log2(max(2.0, count * max(float(fft_oversample), 1.0))))))
         nfft = min(65536, nfft)
         freq_hz = np.fft.fftshift(np.fft.fftfreq(nfft, d=1.0 / sample_rate))
@@ -3832,8 +4821,11 @@ class T510FEngine:
             sample0_aligned_phase_deg = T510FEngine._wrap_phase_deg(
                 expected_tone_measured_phase_deg - sample0_mod_phase_deg
             )
-            configured_ch_phase_deg = T510FEngine._wrap_phase_deg(
-                float(configured_phase_deg) + float(phase_deg_per_channel) * int(idx)
+            configured_ch_phase_deg = T510FEngine._configured_phase_deg_for_channel(
+                int(idx),
+                configured_phase_deg=float(configured_phase_deg),
+                phase_deg_per_channel=float(phase_deg_per_channel),
+                phase_deg_by_channel=phase_deg_by_channel,
             )
             anchor_deg = anchor_for_channel(int(idx))
             anchor_candidate_deg = T510FEngine._wrap_phase_deg(
@@ -3846,11 +4838,18 @@ class T510FEngine:
                 configured_ch_phase_deg + phase_error_deg
             )
             amplitude_code = float(abs(coeff))
-            reference_waveform = amplitude_code * np.cos(
-                2.0 * np.pi * abs(dac_signal_hz) * rf_time_s + math.radians(configured_ch_phase_deg)
-            )
-            measured_waveform = amplitude_code * np.cos(
-                2.0 * np.pi * abs(dac_signal_hz) * rf_time_s + math.radians(measured_display_phase_deg)
+            display_count = min(int(display_points), count)
+            preview_time_us = np.arange(display_count, dtype=np.float64) / sample_rate * 1_000_000.0
+            preview_sample_index = sample0 + np.arange(display_count, dtype=np.uint64)
+            preview_i = i_data[:display_count]
+            preview_q = q_data[:display_count]
+            preview_mag = np.abs(z[:display_count])
+            rf_equiv = T510FEngine._derive_rf_equivalent_waveform(
+                preview_i,
+                preview_q,
+                sample0=sample0,
+                sample_rate_hz=sample_rate,
+                center_hz=observe_center_hz,
             )
 
             fft = np.fft.fftshift(np.fft.fft(z * window, n=nfft))
@@ -3871,9 +4870,21 @@ class T510FEngine:
             max_abs = float(np.max(np.abs(arr))) if arr.size else 0.0
 
             item = {
-                "time_us": rf_time_us,
-                "expected_reference_waveform": reference_waveform,
-                "measured_sample0_aligned_waveform": measured_waveform,
+                "preview_time_us": preview_time_us,
+                "preview_sample_index": preview_sample_index,
+                "preview_waveform_i": preview_i,
+                "preview_waveform_q": preview_q,
+                "preview_waveform_mag": preview_mag,
+                "rf_equivalent_waveform": rf_equiv,
+                "rf_equivalent_time_us": preview_time_us,
+                "rf_equivalent_center_hz": observe_center_hz,
+                "derived_from_real_iq": True,
+                "raw_rf": False,
+                "waveform_source": "rfdc_preview_buffer",
+                "virtual_waveform": False,
+                "preview_mode": int(preview.get("preview_mode", 0)),
+                "sample0": sample0,
+                "sample_rate_hz": sample_rate,
                 "configured_phase_deg": configured_ch_phase_deg,
                 "display_reference_phase_deg": configured_ch_phase_deg,
                 "expected_tone_measured_phase_deg": expected_tone_measured_phase_deg,
@@ -3883,6 +4894,10 @@ class T510FEngine:
                 "anchor_candidate_deg": anchor_candidate_deg,
                 "phase_error_deg": phase_error_deg,
                 "measured_display_phase_deg": measured_display_phase_deg,
+                "dac_signal_hz": dac_signal_value,
+                "expected_signal_hz": signal_hz,
+                "input_signal_hz": signal_hz,
+                "input_source_mode": input_source_mode,
                 "expected_baseband_hz": expected_baseband_hz,
                 "expected_baseband_mhz": expected_baseband_hz / 1_000_000.0,
                 "fft_peak_hz": float(fft_peak_hz),
@@ -3915,9 +4930,18 @@ class T510FEngine:
             "sample_rate_hz": sample_rate,
             "axis_beat_rate_hz": float(preview.get("axis_beat_rate_hz", sample_rate)),
             "observe_center_hz": observe_center_hz,
-            "dac_signal_hz": dac_signal_hz,
+            "dac_signal_hz": dac_signal_value,
+            "expected_signal_hz": signal_hz,
+            "input_signal_hz": signal_hz,
+            "input_source_mode": input_source_mode,
             "expected_baseband_hz": expected_baseband_hz,
             "configured_phase_deg": float(configured_phase_deg),
+            "phase_deg_by_channel": T510FEngine._normalize_phase_deg_by_channel(
+                phase_deg_by_channel,
+                phase_offset_deg=float(configured_phase_deg),
+                phase_deg_per_channel=float(phase_deg_per_channel),
+                count=8,
+            ),
             "time_window_us": time_window_us,
             "display_points": int(display_points),
             "alignment_anchor_deg": 0.0 if alignment_anchor_deg is None else alignment_anchor_deg,
@@ -3951,6 +4975,32 @@ class T510FEngine:
         delta = 0.5 * (alpha - gamma) / denom
         delta = float(np.clip(delta, -1.0, 1.0))
         return peak_hz + delta * float(freq_hz[1] - freq_hz[0])
+
+    @staticmethod
+    def _derive_rf_equivalent_waveform(
+        i_data: Any,
+        q_data: Any,
+        *,
+        sample0: int,
+        sample_rate_hz: float,
+        center_hz: float,
+    ) -> Any:
+        import math
+        import numpy as np
+
+        i_arr = np.asarray(i_data, dtype=np.float64)
+        q_arr = np.asarray(q_data, dtype=np.float64)
+        count = min(i_arr.size, q_arr.size)
+        if count == 0:
+            return np.asarray([], dtype=np.float64)
+        sample_rate_hz = float(sample_rate_hz)
+        if sample_rate_hz <= 0.0:
+            raise ValueError("sample_rate_hz must be positive")
+        center_hz = float(center_hz)
+        start_cycles = math.fmod(float(sample0) * center_hz / sample_rate_hz, 1.0)
+        cycles = start_cycles + (center_hz / sample_rate_hz) * np.arange(count, dtype=np.float64)
+        phase = 2.0 * np.pi * np.mod(cycles, 1.0)
+        return i_arr[:count] * np.cos(phase) - q_arr[:count] * np.sin(phase)
 
     def compute_scope_spectrum(
         self,
@@ -4092,11 +5142,14 @@ class T510FEngine:
         observe_center_hz: float,
         view_bw_hz: float,
         dac_signal_hz: Optional[float] = None,
+        expected_signal_hz: Optional[float] = None,
         time_window_us: float = 0.25,
         oversample: float = 2.5,
         phase_ref_input: int = 0,
         stabilize_phase: bool = True,
         display_phase_deg: Optional[float] = None,
+        phase_deg_by_channel: Optional[Mapping[Any, Any] | Iterable[Any]] = None,
+        input_source_mode: str = "dac_loopback",
     ) -> dict[str, Any]:
         import math
         import numpy as np
@@ -4107,9 +5160,13 @@ class T510FEngine:
         observe_center_hz = float(observe_center_hz)
         view_bw_hz = float(view_bw_hz)
         dac_signal_value = None if dac_signal_hz is None else float(dac_signal_hz)
-        expected_offset_hz = (
-            None if dac_signal_value is None else float(dac_signal_value - observe_center_hz)
+        expected_signal_value = (
+            dac_signal_value if expected_signal_hz is None else float(expected_signal_hz)
         )
+        expected_offset_hz = (
+            None if expected_signal_value is None else float(expected_signal_value - observe_center_hz)
+        )
+        input_source_mode = self._normalize_input_source_mode(input_source_mode)
         cfg = getattr(self, "observation_instrument_config", None)
         if not isinstance(cfg, Mapping):
             cfg = {}
@@ -4118,6 +5175,11 @@ class T510FEngine:
             if display_phase_deg is None else float(display_phase_deg)
         )
         display_phase_step_deg = float(cfg.get("phase_deg_per_channel", 0.0))
+        display_phase_by_channel = (
+            phase_deg_by_channel
+            if phase_deg_by_channel is not None
+            else cfg.get("phase_deg_by_channel")
+        )
         nfft_min = max(4096, int(2 ** math.ceil(math.log2(max(2.0, count * max(float(oversample), 1.0))))))
         nfft = min(32768, nfft_min)
         raw_freq_hz = np.fft.fftshift(np.fft.fftfreq(nfft, d=1.0 / sample_rate))
@@ -4165,22 +5227,15 @@ class T510FEngine:
             sample0_phase = (360.0 * raw_peak_hz * (sample0 / sample_rate)) % 360.0
             coherent_phase = self._wrap_phase_deg(phase_deg - sample0_phase)
             amplitude = float(abs(coeff))
-            t_display = np.arange(display_count, dtype=np.float64) / sample_rate
-            baseband_stable = amplitude * np.exp(
-                1j * (math.radians(coherent_phase) + 2.0 * np.pi * raw_peak_hz * t_display)
-            )
             raw_waveform = i_data[:display_count]
-            baseband_waveform = np.real(baseband_stable) if stabilize_phase else raw_waveform
-
-            rf_scope_hz = abs(float(dac_signal_value if dac_signal_value is not None else rf_peak_hz))
-            rf_cycles = rf_scope_hz * float(time_window_us) * 1.0e-6
-            rf_point_count = int(max(256, min(4096, math.ceil(max(rf_cycles, 1.0) * 24.0))))
-            rf_time_us = np.linspace(0.0, float(time_window_us), rf_point_count, dtype=np.float64)
-            rf_phase_deg = self._wrap_phase_deg(
-                display_phase_base_deg + display_phase_step_deg * int(idx)
-            )
-            rf_waveform = amplitude * np.cos(
-                2.0 * np.pi * rf_scope_hz * (rf_time_us * 1.0e-6) + math.radians(rf_phase_deg)
+            raw_q_waveform = q_data[:display_count]
+            raw_magnitude_waveform = np.abs(z[:display_count])
+            rf_equivalent_waveform = self._derive_rf_equivalent_waveform(
+                raw_waveform,
+                raw_q_waveform,
+                sample0=sample0,
+                sample_rate_hz=sample_rate,
+                center_hz=observe_center_hz,
             )
 
             mag_dbfs = 20.0 * np.log10(np.maximum(np.abs(fft) / (window_norm * full_scale), 1e-12))
@@ -4207,15 +5262,28 @@ class T510FEngine:
             rms_dbfs = 20.0 * np.log10(max(rms_code / full_scale, 1e-12))
 
             scope[idx] = {
-                "time_us": rf_time_us,
-                "waveform": rf_waveform,
-                "raw_waveform": rf_waveform,
-                "frequency_hz": rf_scope_hz,
-                "frequency_mhz": rf_scope_hz / 1_000_000.0,
-                "phase_deg": rf_phase_deg,
-                "cycles": rf_cycles,
-                "point_count": rf_point_count,
-                "source": "configured_rf",
+                "time_us": time_us,
+                "waveform_i": raw_waveform,
+                "waveform_q": raw_q_waveform,
+                "waveform_mag": raw_magnitude_waveform,
+                "rf_equivalent_waveform": rf_equivalent_waveform,
+                "rf_equivalent_time_us": time_us,
+                "rf_equivalent_center_hz": observe_center_hz,
+                "derived_from_real_iq": True,
+                "raw_rf": False,
+                "raw_waveform": raw_waveform,
+                "raw_q_waveform": raw_q_waveform,
+                "raw_magnitude_waveform": raw_magnitude_waveform,
+                "frequency_hz": raw_peak_hz,
+                "frequency_mhz": raw_peak_hz / 1_000_000.0,
+                "phase_deg": coherent_phase,
+                "point_count": display_count,
+                "source": "rfdc_preview_buffer",
+                "waveform_source": "rfdc_preview_buffer",
+                "virtual_waveform": False,
+                "preview_mode": int(preview.get("preview_mode", 0)),
+                "sample0": sample0,
+                "sample_rate_hz": sample_rate,
                 "rms": rms_code,
                 "rms_dbfs": rms_dbfs,
                 "max_abs_code": max_abs,
@@ -4223,8 +5291,20 @@ class T510FEngine:
             }
             baseband_scope[idx] = {
                 "time_us": time_us,
-                "waveform": baseband_waveform,
+                "waveform": raw_waveform,
                 "raw_waveform": raw_waveform,
+                "raw_q_waveform": raw_q_waveform,
+                "raw_magnitude_waveform": raw_magnitude_waveform,
+                "rf_equivalent_waveform": rf_equivalent_waveform,
+                "rf_equivalent_time_us": time_us,
+                "rf_equivalent_center_hz": observe_center_hz,
+                "derived_from_real_iq": True,
+                "raw_rf": False,
+                "waveform_source": "rfdc_preview_buffer",
+                "virtual_waveform": False,
+                "preview_mode": int(preview.get("preview_mode", 0)),
+                "sample0": sample0,
+                "sample_rate_hz": sample_rate,
                 "frequency_hz": raw_peak_hz,
                 "frequency_mhz": raw_peak_hz / 1_000_000.0,
                 "phase_deg": coherent_phase,
@@ -4253,7 +5333,11 @@ class T510FEngine:
                 "rf_peak_hz": rf_peak_hz,
                 "rf_peak_mhz": rf_peak_hz / 1_000_000.0,
                 "expected_baseband_hz": 0.0 if expected_offset_hz is None else expected_offset_hz,
-                "expected_rf_hz": 0.0 if dac_signal_value is None else dac_signal_value,
+                "dac_signal_hz": 0.0 if dac_signal_value is None else dac_signal_value,
+                "expected_rf_hz": 0.0 if expected_signal_value is None else expected_signal_value,
+                "expected_signal_hz": 0.0 if expected_signal_value is None else expected_signal_value,
+                "input_signal_hz": 0.0 if expected_signal_value is None else expected_signal_value,
+                "input_source_mode": input_source_mode,
                 "phase_deg": phase_deg,
                 "coherent_phase_deg": coherent_phase,
                 "snr_db": float(snr_db),
@@ -4287,13 +5371,17 @@ class T510FEngine:
             "observe_center_hz": observe_center_hz,
             "view_bw_hz": view_bw_hz,
             "dac_signal_hz": 0.0 if dac_signal_value is None else dac_signal_value,
+            "expected_signal_hz": 0.0 if expected_signal_value is None else expected_signal_value,
+            "input_signal_hz": 0.0 if expected_signal_value is None else expected_signal_value,
+            "input_source_mode": input_source_mode,
             "expected_baseband_hz": 0.0 if expected_offset_hz is None else expected_offset_hz,
             "time_window_us": float(time_window_us),
             "oversample": float(oversample),
             "phase_ref_input": int(phase_ref_input),
             "stabilize_phase": bool(stabilize_phase),
-            "phase_lock": "configured_rf",
+            "phase_lock": "rfdc_preview_buffer",
             "scope": scope,
+            "real_preview_scope": scope,
             "rf_scope": scope,
             "baseband_scope": baseband_scope,
             "spectrum": spectra,

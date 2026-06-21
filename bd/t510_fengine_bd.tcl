@@ -14,7 +14,7 @@ proc create_t510_fengine_bd {} {
     create_bd_port -dir I pps_in
     create_bd_port -dir I ref_lock_in
     create_bd_port -dir I rfdc_ready_in
-    create_bd_port -dir I -from 255 -to 0 s_axis_adc_tdata
+    create_bd_port -dir I -from 1023 -to 0 s_axis_adc_tdata
     create_bd_port -dir I -from 31 -to 0 s_axis_adc_tuser
     create_bd_port -dir I s_axis_adc_tvalid
     create_bd_port -dir I s_axis_adc_tlast
