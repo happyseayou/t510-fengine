@@ -8,6 +8,12 @@ from typing import Iterable
 
 MAGIC = 0x54353130
 HEADER_BYTES = 128
+TIME_PAYLOAD_BYTES = 8192
+TIME_UDP_PAYLOAD_BYTES = HEADER_BYTES + TIME_PAYLOAD_BYTES
+TIME_NINPUT = 8
+TIME_SUBSAMPLES_PER_BEAT = 4
+TIME_WORD64_PER_BEAT = 16
+RAW_SAMPLE_RATE_HZ = 245_760_000.0
 STRUCT_V1 = struct.Struct("<IHHHHHHQQQIIIHHHHIII")
 STRUCT_V2 = struct.Struct("<IHHHHHHQQQQIIHHHHIII")
 
@@ -30,6 +36,12 @@ FLAG_ADC_CLIP = 1 << 4
 FLAG_FIFO_OVERFLOW = 1 << 5
 ETH_TYPE_IPV4 = 0x0800
 IP_PROTO_UDP = 17
+
+TIME_BANDWIDTH_DECIMATION = {
+    200: 1,
+    100: 2,
+    20: 8,
+}
 
 
 @dataclass(slots=True)
@@ -343,3 +355,106 @@ class EthernetIPv4UDPFrame:
             "payload_len": len(self.payload),
             "t510_header": self.t510_header.to_dict() if self.t510_header is not None else None,
         }
+
+
+def normalize_time_bandwidth_mhz(bandwidth_mhz: int | float | str) -> int:
+    try:
+        value = int(round(float(str(bandwidth_mhz).lower().replace("mhz", "").strip())))
+    except Exception as exc:
+        raise ValueError(f"unsupported TIME bandwidth: {bandwidth_mhz!r}") from exc
+    if value not in TIME_BANDWIDTH_DECIMATION:
+        raise ValueError("TIME bandwidth must be one of 20, 100, 200 MHz")
+    return value
+
+
+def time_decimation_for_bandwidth(bandwidth_mhz: int | float | str) -> int:
+    return TIME_BANDWIDTH_DECIMATION[normalize_time_bandwidth_mhz(bandwidth_mhz)]
+
+
+def time_sample_rate_hz_for_bandwidth(bandwidth_mhz: int | float | str) -> float:
+    return RAW_SAMPLE_RATE_HZ / float(time_decimation_for_bandwidth(bandwidth_mhz))
+
+
+def expected_time_sample0_delta(header: T510PacketHeader, bandwidth_mhz: int | float | str) -> int:
+    return int(header.time_count) * TIME_SUBSAMPLES_PER_BEAT * time_decimation_for_bandwidth(bandwidth_mhz)
+
+
+def infer_time_bandwidth_from_delta(header: T510PacketHeader, sample0_delta: int) -> int | None:
+    denom = int(header.time_count) * TIME_SUBSAMPLES_PER_BEAT
+    if denom <= 0 or int(sample0_delta) % denom != 0:
+        return None
+    decim = int(sample0_delta) // denom
+    for bandwidth, candidate in TIME_BANDWIDTH_DECIMATION.items():
+        if int(candidate) == decim:
+            return int(bandwidth)
+    return None
+
+
+def time_payload_complex_offset(*, beat: int, sub_sample: int, channel: int) -> int:
+    if int(beat) < 0:
+        raise ValueError("beat must be non-negative")
+    if not 0 <= int(sub_sample) < TIME_SUBSAMPLES_PER_BEAT:
+        raise ValueError("sub_sample must be in range 0..3")
+    if not 0 <= int(channel) < TIME_NINPUT:
+        raise ValueError("channel must be in range 0..7")
+    word64 = int(beat) * TIME_WORD64_PER_BEAT + int(sub_sample) * (TIME_NINPUT // 2) + (int(channel) // 2)
+    return HEADER_BYTES + word64 * 8 + (0 if (int(channel) % 2) == 0 else 4)
+
+
+def decode_time_udp_payload_iq(
+    udp_payload: bytes,
+    *,
+    bandwidth_mhz: int | float | str = 200,
+    channels: Iterable[int] | None = None,
+) -> dict[str, object]:
+    """Decode a T510 TIME UDP payload according to docs/time_udp_payload_v2.md.
+
+    ``udp_payload`` is the UDP payload, not the whole Ethernet frame. It must
+    contain the 128-byte T510 header followed by the TIME sample payload.
+    """
+    if len(udp_payload) < HEADER_BYTES:
+        raise ValueError("TIME UDP payload is shorter than the T510 header")
+    header = T510PacketHeader.from_axis_words(struct.unpack("<16Q", udp_payload[:HEADER_BYTES]))
+    if int(header.stream_type) != STREAM_TIME:
+        raise ValueError(f"T510 header is not TIME stream: stream_type={header.stream_type}")
+    if int(header.ninput) != TIME_NINPUT:
+        raise ValueError(f"unsupported TIME ninput={header.ninput}; expected {TIME_NINPUT}")
+    if int(header.payload_format) != QUANT_INT16:
+        raise ValueError(f"unsupported TIME payload_format={header.payload_format}; expected int16 IQ")
+    if int(header.payload_bytes) > len(udp_payload) - HEADER_BYTES:
+        raise ValueError(
+            f"TIME payload truncated: header payload_bytes={header.payload_bytes}, "
+            f"available={len(udp_payload) - HEADER_BYTES}"
+        )
+    if int(header.payload_bytes) != TIME_PAYLOAD_BYTES:
+        raise ValueError(f"unexpected TIME payload_bytes={header.payload_bytes}; expected {TIME_PAYLOAD_BYTES}")
+
+    bandwidth = normalize_time_bandwidth_mhz(bandwidth_mhz)
+    decim = time_decimation_for_bandwidth(bandwidth)
+    selected_channels = list(range(TIME_NINPUT)) if channels is None else [int(ch) for ch in channels]
+    for channel in selected_channels:
+        if not 0 <= channel < TIME_NINPUT:
+            raise ValueError("channels must be in range 0..7")
+
+    sample_count = int(header.time_count) * TIME_SUBSAMPLES_PER_BEAT
+    decoded: dict[int, list[tuple[int, int, int]]] = {channel: [] for channel in selected_channels}
+    for beat in range(int(header.time_count)):
+        for sub in range(TIME_SUBSAMPLES_PER_BEAT):
+            logical_idx = beat * TIME_SUBSAMPLES_PER_BEAT + sub
+            sample_index = int(header.sample0) + logical_idx * decim
+            for channel in selected_channels:
+                offset = time_payload_complex_offset(beat=beat, sub_sample=sub, channel=channel)
+                i_sample = int.from_bytes(udp_payload[offset : offset + 2], "little", signed=True)
+                q_sample = int.from_bytes(udp_payload[offset + 2 : offset + 4], "little", signed=True)
+                decoded[channel].append((sample_index, i_sample, q_sample))
+
+    return {
+        "header": header,
+        "header_dict": header.to_dict(),
+        "bandwidth_mhz": bandwidth,
+        "decimation": decim,
+        "sample_rate_hz": time_sample_rate_hz_for_bandwidth(bandwidth),
+        "sample_count_per_channel": sample_count,
+        "expected_sample0_delta": expected_time_sample0_delta(header, bandwidth),
+        "channels": decoded,
+    }

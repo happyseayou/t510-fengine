@@ -42,6 +42,7 @@ module tb_feng_ctrl_axi;
     logic [31:0]  time_packet_count = 32'd0;
     logic [31:0]  time_udp_byte_count = 32'd0;
     logic [31:0]  time_dropped_count = 32'd0;
+    logic [31:0]  spec_dropped_count = 32'd0;
     logic [31:0]  spec_seq_no = 32'd0;
     logic [31:0]  time_seq_no = 32'd0;
     logic [63:0]  time_sample0 = 64'd0;
@@ -53,6 +54,7 @@ module tb_feng_ctrl_axi;
     logic [31:0]  rfdc_dropped_count = 32'd0;
     logic [15:0]  rfdc_current_valid_mask = 16'd0;
     logic [15:0]  rfdc_seen_valid_mask = 16'd0;
+    logic [31:0]  science_dropped_beat_count = 32'd0;
     logic [31:0]  tx_fifo_level_words = 32'd0;
     logic [31:0]  tx_fifo_high_water_words = 32'd0;
     logic [31:0]  tx_fifo_backpressure_cycles = 32'd0;
@@ -62,8 +64,9 @@ module tb_feng_ctrl_axi;
     logic [31:0]  tx_frame_byte_count = 32'd8192;
     logic [31:0]  tx_route_miss_count = 32'd2;
     logic [31:0]  tx_route_error_count = 32'd3;
-    logic [2:0]   tx_selected_endpoint_id = 3'd1;
-    logic [2:0]   tx_selected_route_id = 3'd1;
+    logic [31:0]  tx_cmac_source_status = 32'h0000_01d3;
+    logic [7:0]   tx_selected_endpoint_id = 8'd9;
+    logic [5:0]   tx_selected_route_id = 6'd1;
     logic         tx_selected_route_is_time = 1'b0;
     logic         tx_header_capture_armed = 1'b0;
     logic         tx_header_capture_valid = 1'b0;
@@ -79,10 +82,10 @@ module tb_feng_ctrl_axi;
     logic [63:0]  tx_payload_witness_sample0 = 64'h0000_0001_0000_0100;
     logic [63:0]  tx_payload_witness_frame_id = 64'h0000_0000_0000_0042;
     logic [31:0]  tx_payload_witness_seq_no = 32'h0000_0011;
-    logic [31:0]  tx_payload_witness_chan0 = 32'd64;
-    logic [63:0]  tx_payload_witness_layout_word = 64'h0040_0004_0008_0000;
+    logic [31:0]  tx_payload_witness_chan0 = 32'd256;
+    logic [63:0]  tx_payload_witness_layout_word = 64'h0100_0001_0008_0000;
     logic [31:0]  tx_payload_witness_payload_bytes = 32'd8192;
-    logic [31:0]  tx_payload_witness_route_meta = 32'h0000_0020;
+    logic [31:0]  tx_payload_witness_route_meta = 32'h0000_0640;
     logic [31:0]  tx_payload_witness_rfdc_flags = 32'h0000_000f;
     logic [63:0]  tx_payload_witness_rfdc_sample_count = 64'h0000_0001_0000_0100;
     logic [31:0]  tx_payload_witness_dac_phase_epoch = 32'd17;
@@ -115,8 +118,25 @@ module tb_feng_ctrl_axi;
     logic [31:0]  pfb_status = 32'h0000_0003;
     logic [31:0]  pfb_frame_count = 32'd0;
     logic [31:0]  pfb_overflow_count = 32'd0;
+    logic [31:0]  pfb_data_halt_count = 32'd0;
+    logic [31:0]  pfb_xfft_event_count = 32'd0;
+    logic [31:0]  pfb_tile_overflow_count = 32'd0;
+    logic [31:0]  pfb_xfft_tlast_unexpected_count = 32'd0;
+    logic [31:0]  pfb_xfft_tlast_missing_count = 32'd0;
+    logic [31:0]  pfb_xfft_fft_overflow_count = 32'd0;
+    logic [31:0]  pfb_xfft_data_out_halt_count = 32'd0;
+    logic [31:0]  pfb_xfft_status_halt_count = 32'd0;
+    logic [31:0]  pfb_capture_backpressure_count = 32'd0;
+    logic [31:0]  pfb_frame_sample0_overflow_count = 32'd0;
+    logic [31:0]  pfb_input_fifo_level = 32'd0;
     logic [31:0]  pfb_peak_chan = 32'd0;
     logic [31:0]  pfb_peak_power = 32'd0;
+    logic [31:0]  time_ddr_ring_status = 32'd0;
+    logic [31:0]  time_ddr_ring_occupancy = 32'd0;
+    logic [31:0]  time_ddr_ring_write_count = 32'd0;
+    logic [31:0]  time_ddr_ring_read_count = 32'd0;
+    logic [31:0]  time_ddr_ring_drop_count = 32'd0;
+    logic [31:0]  time_ddr_ring_error_count = 32'd0;
 
     wire [15:0] board_id;
     wire [1:0]  mode;
@@ -159,18 +179,18 @@ module tb_feng_ctrl_axi;
     wire [31:0] tx_header_capture_rd_data;
     wire [31:0] tx_control;
     wire        tx_clear_pulse;
-    wire [7:0]  tx_endpoint_enable;
-    wire [255:0] tx_endpoint_ip_vec;
-    wire [383:0] tx_endpoint_mac_vec;
-    wire [127:0] tx_endpoint_src_port_vec;
-    wire [127:0] tx_endpoint_dst_port_vec;
-    wire [7:0]  tx_spec_route_enable;
-    wire [255:0] tx_spec_route_chan0_vec;
-    wire [127:0] tx_spec_route_chan_count_vec;
-    wire [23:0] tx_spec_route_endpoint_vec;
+    wire [71:0] tx_endpoint_enable;
+    wire [72*32-1:0] tx_endpoint_ip_vec;
+    wire [72*48-1:0] tx_endpoint_mac_vec;
+    wire [72*16-1:0] tx_endpoint_src_port_vec;
+    wire [72*16-1:0] tx_endpoint_dst_port_vec;
+    wire [63:0] tx_spec_route_enable;
+    wire [64*32-1:0] tx_spec_route_chan0_vec;
+    wire [64*16-1:0] tx_spec_route_chan_count_vec;
+    wire [64*8-1:0] tx_spec_route_endpoint_vec;
     wire [7:0]  tx_time_route_enable;
     wire [127:0] tx_time_route_input_mask_vec;
-    wire [23:0] tx_time_route_endpoint_vec;
+    wire [64-1:0] tx_time_route_endpoint_vec;
     wire        tx_frame_capture_arm_pulse;
     wire [4:0]  tx_frame_capture_rd_word;
     wire [31:0] tx_frame_capture_rd_data;
@@ -194,6 +214,14 @@ module tb_feng_ctrl_axi;
     wire [31:0] dac_phase_epoch;
     wire [1:0]  science_bandwidth_mode_cfg;
     wire [2:0]  science_output_mode_cfg;
+    wire [31:0] time_live_interval_beats;
+    wire        time_ddr_ring_enable;
+    wire        time_ddr_ring_clear_pulse;
+    wire [63:0] time_ddr_ring_base_addr;
+    wire [15:0] time_ddr_ring_slots;
+    wire        time_multiflow_enable;
+    wire [2:0]  time_multiflow_base_endpoint;
+    wire [3:0]  time_multiflow_count;
     wire        preview_audit_clear_pulse;
     wire [1:0]  preview_audit_source_select;
     wire        preview_audit_event_enable;
@@ -244,6 +272,7 @@ module tb_feng_ctrl_axi;
         .time_packet_count(time_packet_count),
         .time_udp_byte_count(time_udp_byte_count),
         .time_dropped_count(time_dropped_count),
+        .spec_dropped_count(spec_dropped_count),
         .spec_seq_no(spec_seq_no),
         .time_seq_no(time_seq_no),
         .time_sample0(time_sample0),
@@ -255,6 +284,7 @@ module tb_feng_ctrl_axi;
         .rfdc_dropped_count(rfdc_dropped_count),
         .rfdc_current_valid_mask(rfdc_current_valid_mask),
         .rfdc_seen_valid_mask(rfdc_seen_valid_mask),
+        .science_dropped_beat_count(science_dropped_beat_count),
         .tx_link_status_flags(32'h0000_0002),
         .tx_dry_run_packet_count(32'd5),
         .tx_dry_run_byte_count(32'd4096),
@@ -268,6 +298,7 @@ module tb_feng_ctrl_axi;
         .tx_frame_byte_count(tx_frame_byte_count),
         .tx_route_miss_count(tx_route_miss_count),
         .tx_route_error_count(tx_route_error_count),
+        .tx_cmac_source_status(tx_cmac_source_status),
         .tx_selected_endpoint_id(tx_selected_endpoint_id),
         .tx_selected_route_id(tx_selected_route_id),
         .tx_selected_route_is_time(tx_selected_route_is_time),
@@ -323,11 +354,28 @@ module tb_feng_ctrl_axi;
         .rfdc_axis_raw_witness_rfdc_flags(rfdc_axis_raw_witness_rfdc_flags),
         .rfdc_axis_raw_witness_valid_mask(rfdc_axis_raw_witness_valid_mask),
         .rfdc_axis_raw_witness_rd_data(rfdc_axis_raw_witness_rd_data),
-        .tx_spec_route_hit_counts({32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd22, 32'd11}),
+        .tx_spec_route_hit_counts({{62{32'd0}}, 32'd22, 32'd11}),
         .tx_time_route_hit_counts({32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd33}),
+        .time_ddr_ring_status(time_ddr_ring_status),
+        .time_ddr_ring_occupancy(time_ddr_ring_occupancy),
+        .time_ddr_ring_write_count(time_ddr_ring_write_count),
+        .time_ddr_ring_read_count(time_ddr_ring_read_count),
+        .time_ddr_ring_drop_count(time_ddr_ring_drop_count),
+        .time_ddr_ring_error_count(time_ddr_ring_error_count),
         .pfb_status(pfb_status),
         .pfb_frame_count(pfb_frame_count),
         .pfb_overflow_count(pfb_overflow_count),
+        .pfb_data_halt_count(pfb_data_halt_count),
+        .pfb_xfft_event_count(pfb_xfft_event_count),
+        .pfb_tile_overflow_count(pfb_tile_overflow_count),
+        .pfb_xfft_tlast_unexpected_count(pfb_xfft_tlast_unexpected_count),
+        .pfb_xfft_tlast_missing_count(pfb_xfft_tlast_missing_count),
+        .pfb_xfft_fft_overflow_count(pfb_xfft_fft_overflow_count),
+        .pfb_xfft_data_out_halt_count(pfb_xfft_data_out_halt_count),
+        .pfb_xfft_status_halt_count(pfb_xfft_status_halt_count),
+        .pfb_capture_backpressure_count(pfb_capture_backpressure_count),
+        .pfb_frame_sample0_overflow_count(pfb_frame_sample0_overflow_count),
+        .pfb_input_fifo_level(pfb_input_fifo_level),
         .pfb_peak_chan(pfb_peak_chan),
         .pfb_peak_power(pfb_peak_power),
         .debug_busy(1'b0),
@@ -459,6 +507,14 @@ module tb_feng_ctrl_axi;
         .rfdc_axis_raw_witness_capture_beats(rfdc_axis_raw_witness_capture_beats),
         .rfdc_axis_raw_witness_rd_word(rfdc_axis_raw_witness_rd_word),
         .unix_seconds(unix_seconds),
+        .time_live_interval_beats(time_live_interval_beats),
+        .time_ddr_ring_enable(time_ddr_ring_enable),
+        .time_ddr_ring_clear_pulse(time_ddr_ring_clear_pulse),
+        .time_ddr_ring_base_addr(time_ddr_ring_base_addr),
+        .time_ddr_ring_slots(time_ddr_ring_slots),
+        .time_multiflow_enable(time_multiflow_enable),
+        .time_multiflow_base_endpoint(time_multiflow_base_endpoint),
+        .time_multiflow_count(time_multiflow_count),
         .science_bandwidth_mode_cfg(science_bandwidth_mode_cfg),
         .science_output_mode_cfg(science_output_mode_cfg)
     );
@@ -748,23 +804,23 @@ module tb_feng_ctrl_axi;
         reset_dut();
 
         axi_read(16'h0000, rd);
-        `TB_CHECK_EQ(rd, 32'h0001_001A, "CORE_VERSION")
+        `TB_CHECK_EQ(rd, 32'h0001_0026, "CORE_VERSION")
         axi_read(16'h0008, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default MODE")
         axi_read(16'h0114, rd);
         `TB_CHECK_EQ(rd, 32'd256, "default TIME payload count")
         axi_read(16'h011c, rd);
-        `TB_CHECK_EQ(rd, 32'd64, "default SPEC channel count")
+        `TB_CHECK_EQ(rd, 32'd256, "default SPEC channel count")
         axi_read(16'h0900, rd);
         `TB_CHECK_EQ(rd, 32'd1, "default PFB enable")
         axi_read(16'h0908, rd);
         `TB_CHECK_EQ(rd, 32'd4096, "default PFB nchan")
         axi_read(16'h090c, rd);
-        `TB_CHECK_EQ(rd, 32'd4, "default PFB taps")
+        `TB_CHECK_EQ(rd, 32'd0, "default PFB taps")
         axi_read(16'h0918, rd);
-        `TB_CHECK_EQ(rd, 32'd64, "default PFB channel count")
+        `TB_CHECK_EQ(rd, 32'd256, "default PFB channel count")
         axi_read(16'h091c, rd);
-        `TB_CHECK_EQ(rd, 32'd4, "default PFB time count")
+        `TB_CHECK_EQ(rd, 32'd1, "default PFB time count")
         axi_read(16'h0200, rd);
         `TB_CHECK_EQ(rd, 32'h0a00_0101, "default source IP")
         axi_read(16'h0020, rd);
@@ -776,7 +832,7 @@ module tb_feng_ctrl_axi;
         axi_read(16'hd000, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0001, "default science control forces dry-run")
         axi_read(16'hd004, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0100, "default science status is 100MHz/OFF")
+        `TB_CHECK_EQ(rd, 32'h0000_0110, "default science status is 100MHz/OFF without F-engine valid")
         axi_read(16'hd008, rd);
         `TB_CHECK_EQ(rd, 32'd1, "default science bandwidth is 100MHz")
         `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd1, "default science bandwidth output")
@@ -788,28 +844,117 @@ module tb_feng_ctrl_axi;
         axi_read(16'hd014, rd);
         `TB_CHECK_EQ(rd, 32'd2, "default science decim factor")
         axi_read(16'hd01c, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0048, "default science block reasons keep dry-run/wide-science blockers only")
+        `TB_CHECK_EQ(rd, 32'h0000_0040, "default science block reasons keep dry-run blocker only")
         `TB_CHECK_EQ(rd[4], 1'b0, "RFDC science bus truncation block is cleared")
+        `TB_CHECK_EQ(rd[11], 1'b0, "science rate drop block is clear by default")
         axi_read(16'hd020, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0307, "science capability word")
-        axi_read(16'hb100, rd);
-        `TB_CHECK_EQ(rd, 32'd1, "default endpoint0 enabled")
+        axi_read(16'hd024, rd);
+        `TB_CHECK_EQ(rd, 32'd7680, "default TIME live interval beats")
+        `TB_CHECK_EQ(time_live_interval_beats, 32'd7680, "default TIME live interval output")
+        axi_read(16'hd028, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0000, "default TIME DDR ring control")
+        axi_read(16'hd02c, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0000, "default TIME DDR ring base low")
+        axi_read(16'hd030, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0008, "default TIME DDR ring base high")
+        axi_read(16'hd034, rd);
+        `TB_CHECK_EQ(rd, 32'd64, "default TIME DDR ring slots")
+        axi_read(16'hd038, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0000, "default TIME DDR ring status")
+        axi_read(16'hd03c, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "default TIME DDR ring occupancy")
+        axi_read(16'hd040, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "default TIME DDR ring write count")
+        axi_read(16'hd044, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "default TIME DDR ring read count")
+        axi_read(16'hd048, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "default TIME DDR ring drop count")
+        axi_read(16'hd04c, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "default TIME DDR ring error count")
+        axi_read(16'hd050, rd);
+        `TB_CHECK_EQ(rd, 32'h0001_0000, "default TIME multiflow disabled count one")
+        `TB_CHECK_EQ(time_multiflow_enable, 1'b0, "default TIME multiflow enable output")
+        `TB_CHECK_EQ(time_multiflow_base_endpoint, 3'd0, "default TIME multiflow base endpoint")
+        `TB_CHECK_EQ(time_multiflow_count, 4'd1, "default TIME multiflow count")
+        axi_write(16'hd050, 32'h0008_0001);
+        axi_read(16'hd050, rd);
+        `TB_CHECK_EQ(rd, 32'h0008_0001, "TIME multiflow 8-flow readback")
+        `TB_CHECK(time_multiflow_enable, "TIME multiflow enable output")
+        `TB_CHECK_EQ(time_multiflow_count, 4'd8, "TIME multiflow count output")
+        axi_write(16'hd050, 32'h0004_0201);
+        axi_read(16'hd050, rd);
+        `TB_CHECK_EQ(rd, 32'h0004_0201, "TIME multiflow base endpoint readback")
+        `TB_CHECK_EQ(time_multiflow_base_endpoint, 3'd2, "TIME multiflow base endpoint output")
+        axi_write(16'hd024, 32'd1);
+        axi_read(16'hd024, rd);
+        `TB_CHECK_EQ(rd, 32'd16, "TIME live interval clamps low nonzero")
+        axi_write(16'hd024, 32'd0);
+        axi_read(16'hd024, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "TIME live interval allows continuous mode")
+        axi_write(16'hd024, 32'd12345);
+        axi_read(16'hd024, rd);
+        `TB_CHECK_EQ(rd, 32'd12345, "TIME live interval readback")
+        `TB_CHECK_EQ(time_live_interval_beats, 32'd12345, "TIME live interval output")
+        axi_write(16'hb100, 32'd0);
         axi_read(16'hb104, rd);
-        `TB_CHECK_EQ(rd, 32'h0a00_010a, "default endpoint0 IP")
+        `TB_CHECK_EQ(rd, 32'd1, "default endpoint0 enabled")
+        axi_read(16'hb108, rd);
+        `TB_CHECK_EQ(rd, 32'h0a00_0110, "default endpoint0 IP")
+        axi_read(16'hb114, rd);
+        `TB_CHECK_EQ(rd, 32'd4300, "default endpoint0 dst port")
+        axi_write(16'hb100, 32'd23);
+        axi_read(16'hb100, rd);
+        `TB_CHECK_EQ(rd, 32'd23, "endpoint indirect index accepts endpoint23")
+        axi_write(16'hb108, 32'h0a00_0123);
+        axi_write(16'hb10c, 32'h89ab_cdef);
+        axi_write(16'hb110, 32'h0000_4567);
+        axi_write(16'hb114, 32'd4323);
+        axi_write(16'hb118, 32'd4023);
+        axi_write(16'hb104, 32'd1);
+        axi_read(16'hb108, rd);
+        `TB_CHECK_EQ(rd, 32'h0a00_0123, "endpoint23 indirect IP readback")
+        axi_read(16'hb10c, rd);
+        `TB_CHECK_EQ(rd, 32'h89ab_cdef, "endpoint23 indirect MAC low readback")
         axi_read(16'hb110, rd);
-        `TB_CHECK_EQ(rd, 32'd4100, "default endpoint0 dst port")
-        axi_read(16'hb300, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0001, "default SPEC route0 control")
-        axi_read(16'hb304, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_4567, "endpoint23 indirect MAC high readback")
+        axi_read(16'hb114, rd);
+        `TB_CHECK_EQ(rd, 32'd4323, "endpoint23 indirect dst port")
+        axi_read(16'hb118, rd);
+        `TB_CHECK_EQ(rd, 32'd4023, "endpoint23 indirect src port")
+        axi_write(16'hb130, 32'd0);
+        axi_read(16'hb134, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0801, "default SPEC route0 control")
+        axi_read(16'hb138, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default SPEC route0 chan0")
-        axi_read(16'hb308, rd);
-        `TB_CHECK_EQ(rd, 32'd2048, "default SPEC route0 count")
-        axi_read(16'hb320, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0101, "default SPEC route1 control")
-        axi_read(16'hb500, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0201, "default TIME route0 control")
-        axi_read(16'hb504, rd);
+        axi_read(16'hb13c, rd);
+        `TB_CHECK_EQ(rd, 32'd256, "default SPEC route0 count")
+        axi_write(16'hb130, 32'd15);
+        axi_read(16'hb130, rd);
+        `TB_CHECK_EQ(rd, 32'd15, "SPEC route indirect index accepts route15")
+        axi_write(16'hb134, 32'h0000_1701);
+        axi_write(16'hb138, 32'd3840);
+        axi_write(16'hb13c, 32'd256);
+        axi_read(16'hb134, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_1701, "SPEC route15 indirect control")
+        axi_read(16'hb138, rd);
+        `TB_CHECK_EQ(rd, 32'd3840, "SPEC route15 indirect chan0")
+        axi_read(16'hb13c, rd);
+        `TB_CHECK_EQ(rd, 32'd256, "SPEC route15 indirect count")
+        axi_write(16'hb150, 32'd0);
+        axi_read(16'hb154, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0001, "default TIME route0 control")
+        axi_read(16'hb158, rd);
         `TB_CHECK_EQ(rd, 32'h0000_00ff, "default TIME route0 mask")
+        axi_write(16'hb150, 32'd7);
+        axi_read(16'hb150, rd);
+        `TB_CHECK_EQ(rd, 32'd7, "TIME route indirect index accepts route7")
+        axi_write(16'hb154, 32'h0000_0701);
+        axi_write(16'hb158, 32'h0000_0080);
+        axi_read(16'hb154, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0701, "TIME route7 indirect control")
+        axi_read(16'hb158, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0080, "TIME route7 indirect mask")
         axi_read(16'h0794, rd);
         `TB_CHECK_EQ(rd, 32'h0004_1003, "TX payload witness status")
         axi_read(16'h079c, rd);
@@ -821,7 +966,7 @@ module tb_feng_ctrl_axi;
         axi_read(16'h07b8, rd);
         `TB_CHECK_EQ(rd, 32'h0008_0000, "TX payload witness layout low")
         axi_read(16'h07bc, rd);
-        `TB_CHECK_EQ(rd, 32'h0040_0004, "TX payload witness layout high")
+        `TB_CHECK_EQ(rd, 32'h0100_0001, "TX payload witness layout high")
         axi_read(16'h07d0, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0100, "TX payload witness RFDC sample count low")
         axi_read(16'h07d8, rd);
@@ -897,27 +1042,28 @@ module tb_feng_ctrl_axi;
         axi_write(16'hd008, 32'd0);
         axi_write(16'hd00c, 32'd3);
         axi_read(16'hd004, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_6003, "20MHz TIME_SPEC enables time and spec")
+        `TB_CHECK_EQ(rd, 32'h0000_6013, "20MHz TIME_SPEC enables time and spec but waits for F-engine valid")
         axi_read(16'hd010, rd);
         `TB_CHECK_EQ(rd, 32'd30_720_000, "20MHz science sample rate")
         axi_read(16'hd014, rd);
         `TB_CHECK_EQ(rd, 32'd8, "20MHz science decim factor")
         axi_read(16'hd01c, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_004a, "20MHz TIME_SPEC blocks dry-run/wide-science/SPEC-scaffold")
+        `TB_CHECK_EQ(rd, 32'h0000_0140, "20MHz TIME_SPEC blocks dry-run and missing F-engine backend")
         `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd0, "20MHz science bandwidth output")
         `TB_CHECK_EQ(science_output_mode_cfg, 3'd3, "TIME_SPEC science mode output")
 
         axi_write(16'hd008, 32'd2);
         axi_read(16'hd004, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_6207, "200MHz TIME_SPEC is explicitly rejected")
+        `TB_CHECK_EQ(rd, 32'h0000_6217, "200MHz TIME_SPEC is explicitly rejected")
         axi_read(16'hd010, rd);
         `TB_CHECK_EQ(rd, 32'd245_760_000, "200MHz science sample rate")
         axi_read(16'hd014, rd);
         `TB_CHECK_EQ(rd, 32'd1, "200MHz science decim factor")
         axi_read(16'hd01c, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_004b, "200MHz TIME_SPEC block reasons")
+        `TB_CHECK_EQ(rd, 32'h0000_0141, "200MHz TIME_SPEC block reasons")
         `TB_CHECK_EQ(rd[0], 1'b1, "200MHz TIME_SPEC rejection bit set")
         `TB_CHECK_EQ(rd[4], 1'b0, "RFDC bus truncation remains cleared at 200MHz")
+        `TB_CHECK_EQ(rd[11], 1'b0, "science rate drop block remains clear at 200MHz")
 
         for (mode_idx = 0; mode_idx < 4; mode_idx = mode_idx + 1) begin
             axi_write(16'h0008, mode_idx[31:0]);
@@ -974,17 +1120,17 @@ module tb_feng_ctrl_axi;
         axi_write(16'h0240, 32'h1234_5678);
         axi_write(16'h0244, 32'h5566_7788);
         axi_write(16'h0248, 32'h1122_3344);
-        axi_write(16'hb164, 32'h0a00_0112);
-        axi_write(16'hb168, 32'h5566_7788);
-        axi_write(16'hb16c, 32'h0000_1122);
-        axi_write(16'hb170, 32'd4400);
-        axi_write(16'hb174, 32'd4001);
-        axi_write(16'hb160, 32'd1);
-        axi_write(16'hb340, 32'h0000_0301);
-        axi_write(16'hb344, 32'd1024);
-        axi_write(16'hb348, 32'd64);
-        axi_write(16'hb540, 32'h0000_0301);
-        axi_write(16'hb544, 32'h0000_000f);
+        axi_write(32'h0001_3060, 32'd1);
+        axi_write(32'h0001_3064, 32'h0a00_0112);
+        axi_write(32'h0001_3068, 32'h5566_7788);
+        axi_write(32'h0001_306c, 32'h0000_1122);
+        axi_write(32'h0001_3070, 32'd4400);
+        axi_write(32'h0001_3074, 32'd4001);
+        axi_write(32'h0001_4040, 32'h0000_0301);
+        axi_write(32'h0001_4044, 32'd1024);
+        axi_write(32'h0001_4048, 32'd64);
+        axi_write(32'h0001_4840, 32'h0000_0301);
+        axi_write(32'h0001_4844, 32'h0000_000f);
         axi_write(16'h0914, 32'd128);
         axi_write(16'h0918, 32'd32);
         axi_write(16'h091c, 32'd8);
@@ -1010,23 +1156,23 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(rd, 32'd8, "PFB time count readback")
         axi_read(16'h0910, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0aaa, "PFB FFT shift readback")
-        axi_read(16'hb164, rd);
+        axi_read(32'h0001_3064, rd);
         `TB_CHECK_EQ(rd, 32'h0a00_0112, "endpoint3 IP readback")
-        axi_read(16'hb16c, rd);
+        axi_read(32'h0001_306c, rd);
         `TB_CHECK_EQ(rd, 32'h0000_1122, "endpoint3 MAC high readback")
-        axi_read(16'hb170, rd);
+        axi_read(32'h0001_3070, rd);
         `TB_CHECK_EQ(rd, 32'd4400, "endpoint3 dst port readback")
-        axi_read(16'hb174, rd);
+        axi_read(32'h0001_3074, rd);
         `TB_CHECK_EQ(rd, 32'd4001, "endpoint3 src port readback")
-        axi_read(16'hb340, rd);
+        axi_read(32'h0001_4040, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0301, "SPEC route2 control readback")
-        axi_read(16'hb344, rd);
+        axi_read(32'h0001_4044, rd);
         `TB_CHECK_EQ(rd, 32'd1024, "SPEC route2 chan0 readback")
-        axi_read(16'hb348, rd);
+        axi_read(32'h0001_4048, rd);
         `TB_CHECK_EQ(rd, 32'd64, "SPEC route2 count readback")
-        axi_read(16'hb540, rd);
+        axi_read(32'h0001_4840, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0301, "TIME route2 control readback")
-        axi_read(16'hb544, rd);
+        axi_read(32'h0001_4844, rd);
         `TB_CHECK_EQ(rd, 32'h0000_000f, "TIME route2 mask readback")
 
         fsm_state = 4'd6;
@@ -1052,10 +1198,22 @@ module tb_feng_ctrl_axi;
         pfb_status = 32'h0000_0013;
         pfb_frame_count = 32'd17;
         pfb_overflow_count = 32'd2;
+        pfb_data_halt_count = 32'd3;
+        pfb_xfft_event_count = 32'd4;
+        pfb_tile_overflow_count = 32'd5;
+        pfb_xfft_tlast_unexpected_count = 32'd6;
+        pfb_xfft_tlast_missing_count = 32'd7;
+        pfb_xfft_fft_overflow_count = 32'd8;
+        pfb_xfft_data_out_halt_count = 32'd9;
+        pfb_xfft_status_halt_count = 32'd10;
+        pfb_capture_backpressure_count = 32'd11;
+        pfb_frame_sample0_overflow_count = 32'd12;
+        pfb_input_fifo_level = 32'd1024;
         pfb_peak_chan = 32'd129;
         pfb_peak_power = 32'd123456;
         rfdc_current_valid_mask = 16'h0003;
         rfdc_seen_valid_mask = 16'h00ff;
+        science_dropped_beat_count = 32'd7;
         clip_counts[0 +: 32] = 32'd12;
         mean_mags[32 +: 32] = 32'd34;
         @(posedge clk);
@@ -1088,6 +1246,8 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(rd, 32'h0000_0003, "RFDC current valid mask readback")
         axi_read(16'h0358, rd);
         `TB_CHECK_EQ(rd, 32'h0000_00ff, "RFDC seen valid mask readback")
+        axi_read(16'h035c, rd);
+        `TB_CHECK_EQ(rd, 32'd7, "science dropped beat count readback")
         axi_read(16'h0360, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0002, "TX link dry-run flags readback")
         axi_read(16'h0364, rd);
@@ -1117,14 +1277,16 @@ module tb_feng_ctrl_axi;
         axi_read(16'hb01c, rd);
         `TB_CHECK_EQ(rd, 32'd3, "TX route error count readback")
         axi_read(16'hb028, rd);
-        `TB_CHECK_EQ(rd, 32'd1, "TX selected endpoint readback")
+        `TB_CHECK_EQ(rd, 32'd9, "TX selected endpoint readback")
         axi_read(16'hb02c, rd);
         `TB_CHECK_EQ(rd, 32'd1, "TX selected SPEC route readback")
-        axi_read(16'hb30c, rd);
+        axi_read(16'hb704, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_01d3, "TX CMAC source status readback")
+        axi_read(32'h0001_400c, rd);
         `TB_CHECK_EQ(rd, 32'd11, "TX SPEC route0 hit readback")
-        axi_read(16'hb32c, rd);
+        axi_read(32'h0001_402c, rd);
         `TB_CHECK_EQ(rd, 32'd22, "TX SPEC route1 hit readback")
-        axi_read(16'hb50c, rd);
+        axi_read(32'h0001_480c, rd);
         `TB_CHECK_EQ(rd, 32'd33, "TX TIME route0 hit readback")
         axi_read(16'h0904, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0013, "PFB status readback")
@@ -1136,6 +1298,28 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(rd, 32'd129, "PFB peak channel readback")
         axi_read(16'h092c, rd);
         `TB_CHECK_EQ(rd, 32'd123456, "PFB peak power readback")
+        axi_read(16'h0930, rd);
+        `TB_CHECK_EQ(rd, 32'd3, "PFB data halt count readback")
+        axi_read(16'h0934, rd);
+        `TB_CHECK_EQ(rd, 32'd4, "PFB XFFT event count readback")
+        axi_read(16'h0938, rd);
+        `TB_CHECK_EQ(rd, 32'd5, "PFB tile overflow count readback")
+        axi_read(16'h093c, rd);
+        `TB_CHECK_EQ(rd, 32'd1024, "PFB input FIFO level readback")
+        axi_read(16'h0940, rd);
+        `TB_CHECK_EQ(rd, 32'd6, "PFB XFFT TLAST unexpected count readback")
+        axi_read(16'h0944, rd);
+        `TB_CHECK_EQ(rd, 32'd7, "PFB XFFT TLAST missing count readback")
+        axi_read(16'h0948, rd);
+        `TB_CHECK_EQ(rd, 32'd8, "PFB XFFT FFT overflow count readback")
+        axi_read(16'h094c, rd);
+        `TB_CHECK_EQ(rd, 32'd9, "PFB XFFT data output halt count readback")
+        axi_read(16'h0950, rd);
+        `TB_CHECK_EQ(rd, 32'd10, "PFB XFFT status halt count readback")
+        axi_read(16'h0954, rd);
+        `TB_CHECK_EQ(rd, 32'd11, "PFB capture backpressure count readback")
+        axi_read(16'h0958, rd);
+        `TB_CHECK_EQ(rd, 32'd12, "PFB frame sample0 overflow count readback")
         expect_pfb_clear_pulse();
         axi_write(16'h0900, 32'h0000_0000);
         axi_read(16'h0900, rd);

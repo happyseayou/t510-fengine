@@ -27,6 +27,7 @@ module tb_science_rate_selector;
 
     integer in_beat = 0;
     integer out_count = 0;
+    integer stalled_in_beat = 0;
     logic [DATA_W-1:0] captured_data [0:15];
     logic [63:0] captured_sample0 [0:15];
 
@@ -165,7 +166,29 @@ module tb_science_rate_selector;
         `TB_CHECK_EQ(captured_sample0[0], 64'h1000, "100MHz selector sample0")
         `TB_CHECK_EQ(captured_sample0[1], 64'h1008, "100MHz selector second sample0")
 
+        reset_case(2'd1);
+        @(negedge clk);
+        m_axis_tready = 1'b0;
+        s_axis_tvalid = 1'b1;
+        repeat (4) @(posedge clk);
+        #1;
+        `TB_CHECK_EQ(s_axis_tready, 1'b1, "100MHz selector keeps RFDC-side input ready while output stalls")
+        `TB_CHECK_EQ(in_beat, 4, "100MHz selector continues accepting input while output pending")
+        `TB_CHECK(dropped_beat_count != 32'd0, "100MHz selector drops selected output beats instead of backpressuring input")
+        stalled_in_beat = in_beat;
+        repeat (3) @(posedge clk);
+        `TB_CHECK(in_beat > stalled_in_beat, "100MHz selector keeps advancing input phase while stalled")
+        @(negedge clk);
+        m_axis_tready = 1'b1;
+        repeat (4) @(posedge clk);
+        @(negedge clk);
+        s_axis_tvalid = 1'b0;
+        repeat (4) @(posedge clk);
+        `TB_CHECK_EQ(captured_sample0[0], 64'h1000, "100MHz stalled selector first sample0")
+        `TB_CHECK(dropped_beat_count != 32'd0, "100MHz stalled selector records internal drops")
+
         reset_case(2'd0);
+        m_axis_tready = 1'b1;
         drive_beats(16);
         `TB_CHECK_EQ(out_count, 2, "20MHz selector output count")
         `TB_CHECK_EQ(captured_data[0], expect_decim8(0), "20MHz selector first packed beat")

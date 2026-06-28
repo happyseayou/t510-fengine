@@ -17,8 +17,8 @@ module tx_payload_witness_capture #(
     input  wire                 s_axis_tvalid,
     input  wire                 s_axis_tlast,
     input  wire                 s_axis_tready,
-    input  wire [2:0]           route_endpoint_id,
-    input  wire [2:0]           route_id,
+    input  wire [7:0]           route_endpoint_id,
+    input  wire [5:0]           route_id,
     input  wire                 route_is_time,
     input  wire [31:0]          rfdc_status_flags,
     input  wire [63:0]          rfdc_sample_count,
@@ -222,7 +222,7 @@ module tx_payload_witness_capture #(
 
                     if (word_count_data == {{(COUNT_W-1){1'b0}}, 1'b1}) begin
                         stream_type_data <= s_axis_tdata[47:32];
-                        route_meta_data  <= {s_axis_tdata[47:32], 4'd0, route_is_time, route_id, route_endpoint_id, 5'd0};
+                        route_meta_data  <= {s_axis_tdata[47:32], route_is_time, route_id, route_endpoint_id, 1'b0};
                         if (!filter_matches(stream_filter_data, s_axis_tdata[47:32])) begin
                             capturing_data       <= 1'b0;
                             skip_packet_data     <= !s_axis_tlast;

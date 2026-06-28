@@ -1,7 +1,7 @@
 module tx_route_selector #(
     parameter integer DATA_W        = 64,
-    parameter integer N_ENDPOINTS   = 8,
-    parameter integer N_SPEC_ROUTES = 8,
+    parameter integer N_ENDPOINTS   = 72,
+    parameter integer N_SPEC_ROUTES = 64,
     parameter integer N_TIME_ROUTES = 8,
     parameter integer HEADER_WORDS  = 16
 ) (
@@ -19,10 +19,10 @@ module tx_route_selector #(
     input  wire [N_SPEC_ROUTES-1:0]     spec_route_enable,
     input  wire [N_SPEC_ROUTES*32-1:0]  spec_route_chan0_vec,
     input  wire [N_SPEC_ROUTES*16-1:0]  spec_route_chan_count_vec,
-    input  wire [N_SPEC_ROUTES*3-1:0]   spec_route_endpoint_vec,
+    input  wire [N_SPEC_ROUTES*8-1:0]   spec_route_endpoint_vec,
     input  wire [N_TIME_ROUTES-1:0]     time_route_enable,
     input  wire [N_TIME_ROUTES*16-1:0]  time_route_input_mask_vec,
-    input  wire [N_TIME_ROUTES*3-1:0]   time_route_endpoint_vec,
+    input  wire [N_TIME_ROUTES*8-1:0]   time_route_endpoint_vec,
     input  wire [DATA_W-1:0]            s_axis_tdata,
     input  wire [DATA_W/8-1:0]          s_axis_tkeep,
     input  wire                         s_axis_tvalid,
@@ -39,15 +39,15 @@ module tx_route_selector #(
     output logic [15:0]                 m_dst_udp_port,
     output logic [31:0]                 m_t510_payload_bytes,
     output logic [15:0]                 m_stream_type,
-    output logic [2:0]                  m_endpoint_id,
-    output logic [2:0]                  m_route_id,
+    output logic [7:0]                  m_endpoint_id,
+    output logic [5:0]                  m_route_id,
     output logic                        m_route_is_time,
     output logic [31:0]                 frame_forwarded_count,
     output logic [31:0]                 frame_dropped_count,
     output logic [31:0]                 route_miss_count,
     output logic [31:0]                 route_error_count,
-    output logic [2:0]                  selected_endpoint_id,
-    output logic [2:0]                  selected_route_id,
+    output logic [7:0]                  selected_endpoint_id,
+    output logic [5:0]                  selected_route_id,
     output logic                        selected_route_is_time,
     output logic [N_SPEC_ROUTES*32-1:0] spec_route_hit_count_vec,
     output logic [N_TIME_ROUTES*32-1:0] time_route_hit_count_vec
@@ -82,33 +82,33 @@ module tx_route_selector #(
     logic route_found;
     logic route_endpoint_enabled;
     logic route_is_time_comb;
-    logic [2:0] route_id_comb;
-    logic [2:0] endpoint_id_comb;
+    logic [5:0] route_id_comb;
+    logic [7:0] endpoint_id_comb;
     logic [31:0] packet_chan_end;
     logic [31:0] route_chan_end;
 
     logic [N_SPEC_ROUTES*32-1:0] spec_hit_counts;
     logic [N_TIME_ROUTES*32-1:0] time_hit_counts;
 
-    function automatic [31:0] endpoint_ip(input [2:0] idx);
+    function automatic [31:0] endpoint_ip(input [7:0] idx);
         begin
             endpoint_ip = endpoint_ip_vec[idx*32 +: 32];
         end
     endfunction
 
-    function automatic [47:0] endpoint_mac(input [2:0] idx);
+    function automatic [47:0] endpoint_mac(input [7:0] idx);
         begin
             endpoint_mac = endpoint_mac_vec[idx*48 +: 48];
         end
     endfunction
 
-    function automatic [15:0] endpoint_src_port(input [2:0] idx);
+    function automatic [15:0] endpoint_src_port(input [7:0] idx);
         begin
             endpoint_src_port = endpoint_src_port_vec[idx*16 +: 16];
         end
     endfunction
 
-    function automatic [15:0] endpoint_dst_port(input [2:0] idx);
+    function automatic [15:0] endpoint_dst_port(input [7:0] idx);
         begin
             endpoint_dst_port = endpoint_dst_port_vec[idx*16 +: 16];
         end
@@ -126,9 +126,9 @@ module tx_route_selector #(
         end
     endfunction
 
-    function automatic [2:0] spec_route_endpoint(input integer idx);
+    function automatic [7:0] spec_route_endpoint(input integer idx);
         begin
-            spec_route_endpoint = spec_route_endpoint_vec[idx*3 +: 3];
+            spec_route_endpoint = spec_route_endpoint_vec[idx*8 +: 8];
         end
     endfunction
 
@@ -138,9 +138,9 @@ module tx_route_selector #(
         end
     endfunction
 
-    function automatic [2:0] time_route_endpoint(input integer idx);
+    function automatic [7:0] time_route_endpoint(input integer idx);
         begin
-            time_route_endpoint = time_route_endpoint_vec[idx*3 +: 3];
+            time_route_endpoint = time_route_endpoint_vec[idx*8 +: 8];
         end
     endfunction
 
@@ -152,8 +152,8 @@ module tx_route_selector #(
         route_found            = 1'b0;
         route_endpoint_enabled = 1'b0;
         route_is_time_comb     = 1'b0;
-        route_id_comb          = 3'd0;
-        endpoint_id_comb       = 3'd0;
+        route_id_comb          = 6'd0;
+        endpoint_id_comb       = 8'd0;
         packet_chan_end        = parsed_chan0 + {16'd0, parsed_chan_count};
         route_chan_end         = 32'd0;
 
@@ -168,7 +168,7 @@ module tx_route_selector #(
                     (packet_chan_end <= route_chan_end)) begin
                     route_found        = 1'b1;
                     route_is_time_comb = 1'b0;
-                    route_id_comb      = route_idx[2:0];
+                    route_id_comb      = route_idx[5:0];
                     endpoint_id_comb   = spec_route_endpoint(route_idx);
                 end
             end
@@ -179,16 +179,17 @@ module tx_route_selector #(
                     (time_route_input_mask(route_idx) == time_input_mask)) begin
                     route_found        = 1'b1;
                     route_is_time_comb = 1'b1;
-                    route_id_comb      = route_idx[2:0];
+                    route_id_comb      = {3'd0, route_idx[2:0]};
                     endpoint_id_comb   = time_route_endpoint(route_idx);
                 end
             end
         end
 
         if (route_found) begin
-            route_endpoint_enabled = endpoint_enable[endpoint_id_comb];
+            route_endpoint_enabled = ({24'd0, endpoint_id_comb} < N_ENDPOINTS) &&
+                                     endpoint_enable[endpoint_id_comb];
         end else if (!drop_on_route_miss && endpoint_enable[0]) begin
-            endpoint_id_comb       = 3'd0;
+            endpoint_id_comb       = 8'd0;
             route_endpoint_enabled = 1'b1;
         end
     end
@@ -223,8 +224,8 @@ module tx_route_selector #(
             parsed_chan0           <= 32'd0;
             parsed_chan_count      <= 16'd0;
             parsed_payload_bytes   <= 32'd8192;
-            selected_endpoint_id   <= 3'd0;
-            selected_route_id      <= 3'd0;
+            selected_endpoint_id   <= 8'd0;
+            selected_route_id      <= 6'd0;
             selected_route_is_time <= 1'b0;
             selected_dst_mac       <= 48'd0;
             selected_dst_ip        <= 32'd0;

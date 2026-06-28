@@ -73,9 +73,14 @@ module tb_spectral_packetizer;
         .quant_mode(16'd0),
         .scale_mode(16'd0),
         .scale_id(32'h8765_4321),
-        .spec_chan0(32'd128),
-        .spec_time_count(16'd4),
-        .spec_chan_count(16'd64),
+        .spec_chan0(32'd3840),
+        .spec_time_count(16'd1),
+        .spec_chan_count(16'd256),
+        .spec_nchan(16'd4096),
+        .spec_taps(16'd0),
+        .spec_fft_shift(16'd3),
+        .spec_sample_rate_hz(32'd100_000_000),
+        .spec_status_flags(32'h0000_0100),
         .chan_split(32'd2048),
         .s_axis_tdata(s_axis_tdata),
         .s_axis_sample0(s_axis_sample0),
@@ -156,9 +161,11 @@ module tb_spectral_packetizer;
             `TB_CHECK_EQ(captured[base + 4], sample0[63:0], "SPEC sample0")
             `TB_CHECK_EQ(captured[base + 5], frame_id[63:0], "SPEC frame_id")
             `TB_CHECK_EQ(captured[base + 6], {seq[31:0], chan0[31:0]}, "SPEC seq/chan0")
-            `TB_CHECK_EQ(captured[base + 7], {16'd64, 16'd4, 16'd8, 16'd0}, "SPEC layout")
+            `TB_CHECK_EQ(captured[base + 7], {16'd256, 16'd1, 16'd8, 16'd0}, "SPEC layout")
             `TB_CHECK_EQ(captured[base + 8], 64'h8765_4321_0000_2000, "SPEC scale/payload bytes")
-            `TB_CHECK_EQ(captured[base + 9], {63'd0, split_flag}, "SPEC split flag")
+            `TB_CHECK_EQ(captured[base + 9], {16'hf101, 16'd4096, 16'd15, 16'd16}, "SPEC 27h product/block header")
+            `TB_CHECK_EQ(captured[base + 10], {16'd0, 16'd3, 32'h0000_0100}, "SPEC 27h taps/shift/status")
+            `TB_CHECK_EQ(captured[base + 11], {32'd100_000_000, 16'd0, 15'd0, split_flag}, "SPEC 27h sample rate/split flag")
         end
     endtask
 
@@ -191,16 +198,16 @@ module tb_spectral_packetizer;
         `TB_CHECK_EQ(out_count, CAPTURE_WORDS, "SPEC output word count")
         `TB_CHECK_EQ(last_index, CAPTURE_WORDS - 1, "SPEC tlast index")
         `TB_CHECK_EQ(accept_count, INPUT_BEATS, "SPEC accepted input beat count")
-        check_header(0, 0, beat_sample0(0), 0, 128, 0);
+        check_header(0, 0, beat_sample0(0), 0, 3840, 1);
         check_payload(0, 0);
-        check_header(WORDS_PER_PACKET, 1, beat_sample0(256), 1, 128, 0);
+        check_header(WORDS_PER_PACKET, 1, beat_sample0(256), 1, 3840, 1);
         check_payload(WORDS_PER_PACKET, 256);
-        check_header(WORDS_PER_PACKET * 2, 2, beat_sample0(512), 2, 128, 0);
+        check_header(WORDS_PER_PACKET * 2, 2, beat_sample0(512), 2, 3840, 1);
         check_payload(WORDS_PER_PACKET * 2, 512);
         `TB_CHECK_EQ(packet_count, 32'd3, "SPEC packet_count")
         `TB_CHECK_EQ(seq_no_debug, 32'd3, "SPEC seq debug")
         `TB_CHECK_EQ(frame_id_debug, 64'd3, "SPEC frame debug")
-        `TB_CHECK_EQ(chan0_debug, 32'd128, "SPEC chan0 debug from channelizer")
+        `TB_CHECK_EQ(chan0_debug, 32'd3840, "SPEC chan0 debug from channelizer")
         `TB_CHECK_EQ(udp_byte_count, 32'd24960, "SPEC byte count")
         `TB_CHECK_EQ(m_axis_tkeep, 8'hff, "SPEC tkeep")
 

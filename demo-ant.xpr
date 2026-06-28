@@ -95,17 +95,39 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
+      <File Path="$PSRCDIR/sources_1/ip/t510_fengine_xfft_4096/t510_fengine_xfft_4096.xci">
+        <FileInfo>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
       <File Path="$PSRCDIR/sources_1/bd/t510_rfdc_bd/t510_rfdc_bd.bd">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
-        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_xbar_0_9/t510_rfdc_bd_xbar_0.xci">
+        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_rst_ps8_0_100M_0_10/t510_rfdc_bd_rst_ps8_0_100M_0.xci">
+          <Proxy FileSetName="t510_rfdc_bd_rst_ps8_0_100M_0"/>
+        </CompFileExtendedInfo>
+        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_zynq_ultra_ps_e_0_0_10/t510_rfdc_bd_zynq_ultra_ps_e_0_0.xci">
+          <Proxy FileSetName="t510_rfdc_bd_zynq_ultra_ps_e_0_0"/>
+        </CompFileExtendedInfo>
+        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_xbar_0_10/t510_rfdc_bd_xbar_0.xci">
           <Proxy FileSetName="t510_rfdc_bd_xbar_0"/>
         </CompFileExtendedInfo>
-        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_clk_wiz_0_0_9/t510_rfdc_bd_clk_wiz_0_0.xci">
+        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_auto_pc_0_8/t510_rfdc_bd_auto_pc_0.xci">
+          <Proxy FileSetName="t510_rfdc_bd_auto_pc_0"/>
+        </CompFileExtendedInfo>
+        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_clk_wiz_0_0_10/t510_rfdc_bd_clk_wiz_0_0.xci">
           <Proxy FileSetName="t510_rfdc_bd_clk_wiz_0_0"/>
+        </CompFileExtendedInfo>
+        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_pl_mts_sync_clk_0_0_10/t510_rfdc_bd_pl_mts_sync_clk_0_0.xci">
+          <Proxy FileSetName="t510_rfdc_bd_pl_mts_sync_clk_0_0"/>
+        </CompFileExtendedInfo>
+        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_usp_rf_data_converter_0_0_10/t510_rfdc_bd_usp_rf_data_converter_0_0.xci">
+          <Proxy FileSetName="t510_rfdc_bd_usp_rf_data_converter_0_0"/>
         </CompFileExtendedInfo>
       </File>
       <File Path="$PGENDIR/sources_1/bd/t510_rfdc_bd/hdl/t510_rfdc_bd_wrapper.v">
@@ -122,7 +144,7 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
-      <File Path="$PPRDIR/rtl/axis_packet_fifo.sv">
+      <File Path="$PPRDIR/rtl/axis512_register_slice.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
@@ -130,6 +152,13 @@
         </FileInfo>
       </File>
       <File Path="$PPRDIR/rtl/axis_stream_duplicator.sv">
+        <FileInfo>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PPRDIR/rtl/cmac_tx_source_mux.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
@@ -144,13 +173,6 @@
         </FileInfo>
       </File>
       <File Path="$PPRDIR/rtl/feng_ctrl_axi.sv">
-        <FileInfo>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="UsedIn" Val="implementation"/>
-          <Attr Name="UsedIn" Val="simulation"/>
-        </FileInfo>
-      </File>
-      <File Path="$PPRDIR/rtl/fft_debug_observer.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
@@ -192,13 +214,6 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
-      <File Path="$PPRDIR/rtl/rfdc_axis_raw_witness_capture.sv">
-        <FileInfo>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="UsedIn" Val="implementation"/>
-          <Attr Name="UsedIn" Val="simulation"/>
-        </FileInfo>
-      </File>
       <File Path="$PPRDIR/rtl/science_rate_selector.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
@@ -206,7 +221,7 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
-      <File Path="$PPRDIR/rtl/spectral_packetizer.sv">
+      <File Path="$PPRDIR/rtl/spec_udp_cmac512.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
@@ -248,42 +263,14 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
-      <File Path="$PPRDIR/rtl/time_packetizer.sv">
+      <File Path="$PPRDIR/rtl/time_axis512_ddr_ring.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
-      <File Path="$PPRDIR/rtl/tx_header_capture.sv">
-        <FileInfo>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="UsedIn" Val="implementation"/>
-          <Attr Name="UsedIn" Val="simulation"/>
-        </FileInfo>
-      </File>
-      <File Path="$PPRDIR/rtl/tx_payload_witness_capture.sv">
-        <FileInfo>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="UsedIn" Val="implementation"/>
-          <Attr Name="UsedIn" Val="simulation"/>
-        </FileInfo>
-      </File>
-      <File Path="$PPRDIR/rtl/tx_route_selector.sv">
-        <FileInfo>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="UsedIn" Val="implementation"/>
-          <Attr Name="UsedIn" Val="simulation"/>
-        </FileInfo>
-      </File>
-      <File Path="$PPRDIR/rtl/udp_frame_builder.sv">
-        <FileInfo>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="UsedIn" Val="implementation"/>
-          <Attr Name="UsedIn" Val="simulation"/>
-        </FileInfo>
-      </File>
-      <File Path="$PPRDIR/rtl/udp_tx_arbiter.sv">
+      <File Path="$PPRDIR/rtl/time_udp_cmac512.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
@@ -316,6 +303,7 @@
       <Config>
         <Option Name="DesignMode" Val="RTL"/>
         <Option Name="TopModule" Val="t510_fengine_board_top"/>
+        <Define Name="T510_STAGE27H_PRODUCTION_ONLY"/>
       </Config>
     </FileSet>
     <FileSet Name="constrs_1" Type="Constrs" RelSrcDir="$PSRCDIR/constrs_1" RelGenDir="$PGENDIR/constrs_1">
@@ -523,6 +511,52 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
+      <File Path="$PPRDIR/sim/tb_stage25_cmac_live_tx.sv">
+        <FileInfo>
+          <Attr Name="AutoDisabled" Val="1"/>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PPRDIR/sim/tb_time_udp_cmac512.sv">
+        <FileInfo>
+          <Attr Name="AutoDisabled" Val="1"/>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PPRDIR/sim/tb_axis512_register_slice.sv">
+        <FileInfo>
+          <Attr Name="AutoDisabled" Val="1"/>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PPRDIR/sim/tb_time_axis512_ddr_ring.sv">
+        <FileInfo>
+          <Attr Name="AutoDisabled" Val="1"/>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PPRDIR/sim/tb_science_stream_decimator.sv">
+        <FileInfo>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PPRDIR/sim/tb_spec_udp_cmac512.sv">
+        <FileInfo>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
       <Config>
         <Option Name="DesignMode" Val="RTL"/>
         <Option Name="TopModule" Val="tb_t510_fengine_board_top"/>
@@ -553,36 +587,10 @@
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
           <Attr Name="UsedIn" Val="simulation"/>
-          <Attr Name="UsedInSteps" Val="synth_1;SYNTH_DESIGN;TCL.PRE"/>
         </FileInfo>
       </File>
       <Config>
         <Option Name="TopAutoSet" Val="TRUE"/>
-      </Config>
-    </FileSet>
-    <FileSet Name="t510_debug_xfft" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_debug_xfft" RelGenDir="$PGENDIR/t510_debug_xfft">
-      <File Path="$PSRCDIR/sources_1/ip/t510_debug_xfft/t510_debug_xfft.xci">
-        <FileInfo>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="UsedIn" Val="implementation"/>
-          <Attr Name="UsedIn" Val="simulation"/>
-        </FileInfo>
-      </File>
-      <Config>
-        <Option Name="TopModule" Val="t510_debug_xfft"/>
-        <Option Name="UseBlackboxStub" Val="1"/>
-      </Config>
-    </FileSet>
-    <FileSet Name="t510_rfdc_bd_clk_wiz_0_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_rfdc_bd_clk_wiz_0_0" RelGenDir="$PGENDIR/t510_rfdc_bd_clk_wiz_0_0">
-      <Config>
-        <Option Name="TopModule" Val="t510_rfdc_bd_clk_wiz_0_0"/>
-        <Option Name="UseBlackboxStub" Val="1"/>
-      </Config>
-    </FileSet>
-    <FileSet Name="t510_rfdc_bd_xbar_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_rfdc_bd_xbar_0" RelGenDir="$PGENDIR/t510_rfdc_bd_xbar_0">
-      <Config>
-        <Option Name="TopModule" Val="t510_rfdc_bd_xbar_0"/>
-        <Option Name="UseBlackboxStub" Val="1"/>
       </Config>
     </FileSet>
     <FileSet Name="t510_cmac_usplus_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_cmac_usplus_0" RelGenDir="$PGENDIR/t510_cmac_usplus_0">
@@ -595,6 +603,48 @@
       </File>
       <Config>
         <Option Name="TopModule" Val="t510_cmac_usplus_0"/>
+        <Option Name="UseBlackboxStub" Val="1"/>
+      </Config>
+    </FileSet>
+    <FileSet Name="t510_rfdc_bd_rst_ps8_0_100M_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_rfdc_bd_rst_ps8_0_100M_0" RelGenDir="$PGENDIR/t510_rfdc_bd_rst_ps8_0_100M_0">
+      <Config>
+        <Option Name="TopModule" Val="t510_rfdc_bd_rst_ps8_0_100M_0"/>
+        <Option Name="UseBlackboxStub" Val="1"/>
+      </Config>
+    </FileSet>
+    <FileSet Name="t510_rfdc_bd_zynq_ultra_ps_e_0_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_rfdc_bd_zynq_ultra_ps_e_0_0" RelGenDir="$PGENDIR/t510_rfdc_bd_zynq_ultra_ps_e_0_0">
+      <Config>
+        <Option Name="TopModule" Val="t510_rfdc_bd_zynq_ultra_ps_e_0_0"/>
+        <Option Name="UseBlackboxStub" Val="1"/>
+      </Config>
+    </FileSet>
+    <FileSet Name="t510_rfdc_bd_xbar_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_rfdc_bd_xbar_0" RelGenDir="$PGENDIR/t510_rfdc_bd_xbar_0">
+      <Config>
+        <Option Name="TopModule" Val="t510_rfdc_bd_xbar_0"/>
+        <Option Name="UseBlackboxStub" Val="1"/>
+      </Config>
+    </FileSet>
+    <FileSet Name="t510_rfdc_bd_auto_pc_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_rfdc_bd_auto_pc_0" RelGenDir="$PGENDIR/t510_rfdc_bd_auto_pc_0">
+      <Config>
+        <Option Name="TopModule" Val="t510_rfdc_bd_auto_pc_0"/>
+        <Option Name="UseBlackboxStub" Val="1"/>
+      </Config>
+    </FileSet>
+    <FileSet Name="t510_rfdc_bd_pl_mts_sync_clk_0_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_rfdc_bd_pl_mts_sync_clk_0_0" RelGenDir="$PGENDIR/t510_rfdc_bd_pl_mts_sync_clk_0_0">
+      <Config>
+        <Option Name="TopModule" Val="t510_rfdc_bd_pl_mts_sync_clk_0_0"/>
+        <Option Name="UseBlackboxStub" Val="1"/>
+      </Config>
+    </FileSet>
+    <FileSet Name="t510_rfdc_bd_usp_rf_data_converter_0_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_rfdc_bd_usp_rf_data_converter_0_0" RelGenDir="$PGENDIR/t510_rfdc_bd_usp_rf_data_converter_0_0">
+      <Config>
+        <Option Name="TopModule" Val="t510_rfdc_bd_usp_rf_data_converter_0_0"/>
+        <Option Name="UseBlackboxStub" Val="1"/>
+      </Config>
+    </FileSet>
+    <FileSet Name="t510_rfdc_bd_clk_wiz_0_0" Type="BlockSrcs" RelSrcDir="$PSRCDIR/t510_rfdc_bd_clk_wiz_0_0" RelGenDir="$PGENDIR/t510_rfdc_bd_clk_wiz_0_0">
+      <Config>
+        <Option Name="TopModule" Val="t510_rfdc_bd_clk_wiz_0_0"/>
         <Option Name="UseBlackboxStub" Val="1"/>
       </Config>
     </FileSet>
@@ -621,11 +671,15 @@
     </Simulator>
   </Simulators>
   <Runs Version="1" Minor="19">
-    <Run Id="synth_1" Type="Ft3:Synth" SrcSet="sources_1" Part="xczu47dr-ffve1156-2-i" ConstrsSet="constrs_1" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" State="current" Dir="$PRUNDIR/synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/synth_1">
+    <Run Id="synth_1" Type="Ft3:Synth" SrcSet="sources_1" Part="xczu47dr-ffve1156-2-i" ConstrsSet="constrs_1" Description="Trades off Performance and Area for better Runtime." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" State="current" Dir="$PRUNDIR/synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
-        <Step Id="synth_design" PreStepTclHook="$PPRDIR/scripts/vivado_msg_policy.tcl">
-          <Option Id="IncrementalMode">2</Option>
+        <StratHandle Name="Flow_RuntimeOptimized" Flow="Vivado Synthesis 2022">
+          <Desc>Trades off Performance and Area for better Runtime.</Desc>
+        </StratHandle>
+        <Step Id="synth_design">
+          <Option Id="FlattenHierarchy">1</Option>
+          <Option Id="Directive">0</Option>
+          <Option Id="FsmExtraction">0</Option>
         </Step>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -633,7 +687,7 @@
       <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
       <RQSFiles/>
     </Run>
-    <Run Id="t510_debug_xfft_synth_1" Type="Ft3:Synth" SrcSet="t510_debug_xfft" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_debug_xfft" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_debug_xfft_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_debug_xfft_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_debug_xfft_synth_1">
+    <Run Id="t510_cmac_usplus_0_synth_1" Type="Ft3:Synth" SrcSet="t510_cmac_usplus_0" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_cmac_usplus_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_cmac_usplus_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_cmac_usplus_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_cmac_usplus_0_synth_1">
       <Strategy Version="1" Minor="2">
         <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
@@ -643,7 +697,17 @@
       <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
       <RQSFiles/>
     </Run>
-    <Run Id="t510_rfdc_bd_clk_wiz_0_0_synth_1" Type="Ft3:Synth" SrcSet="t510_rfdc_bd_clk_wiz_0_0" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_clk_wiz_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_rfdc_bd_clk_wiz_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_clk_wiz_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_clk_wiz_0_0_synth_1">
+    <Run Id="t510_rfdc_bd_rst_ps8_0_100M_0_synth_1" Type="Ft3:Synth" SrcSet="t510_rfdc_bd_rst_ps8_0_100M_0" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_rst_ps8_0_100M_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_rfdc_bd_rst_ps8_0_100M_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_rst_ps8_0_100M_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_rst_ps8_0_100M_0_synth_1">
+      <Strategy Version="1" Minor="2">
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
+        <Step Id="synth_design"/>
+      </Strategy>
+      <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
+      <ReportStrategy Name="Vivado Synthesis Default Reports" Flow="Vivado Synthesis 2022"/>
+      <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
+      <RQSFiles/>
+    </Run>
+    <Run Id="t510_rfdc_bd_zynq_ultra_ps_e_0_0_synth_1" Type="Ft3:Synth" SrcSet="t510_rfdc_bd_zynq_ultra_ps_e_0_0" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_zynq_ultra_ps_e_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_rfdc_bd_zynq_ultra_ps_e_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_zynq_ultra_ps_e_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_zynq_ultra_ps_e_0_0_synth_1">
       <Strategy Version="1" Minor="2">
         <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
@@ -663,11 +727,9 @@
       <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
       <RQSFiles/>
     </Run>
-    <Run Id="t510_cmac_usplus_0_synth_1" Type="Ft3:Synth" SrcSet="t510_cmac_usplus_0" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_cmac_usplus_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_cmac_usplus_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_cmac_usplus_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_cmac_usplus_0_synth_1">
+    <Run Id="t510_rfdc_bd_auto_pc_0_synth_1" Type="Ft3:Synth" SrcSet="t510_rfdc_bd_auto_pc_0" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_auto_pc_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_rfdc_bd_auto_pc_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_auto_pc_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_auto_pc_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -675,25 +737,62 @@
       <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
       <RQSFiles/>
     </Run>
-    <Run Id="impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="constrs_1" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" State="current" Dir="$PRUNDIR/impl_1" SynthRun="synth_1" IncludeInArchive="true" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/impl_1">
+    <Run Id="t510_rfdc_bd_pl_mts_sync_clk_0_0_synth_1" Type="Ft3:Synth" SrcSet="t510_rfdc_bd_pl_mts_sync_clk_0_0" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_pl_mts_sync_clk_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_rfdc_bd_pl_mts_sync_clk_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_pl_mts_sync_clk_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_pl_mts_sync_clk_0_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
-        <Step Id="init_design"/>
-        <Step Id="opt_design"/>
-        <Step Id="power_opt_design"/>
-        <Step Id="place_design"/>
-        <Step Id="post_place_power_opt_design"/>
-        <Step Id="phys_opt_design"/>
-        <Step Id="route_design"/>
-        <Step Id="post_route_phys_opt_design"/>
-        <Step Id="write_bitstream"/>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
+        <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
+      <ReportStrategy Name="Vivado Synthesis Default Reports" Flow="Vivado Synthesis 2022"/>
+      <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
+      <RQSFiles/>
+    </Run>
+    <Run Id="t510_rfdc_bd_usp_rf_data_converter_0_0_synth_1" Type="Ft3:Synth" SrcSet="t510_rfdc_bd_usp_rf_data_converter_0_0" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_usp_rf_data_converter_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_rfdc_bd_usp_rf_data_converter_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_usp_rf_data_converter_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_usp_rf_data_converter_0_0_synth_1">
+      <Strategy Version="1" Minor="2">
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
+        <Step Id="synth_design"/>
+      </Strategy>
+      <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
+      <ReportStrategy Name="Vivado Synthesis Default Reports" Flow="Vivado Synthesis 2022"/>
+      <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
+      <RQSFiles/>
+    </Run>
+    <Run Id="t510_rfdc_bd_clk_wiz_0_0_synth_1" Type="Ft3:Synth" SrcSet="t510_rfdc_bd_clk_wiz_0_0" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_clk_wiz_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_rfdc_bd_clk_wiz_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_clk_wiz_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_clk_wiz_0_0_synth_1">
+      <Strategy Version="1" Minor="2">
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
+        <Step Id="synth_design"/>
+      </Strategy>
+      <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
+      <ReportStrategy Name="Vivado Synthesis Default Reports" Flow="Vivado Synthesis 2022"/>
+      <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
+      <RQSFiles/>
+    </Run>
+    <Run Id="impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="constrs_1" Description="Fastest possible runtime, all timing-driven behavior disabled. Useful for utilization estimation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" State="current" SynthRun="synth_1" IncludeInArchive="true" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/impl_1">
+      <Strategy Version="1" Minor="2">
+        <StratHandle Name="Flow_Quick" Flow="Vivado Implementation 2022">
+          <Desc>Fastest possible runtime, all timing-driven behavior disabled. Useful for utilization estimation.</Desc>
+        </StratHandle>
+        <Step Id="init_design"/>
+        <Step Id="opt_design">
+          <Option Id="Directive">4</Option>
+        </Step>
+        <Step Id="power_opt_design"/>
+        <Step Id="place_design">
+          <Option Id="Directive">16</Option>
+        </Step>
+        <Step Id="post_place_power_opt_design"/>
+        <Step Id="phys_opt_design" EnableStepBool="0"/>
+        <Step Id="route_design">
+          <Option Id="Directive">6</Option>
+        </Step>
+        <Step Id="post_route_phys_opt_design"/>
+        <Step Id="write_bitstream"/>
+      </Strategy>
       <ReportStrategy Name="Vivado Implementation Default Reports" Flow="Vivado Implementation 2022"/>
       <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
       <RQSFiles/>
     </Run>
-    <Run Id="t510_debug_xfft_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_debug_xfft" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_debug_xfft_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_debug_xfft_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_debug_xfft_impl_1">
+    <Run Id="t510_cmac_usplus_0_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_cmac_usplus_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_cmac_usplus_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_cmac_usplus_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_cmac_usplus_0_impl_1">
       <Strategy Version="1" Minor="2">
         <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
@@ -710,7 +809,24 @@
       <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
       <RQSFiles/>
     </Run>
-    <Run Id="t510_rfdc_bd_clk_wiz_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_clk_wiz_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_rfdc_bd_clk_wiz_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_clk_wiz_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_clk_wiz_0_0_impl_1">
+    <Run Id="t510_rfdc_bd_rst_ps8_0_100M_0_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_rst_ps8_0_100M_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_rfdc_bd_rst_ps8_0_100M_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_rst_ps8_0_100M_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_rst_ps8_0_100M_0_impl_1">
+      <Strategy Version="1" Minor="2">
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
+        <Step Id="init_design"/>
+        <Step Id="opt_design"/>
+        <Step Id="power_opt_design"/>
+        <Step Id="place_design"/>
+        <Step Id="post_place_power_opt_design"/>
+        <Step Id="phys_opt_design"/>
+        <Step Id="route_design"/>
+        <Step Id="post_route_phys_opt_design"/>
+        <Step Id="write_bitstream"/>
+      </Strategy>
+      <ReportStrategy Name="Vivado Implementation Default Reports" Flow="Vivado Implementation 2022"/>
+      <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
+      <RQSFiles/>
+    </Run>
+    <Run Id="t510_rfdc_bd_zynq_ultra_ps_e_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_zynq_ultra_ps_e_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_rfdc_bd_zynq_ultra_ps_e_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_zynq_ultra_ps_e_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_zynq_ultra_ps_e_0_0_impl_1">
       <Strategy Version="1" Minor="2">
         <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
@@ -744,11 +860,60 @@
       <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
       <RQSFiles/>
     </Run>
-    <Run Id="t510_cmac_usplus_0_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_cmac_usplus_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_cmac_usplus_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_cmac_usplus_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_cmac_usplus_0_impl_1">
+    <Run Id="t510_rfdc_bd_auto_pc_0_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_auto_pc_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_rfdc_bd_auto_pc_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_auto_pc_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_auto_pc_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
+        <Step Id="init_design"/>
+        <Step Id="opt_design"/>
+        <Step Id="power_opt_design"/>
+        <Step Id="place_design"/>
+        <Step Id="post_place_power_opt_design"/>
+        <Step Id="phys_opt_design"/>
+        <Step Id="route_design"/>
+        <Step Id="post_route_phys_opt_design"/>
+        <Step Id="write_bitstream"/>
+      </Strategy>
+      <ReportStrategy Name="Vivado Implementation Default Reports" Flow="Vivado Implementation 2022"/>
+      <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
+      <RQSFiles/>
+    </Run>
+    <Run Id="t510_rfdc_bd_pl_mts_sync_clk_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_pl_mts_sync_clk_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_rfdc_bd_pl_mts_sync_clk_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_pl_mts_sync_clk_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_pl_mts_sync_clk_0_0_impl_1">
+      <Strategy Version="1" Minor="2">
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
+        <Step Id="init_design"/>
+        <Step Id="opt_design"/>
+        <Step Id="power_opt_design"/>
+        <Step Id="place_design"/>
+        <Step Id="post_place_power_opt_design"/>
+        <Step Id="phys_opt_design"/>
+        <Step Id="route_design"/>
+        <Step Id="post_route_phys_opt_design"/>
+        <Step Id="write_bitstream"/>
+      </Strategy>
+      <ReportStrategy Name="Vivado Implementation Default Reports" Flow="Vivado Implementation 2022"/>
+      <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
+      <RQSFiles/>
+    </Run>
+    <Run Id="t510_rfdc_bd_usp_rf_data_converter_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_usp_rf_data_converter_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_rfdc_bd_usp_rf_data_converter_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_usp_rf_data_converter_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_usp_rf_data_converter_0_0_impl_1">
+      <Strategy Version="1" Minor="2">
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
+        <Step Id="init_design"/>
+        <Step Id="opt_design"/>
+        <Step Id="power_opt_design"/>
+        <Step Id="place_design"/>
+        <Step Id="post_place_power_opt_design"/>
+        <Step Id="phys_opt_design"/>
+        <Step Id="route_design"/>
+        <Step Id="post_route_phys_opt_design"/>
+        <Step Id="write_bitstream"/>
+      </Strategy>
+      <ReportStrategy Name="Vivado Implementation Default Reports" Flow="Vivado Implementation 2022"/>
+      <Report Name="ROUTE_DESIGN.REPORT_METHODOLOGY" Enabled="1"/>
+      <RQSFiles/>
+    </Run>
+    <Run Id="t510_rfdc_bd_clk_wiz_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_rfdc_bd_clk_wiz_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_rfdc_bd_clk_wiz_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_clk_wiz_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_rfdc_bd_clk_wiz_0_0_impl_1">
+      <Strategy Version="1" Minor="2">
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>

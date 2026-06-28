@@ -12,8 +12,8 @@ module tb_tx_payload_witness_capture;
     logic s_axis_tvalid = 1'b0;
     logic s_axis_tlast = 1'b0;
     logic s_axis_tready = 1'b1;
-    logic [2:0] route_endpoint_id = 3'd0;
-    logic [2:0] route_id = 3'd0;
+    logic [7:0] route_endpoint_id = 8'd0;
+    logic [5:0] route_id = 6'd0;
     logic route_is_time = 1'b0;
     logic [7:0] rd_word = 8'd0;
     wire [31:0] rd_data;
@@ -90,8 +90,8 @@ module tb_tx_payload_witness_capture;
                 3: packet_word = 64'h0000_0000_0000_0007;
                 4: packet_word = 64'h0000_0001_0000_0100;
                 5: packet_word = 64'h0000_0000_0000_0042;
-                6: packet_word = {32'h0000_0011, 32'd64};
-                7: packet_word = 64'h0040_0004_0008_0000;
+                6: packet_word = {32'h0000_0011, 32'd256};
+                7: packet_word = 64'h0100_0001_0008_0000;
                 8: packet_word = 64'h0000_0000_0000_2000;
                 default: packet_word = 64'hf00d_0000_0000_0000 + idx;
             endcase
@@ -164,8 +164,8 @@ module tb_tx_payload_witness_capture;
         reset_dut();
 
         stream_filter = 2'd1;
-        route_endpoint_id = 3'd2;
-        route_id = 3'd3;
+        route_endpoint_id = 8'd42;
+        route_id = 6'd33;
         route_is_time = 1'b0;
         pulse_arm();
         send_packet(16'd0, 32);
@@ -178,11 +178,11 @@ module tb_tx_payload_witness_capture;
         `TB_CHECK_EQ(sample0, 64'h0000_0001_0000_0100, "payload witness sample0")
         `TB_CHECK_EQ(frame_id, 64'h0000_0000_0000_0042, "payload witness frame id")
         `TB_CHECK_EQ(seq_no, 32'h0000_0011, "payload witness seq")
-        `TB_CHECK_EQ(chan0, 32'd64, "payload witness chan0")
-        `TB_CHECK_EQ(layout_word, 64'h0040_0004_0008_0000, "payload witness layout")
+        `TB_CHECK_EQ(chan0, 32'd256, "payload witness chan0")
+        `TB_CHECK_EQ(layout_word, 64'h0100_0001_0008_0000, "payload witness layout")
         `TB_CHECK_EQ(payload_bytes, 32'd8192, "payload witness payload bytes")
-        `TB_CHECK_EQ(route_meta[10:8], 3'd3, "payload witness route id")
-        `TB_CHECK_EQ(route_meta[7:5], 3'd2, "payload witness endpoint id")
+        `TB_CHECK_EQ(route_meta[14:9], 6'd33, "payload witness route id")
+        `TB_CHECK_EQ(route_meta[8:1], 8'd42, "payload witness endpoint id")
         `TB_CHECK_EQ(rfdc_flags, 32'h0000_000f, "payload witness RFDC flags")
         `TB_CHECK_EQ(rfdc_sample_count, 64'h0000_0001_0000_0200, "payload witness RFDC sample count")
         `TB_CHECK_EQ(dac_phase_epoch, 32'd23, "payload witness DAC phase epoch")
@@ -204,8 +204,8 @@ module tb_tx_payload_witness_capture;
         send_packet(16'd1, 20);
         wait_valid();
         `TB_CHECK_EQ(stream_type, 16'd1, "payload witness TIME stream type")
-        `TB_CHECK_EQ(route_meta[7:5], 3'd2, "TIME route endpoint preserved")
-        `TB_CHECK(route_meta[11], "TIME route flag preserved")
+        `TB_CHECK_EQ(route_meta[8:1], 8'd42, "TIME route endpoint preserved")
+        `TB_CHECK(route_meta[15], "TIME route flag preserved")
 
         `TB_PASS("tb_tx_payload_witness_capture")
     end

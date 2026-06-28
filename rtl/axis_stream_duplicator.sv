@@ -9,6 +9,7 @@ module axis_stream_duplicator #(
     input  wire                 time_enable,
     input  wire                 snapshot_enable,
     input  wire                 monitor_enable,
+    input  wire                 spec_drop_when_full,
     input  wire                 time_drop_when_full,
     input  wire                 snapshot_drop_when_full,
     input  wire                 monitor_drop_when_full,
@@ -42,54 +43,63 @@ module axis_stream_duplicator #(
     output wire                 m_monitor_tvalid,
     output wire                 m_monitor_tlast,
     input  wire                 m_monitor_tready,
+    output logic [31:0]         dropped_spec_count,
     output logic [31:0]         dropped_time_count,
     output logic [31:0]         dropped_snapshot_count,
     output logic [31:0]         dropped_monitor_count
 );
 
+    wire spec_must_accept     = spec_enable && !spec_drop_when_full;
     wire time_must_accept     = time_enable && !time_drop_when_full;
     wire snapshot_must_accept = snapshot_enable && !snapshot_drop_when_full;
     wire monitor_must_accept  = monitor_enable && !monitor_drop_when_full;
 
     assign s_axis_tready =
-        (!spec_enable || m_spec_tready) &&
+        (!spec_must_accept || m_spec_tready) &&
         (!time_must_accept || m_time_tready) &&
         (!snapshot_must_accept || m_snapshot_tready) &&
         (!monitor_must_accept || m_monitor_tready);
+
+    wire input_accept = s_axis_tvalid && s_axis_tready;
 
     assign m_spec_tdata  = s_axis_tdata;
     assign m_spec_tuser  = s_axis_tuser;
     assign m_spec_sample0 = s_axis_sample0;
     assign m_spec_tlast  = s_axis_tlast;
-    assign m_spec_tvalid = s_axis_tvalid && spec_enable;
+    assign m_spec_tvalid = input_accept && spec_enable &&
+                           (m_spec_tready || !spec_drop_when_full);
 
     assign m_time_tdata  = s_axis_tdata;
     assign m_time_tuser  = s_axis_tuser;
     assign m_time_sample0 = s_axis_sample0;
     assign m_time_tlast  = s_axis_tlast;
-    assign m_time_tvalid = s_axis_tvalid && time_enable &&
+    assign m_time_tvalid = input_accept && time_enable &&
                            (m_time_tready || !time_drop_when_full);
 
     assign m_snapshot_tdata  = s_axis_tdata;
     assign m_snapshot_tuser  = s_axis_tuser;
     assign m_snapshot_sample0 = s_axis_sample0;
     assign m_snapshot_tlast  = s_axis_tlast;
-    assign m_snapshot_tvalid = s_axis_tvalid && snapshot_enable &&
+    assign m_snapshot_tvalid = input_accept && snapshot_enable &&
                                (m_snapshot_tready || !snapshot_drop_when_full);
 
     assign m_monitor_tdata  = s_axis_tdata;
     assign m_monitor_tuser  = s_axis_tuser;
     assign m_monitor_sample0 = s_axis_sample0;
     assign m_monitor_tlast  = s_axis_tlast;
-    assign m_monitor_tvalid = s_axis_tvalid && monitor_enable &&
+    assign m_monitor_tvalid = input_accept && monitor_enable &&
                               (m_monitor_tready || !monitor_drop_when_full);
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            dropped_spec_count     <= 32'd0;
             dropped_time_count     <= 32'd0;
             dropped_snapshot_count <= 32'd0;
             dropped_monitor_count  <= 32'd0;
-        end else if (s_axis_tvalid && s_axis_tready) begin
+        end else if (input_accept) begin
+            if (spec_enable && spec_drop_when_full && !m_spec_tready) begin
+                dropped_spec_count <= dropped_spec_count + 32'd1;
+            end
             if (time_enable && time_drop_when_full && !m_time_tready) begin
                 dropped_time_count <= dropped_time_count + 32'd1;
             end

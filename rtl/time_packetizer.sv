@@ -17,6 +17,7 @@ module time_packetizer #(
     input  wire [15:0]          scale_mode,
     input  wire [31:0]          scale_id,
     input  wire [15:0]          time_payload_nsamp,
+    input  wire [31:0]          packet_interval_beats,
     input  wire [DATA_W-1:0]    s_axis_tdata,
     input  wire [63:0]          s_axis_sample0,
     input  wire                 s_axis_tvalid,
@@ -64,8 +65,12 @@ module time_packetizer #(
     logic [31:0]               seq_no;
     logic [63:0]               sample0;
     logic [63:0]               frame_id;
+    logic [31:0]               interval_count;
+    wire                       low_rate_mode = (packet_interval_beats != 32'd0);
+    wire                       input_fire = enable && s_axis_tvalid && s_axis_tready;
     wire                       capture_write_en =
-        ((state == ST_IDLE) || (state == ST_CAPTURE)) && enable && s_axis_tvalid;
+        (((state == ST_IDLE) && (interval_count == 32'd0)) || (state == ST_CAPTURE)) &&
+        input_fire;
     wire [ADDR_W-1:0]          capture_write_addr =
         (state == ST_IDLE) ? {ADDR_W{1'b0}} : capture_idx[ADDR_W-1:0];
 
@@ -97,6 +102,16 @@ module time_packetizer #(
         end
     endfunction
 
+    function automatic [31:0] interval_reload(input [31:0] interval);
+        begin
+            if (interval <= 32'd1) begin
+                interval_reload = 32'd0;
+            end else begin
+                interval_reload = interval - 32'd1;
+            end
+        end
+    endfunction
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state                <= ST_IDLE;
@@ -110,6 +125,7 @@ module time_packetizer #(
             seq_no               <= 32'd0;
             sample0              <= 64'd0;
             frame_id             <= 64'd0;
+            interval_count        <= 32'd0;
             packet_count         <= 32'd0;
             dropped_count        <= 32'd0;
             udp_byte_count       <= 32'd0;
@@ -126,27 +142,37 @@ module time_packetizer #(
                 seq_no               <= 32'd0;
                 sample0              <= 64'd0;
                 frame_id             <= 64'd0;
+                interval_count        <= 32'd0;
             end else begin
             case (state)
                 ST_IDLE: begin
-                    if (enable && s_axis_tvalid) begin
-                        payload_beats    <= capture_limit(time_payload_nsamp);
-                        capture_idx      <= 16'd1;
-                        payload_subword  <= 2'd0;
-                        payload_read_idx <= 16'd0;
-                        sample0          <= s_axis_sample0;
-                        packet_count     <= packet_count + 32'd1;
-                        if (capture_limit(time_payload_nsamp) <= 16'd1) begin
-                            state      <= ST_HEADER;
-                            header_idx <= 5'd0;
+                    if (input_fire) begin
+                        if (low_rate_mode && interval_count != 32'd0) begin
+                            interval_count <= interval_count - 32'd1;
+                            dropped_count  <= dropped_count + 32'd1;
                         end else begin
-                            state <= ST_CAPTURE;
+                            payload_beats    <= capture_limit(time_payload_nsamp);
+                            capture_idx      <= 16'd1;
+                            payload_subword  <= 2'd0;
+                            payload_read_idx <= 16'd0;
+                            sample0          <= s_axis_sample0;
+                            packet_count     <= packet_count + 32'd1;
+                            interval_count   <= low_rate_mode ? interval_reload(packet_interval_beats) : 32'd0;
+                            if (capture_limit(time_payload_nsamp) <= 16'd1) begin
+                                state      <= ST_HEADER;
+                                header_idx <= 5'd0;
+                            end else begin
+                                state <= ST_CAPTURE;
+                            end
                         end
                     end
                 end
 
                 ST_CAPTURE: begin
-                    if (enable && s_axis_tvalid) begin
+                    if (input_fire) begin
+                        if (low_rate_mode && interval_count != 32'd0) begin
+                            interval_count <= interval_count - 32'd1;
+                        end
                         if ((capture_idx + 16'd1) >= payload_beats) begin
                             state       <= ST_HEADER;
                             header_idx  <= 5'd0;
@@ -158,6 +184,12 @@ module time_packetizer #(
                 end
 
                 ST_HEADER: begin
+                    if (low_rate_mode && input_fire) begin
+                        if (interval_count != 32'd0) begin
+                            interval_count <= interval_count - 32'd1;
+                        end
+                        dropped_count <= dropped_count + 32'd1;
+                    end
                     if (m_axis_tready) begin
                         if (header_idx == HEADER_WORDS - 1) begin
                             state            <= ST_PRELOAD_WAIT;
@@ -173,15 +205,33 @@ module time_packetizer #(
                 end
 
                 ST_PRELOAD_WAIT: begin
+                    if (low_rate_mode && input_fire) begin
+                        if (interval_count != 32'd0) begin
+                            interval_count <= interval_count - 32'd1;
+                        end
+                        dropped_count <= dropped_count + 32'd1;
+                    end
                     state <= ST_PRELOAD_LOAD;
                 end
 
                 ST_PRELOAD_LOAD: begin
+                    if (low_rate_mode && input_fire) begin
+                        if (interval_count != 32'd0) begin
+                            interval_count <= interval_count - 32'd1;
+                        end
+                        dropped_count <= dropped_count + 32'd1;
+                    end
                     payload_reg <= payload_mem_rd_data;
                     state       <= ST_PAYLOAD;
                 end
 
                 ST_PAYLOAD: begin
+                    if (low_rate_mode && input_fire) begin
+                        if (interval_count != 32'd0) begin
+                            interval_count <= interval_count - 32'd1;
+                        end
+                        dropped_count <= dropped_count + 32'd1;
+                    end
                     if (m_axis_tready) begin
                         udp_byte_count <= udp_byte_count + 32'd8;
                         if (payload_subword == LAST_SUBWORD) begin
@@ -221,14 +271,18 @@ module time_packetizer #(
                 s_axis_tready = enable;
             end
             ST_HEADER: begin
+                s_axis_tready = enable && low_rate_mode;
                 m_axis_tdata  = header_word(header_idx);
                 m_axis_tvalid = 1'b1;
             end
             ST_PRELOAD_WAIT: begin
+                s_axis_tready = enable && low_rate_mode;
             end
             ST_PRELOAD_LOAD: begin
+                s_axis_tready = enable && low_rate_mode;
             end
             ST_PAYLOAD: begin
+                s_axis_tready = enable && low_rate_mode;
                 m_axis_tdata  = payload_reg[payload_subword*OUT_W +: OUT_W];
                 m_axis_tvalid = 1'b1;
                 m_axis_tlast  = ((payload_read_idx + 16'd1) >= payload_beats) &&

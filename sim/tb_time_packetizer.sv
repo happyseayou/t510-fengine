@@ -6,11 +6,14 @@ module tb_time_packetizer;
     localparam integer PACKETS = 2;
     localparam integer CAPTURE_WORDS = WORDS_PER_PACKET * PACKETS;
     localparam integer INPUT_BEATS = PACKETS * 256;
+    localparam integer INTERVAL_INPUT_BEATS = 4096;
+    localparam integer LOW_RATE_INTERVAL_BEATS = 2048;
 
     logic clk = 1'b0;
     logic rst_n = 1'b0;
     logic enable = 1'b0;
     logic stream_reset = 1'b0;
+    logic [31:0] packet_interval_beats = 32'd0;
     logic [255:0] s_axis_tdata = 256'd0;
     logic [63:0]  s_axis_sample0 = 64'd0;
     logic         s_axis_tvalid = 1'b0;
@@ -33,7 +36,7 @@ module tb_time_packetizer;
     integer last_index = -1;
     integer beat_idx = 0;
     integer accept_count = 0;
-    logic [255:0] accepted [0:INPUT_BEATS-1];
+    logic [255:0] accepted [0:INTERVAL_INPUT_BEATS-1];
 
     always #5 clk = ~clk;
 
@@ -75,6 +78,7 @@ module tb_time_packetizer;
         .scale_mode(16'd0),
         .scale_id(32'h1234_5678),
         .time_payload_nsamp(16'd256),
+        .packet_interval_beats(packet_interval_beats),
         .s_axis_tdata(s_axis_tdata),
         .s_axis_sample0(s_axis_sample0),
         .s_axis_tvalid(s_axis_tvalid),
@@ -99,7 +103,7 @@ module tb_time_packetizer;
             s_axis_tdata <= make_sample(0);
             s_axis_sample0 <= beat_sample0(0);
         end else begin
-            if (s_axis_tvalid && s_axis_tready && accept_count < INPUT_BEATS) begin
+            if (s_axis_tvalid && s_axis_tready && accept_count < INTERVAL_INPUT_BEATS) begin
                 accepted[accept_count] <= s_axis_tdata;
                 accept_count <= accept_count + 1;
                 beat_idx <= beat_idx + 1;
@@ -173,6 +177,7 @@ module tb_time_packetizer;
 
     initial begin
         rst_n = 1'b0;
+        packet_interval_beats = 32'd0;
         repeat (5) @(posedge clk);
         rst_n = 1'b1;
         repeat (2) @(posedge clk);
@@ -198,6 +203,26 @@ module tb_time_packetizer;
         `TB_CHECK_EQ(frame_id_debug, 64'd2, "TIME frame debug")
         `TB_CHECK_EQ(udp_byte_count, 32'd16640, "TIME byte count")
         `TB_CHECK_EQ(dropped_count, 32'd0, "TIME dropped count")
+
+        rst_n = 1'b0;
+        enable = 1'b0;
+        s_axis_tvalid = 1'b0;
+        packet_interval_beats = LOW_RATE_INTERVAL_BEATS[31:0];
+        repeat (5) @(posedge clk);
+        rst_n = 1'b1;
+        repeat (2) @(posedge clk);
+        @(negedge clk);
+        enable = 1'b1;
+        s_axis_tvalid = 1'b1;
+        wait_for_packets(PACKETS);
+        s_axis_tvalid = 1'b0;
+        #1;
+
+        check_header(0, 0, beat_sample0(0), 0);
+        check_header(WORDS_PER_PACKET, 1, beat_sample0(LOW_RATE_INTERVAL_BEATS), 1);
+        check_payload(WORDS_PER_PACKET, LOW_RATE_INTERVAL_BEATS);
+        `TB_CHECK(accept_count > LOW_RATE_INTERVAL_BEATS + 256, "TIME interval consumed skipped input beats")
+        `TB_CHECK(dropped_count > 32'd0, "TIME interval counted skipped input beats")
 
         `TB_PASS("tb_time_packetizer")
     end

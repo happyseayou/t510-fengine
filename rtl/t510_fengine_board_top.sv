@@ -148,8 +148,8 @@ module t510_fengine_board_top (
 
     wire [39:0] core_s_axi_awaddr_full;
     wire [39:0] core_s_axi_araddr_full;
-    (* keep = "true" *) wire [15:0] core_s_axi_awaddr_offset;
-    (* keep = "true" *) wire [15:0] core_s_axi_araddr_offset;
+    (* keep = "true" *) wire [17:0] core_s_axi_awaddr_offset;
+    (* keep = "true" *) wire [17:0] core_s_axi_araddr_offset;
     wire        core_s_axi_awvalid;
     wire        core_s_axi_awready;
     wire [1:0]  core_s_axi_awburst;
@@ -190,8 +190,8 @@ module t510_fengine_board_top (
     wire [15:0] core_s_axi_rid;
     wire        core_s_axi_rlast;
 
-    wire [15:0] core_axil_awaddr_offset;
-    wire [15:0] core_axil_araddr_offset;
+    wire [17:0] core_axil_awaddr_offset;
+    wire [17:0] core_axil_araddr_offset;
     wire [31:0] core_axil_awaddr;
     wire        core_axil_awvalid;
     wire        core_axil_awready;
@@ -240,6 +240,45 @@ module t510_fengine_board_top (
     wire          cmac_tx_axis_tvalid;
     wire          cmac_tx_axis_tlast;
     wire          cmac_tx_axis_tready;
+    wire [5:0]    time_ddr_s_axi_awid;
+    wire [39:0]   time_ddr_core_awaddr;
+    wire [48:0]   time_ddr_s_axi_awaddr;
+    wire [7:0]    time_ddr_s_axi_awlen;
+    wire [2:0]    time_ddr_s_axi_awsize;
+    wire [1:0]    time_ddr_s_axi_awburst;
+    wire          time_ddr_s_axi_awlock;
+    wire [3:0]    time_ddr_s_axi_awcache;
+    wire [2:0]    time_ddr_s_axi_awprot;
+    wire [3:0]    time_ddr_s_axi_awqos;
+    wire          time_ddr_s_axi_awvalid;
+    wire          time_ddr_s_axi_awready;
+    wire [127:0]  time_ddr_s_axi_wdata;
+    wire [15:0]   time_ddr_s_axi_wstrb;
+    wire          time_ddr_s_axi_wlast;
+    wire          time_ddr_s_axi_wvalid;
+    wire          time_ddr_s_axi_wready;
+    wire [5:0]    time_ddr_s_axi_bid;
+    wire [1:0]    time_ddr_s_axi_bresp;
+    wire          time_ddr_s_axi_bvalid;
+    wire          time_ddr_s_axi_bready;
+    wire [5:0]    time_ddr_s_axi_arid;
+    wire [39:0]   time_ddr_core_araddr;
+    wire [48:0]   time_ddr_s_axi_araddr;
+    wire [7:0]    time_ddr_s_axi_arlen;
+    wire [2:0]    time_ddr_s_axi_arsize;
+    wire [1:0]    time_ddr_s_axi_arburst;
+    wire          time_ddr_s_axi_arlock;
+    wire [3:0]    time_ddr_s_axi_arcache;
+    wire [2:0]    time_ddr_s_axi_arprot;
+    wire [3:0]    time_ddr_s_axi_arqos;
+    wire          time_ddr_s_axi_arvalid;
+    wire          time_ddr_s_axi_arready;
+    wire [5:0]    time_ddr_s_axi_rid;
+    wire [127:0]  time_ddr_s_axi_rdata;
+    wire [1:0]    time_ddr_s_axi_rresp;
+    wire          time_ddr_s_axi_rlast;
+    wire          time_ddr_s_axi_rvalid;
+    wire          time_ddr_s_axi_rready;
     wire          cmac_gt_refclk_seen;
     wire          cmac_gt_powergood;
     wire          cmac_gt_tx_reset_done;
@@ -373,10 +412,12 @@ module t510_fengine_board_top (
     wire         ref_chain_locked = data_rst_n && all_dac_ready;
     wire         pps_recent = pps_seen_latched && (pps_age_cycles < PPS_RECENT_TIMEOUT_CYCLES);
 
-    assign core_s_axi_awaddr_offset = core_s_axi_awaddr_full[15:0];
-    assign core_s_axi_araddr_offset = core_s_axi_araddr_full[15:0];
-    assign core_axil_awaddr = {16'd0, core_axil_awaddr_offset};
-    assign core_axil_araddr = {16'd0, core_axil_araddr_offset};
+    assign core_s_axi_awaddr_offset = core_s_axi_awaddr_full[17:0];
+    assign core_s_axi_araddr_offset = core_s_axi_araddr_full[17:0];
+    assign core_axil_awaddr = {14'd0, core_axil_awaddr_offset};
+    assign core_axil_araddr = {14'd0, core_axil_araddr_offset};
+    assign time_ddr_s_axi_awaddr = {9'd0, time_ddr_core_awaddr};
+    assign time_ddr_s_axi_araddr = {9'd0, time_ddr_core_araddr};
 
     assign clk_main_sel   = 1'b0;
     assign iic_rst_n      = 1'b1;
@@ -526,6 +567,46 @@ module t510_fengine_board_top (
         .core_s_axi_wready(core_s_axi_wready),
         .core_s_axi_wstrb(core_s_axi_wstrb),
         .core_s_axi_wvalid(core_s_axi_wvalid),
+        .time_ddr_s_axi_aclk(cmac_tx_clk),
+        .time_ddr_s_axi_araddr(time_ddr_s_axi_araddr),
+        .time_ddr_s_axi_arburst(time_ddr_s_axi_arburst),
+        .time_ddr_s_axi_arcache(time_ddr_s_axi_arcache),
+        .time_ddr_s_axi_arid(time_ddr_s_axi_arid),
+        .time_ddr_s_axi_arlen(time_ddr_s_axi_arlen),
+        .time_ddr_s_axi_arlock(time_ddr_s_axi_arlock),
+        .time_ddr_s_axi_arprot(time_ddr_s_axi_arprot),
+        .time_ddr_s_axi_arqos(time_ddr_s_axi_arqos),
+        .time_ddr_s_axi_arready(time_ddr_s_axi_arready),
+        .time_ddr_s_axi_arsize(time_ddr_s_axi_arsize),
+        .time_ddr_s_axi_aruser(1'b0),
+        .time_ddr_s_axi_arvalid(time_ddr_s_axi_arvalid),
+        .time_ddr_s_axi_awaddr(time_ddr_s_axi_awaddr),
+        .time_ddr_s_axi_awburst(time_ddr_s_axi_awburst),
+        .time_ddr_s_axi_awcache(time_ddr_s_axi_awcache),
+        .time_ddr_s_axi_awid(time_ddr_s_axi_awid),
+        .time_ddr_s_axi_awlen(time_ddr_s_axi_awlen),
+        .time_ddr_s_axi_awlock(time_ddr_s_axi_awlock),
+        .time_ddr_s_axi_awprot(time_ddr_s_axi_awprot),
+        .time_ddr_s_axi_awqos(time_ddr_s_axi_awqos),
+        .time_ddr_s_axi_awready(time_ddr_s_axi_awready),
+        .time_ddr_s_axi_awsize(time_ddr_s_axi_awsize),
+        .time_ddr_s_axi_awuser(1'b0),
+        .time_ddr_s_axi_awvalid(time_ddr_s_axi_awvalid),
+        .time_ddr_s_axi_bid(time_ddr_s_axi_bid),
+        .time_ddr_s_axi_bready(time_ddr_s_axi_bready),
+        .time_ddr_s_axi_bresp(time_ddr_s_axi_bresp),
+        .time_ddr_s_axi_bvalid(time_ddr_s_axi_bvalid),
+        .time_ddr_s_axi_rdata(time_ddr_s_axi_rdata),
+        .time_ddr_s_axi_rid(time_ddr_s_axi_rid),
+        .time_ddr_s_axi_rlast(time_ddr_s_axi_rlast),
+        .time_ddr_s_axi_rready(time_ddr_s_axi_rready),
+        .time_ddr_s_axi_rresp(time_ddr_s_axi_rresp),
+        .time_ddr_s_axi_rvalid(time_ddr_s_axi_rvalid),
+        .time_ddr_s_axi_wdata(time_ddr_s_axi_wdata),
+        .time_ddr_s_axi_wlast(time_ddr_s_axi_wlast),
+        .time_ddr_s_axi_wready(time_ddr_s_axi_wready),
+        .time_ddr_s_axi_wstrb(time_ddr_s_axi_wstrb),
+        .time_ddr_s_axi_wvalid(time_ddr_s_axi_wvalid),
         .ctrl_clk(ctrl_clk),
         .ctrl_rst_n(ctrl_rst_n),
         .dac2_clk_clk_n(dac2_clk_clk_n),
@@ -798,7 +879,7 @@ module t510_fengine_board_top (
     );
 
     axi4_to_axil_bridge #(
-        .ADDR_W(16),
+        .ADDR_W(18),
         .DATA_W(32),
         .ID_W(16)
     ) u_core_axi_bridge (
@@ -980,6 +1061,43 @@ module t510_fengine_board_top (
         .cmac_tx_axis_tvalid(cmac_tx_axis_tvalid),
         .cmac_tx_axis_tlast(cmac_tx_axis_tlast),
         .cmac_tx_axis_tready(cmac_tx_axis_tready),
+        .m_axi_ddr_awid(time_ddr_s_axi_awid),
+        .m_axi_ddr_awaddr(time_ddr_core_awaddr),
+        .m_axi_ddr_awlen(time_ddr_s_axi_awlen),
+        .m_axi_ddr_awsize(time_ddr_s_axi_awsize),
+        .m_axi_ddr_awburst(time_ddr_s_axi_awburst),
+        .m_axi_ddr_awlock(time_ddr_s_axi_awlock),
+        .m_axi_ddr_awcache(time_ddr_s_axi_awcache),
+        .m_axi_ddr_awprot(time_ddr_s_axi_awprot),
+        .m_axi_ddr_awqos(time_ddr_s_axi_awqos),
+        .m_axi_ddr_awvalid(time_ddr_s_axi_awvalid),
+        .m_axi_ddr_awready(time_ddr_s_axi_awready),
+        .m_axi_ddr_wdata(time_ddr_s_axi_wdata),
+        .m_axi_ddr_wstrb(time_ddr_s_axi_wstrb),
+        .m_axi_ddr_wlast(time_ddr_s_axi_wlast),
+        .m_axi_ddr_wvalid(time_ddr_s_axi_wvalid),
+        .m_axi_ddr_wready(time_ddr_s_axi_wready),
+        .m_axi_ddr_bid(time_ddr_s_axi_bid),
+        .m_axi_ddr_bresp(time_ddr_s_axi_bresp),
+        .m_axi_ddr_bvalid(time_ddr_s_axi_bvalid),
+        .m_axi_ddr_bready(time_ddr_s_axi_bready),
+        .m_axi_ddr_arid(time_ddr_s_axi_arid),
+        .m_axi_ddr_araddr(time_ddr_core_araddr),
+        .m_axi_ddr_arlen(time_ddr_s_axi_arlen),
+        .m_axi_ddr_arsize(time_ddr_s_axi_arsize),
+        .m_axi_ddr_arburst(time_ddr_s_axi_arburst),
+        .m_axi_ddr_arlock(time_ddr_s_axi_arlock),
+        .m_axi_ddr_arcache(time_ddr_s_axi_arcache),
+        .m_axi_ddr_arprot(time_ddr_s_axi_arprot),
+        .m_axi_ddr_arqos(time_ddr_s_axi_arqos),
+        .m_axi_ddr_arvalid(time_ddr_s_axi_arvalid),
+        .m_axi_ddr_arready(time_ddr_s_axi_arready),
+        .m_axi_ddr_rid(time_ddr_s_axi_rid),
+        .m_axi_ddr_rdata(time_ddr_s_axi_rdata),
+        .m_axi_ddr_rresp(time_ddr_s_axi_rresp),
+        .m_axi_ddr_rlast(time_ddr_s_axi_rlast),
+        .m_axi_ddr_rvalid(time_ddr_s_axi_rvalid),
+        .m_axi_ddr_rready(time_ddr_s_axi_rready),
         .tx_link_status_flags(tx_link_status_flags),
         .tx_dry_run_packet_count(tx_packet_count),
         .tx_dry_run_byte_count(tx_word_count << 3),

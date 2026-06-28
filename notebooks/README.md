@@ -1,17 +1,28 @@
-# Notebook Skeletons
+# T510 Jupyter Entry Points
 
-Recommended notebook sequence:
+## Stage 27h Production
 
-1. `00_board_check.ipynb`
-2. `01_clock_lmk_check.ipynb`
-3. `02_rfdc_snapshot.ipynb`
-4. `03_rfdc_spectrum.ipynb`
-5. `04_pfb_tone_test.ipynb`
-6. `05_udp_packet_test.ipynb`
-7. `06_spec_stream_run.ipynb`
-8. `07_time_stream_run.ipynb`
-9. `08_lab_rfdc_fft_debug.ipynb`
+Use one notebook for the current production workflow:
 
-The repository ships these as minimal templates so the overlay API and bring-up flow stay stable while the board-specific data movers are completed.
+1. `15_stage27h_time_spec_fft_fullrate_control.ipynb`
 
-`08_lab_rfdc_fft_debug.ipynb` is the current hands-on RFDC bring-up notebook for the no-PPS/no-external-10MHz lab setup. It loads the latest overlay, switches to `tcxo_10mhz + free_run`, and exposes ADC0 time waveform plus hardware FFT debug spectrum through interactive buttons.
+This is the Stage 27h Jupyter control and preview surface for:
+
+- TIME/SPEC science stream configuration and status.
+- Receiver IP/port/MAC, mode, bandwidth, center frequency, and 8-lane DAC-ADC loopback control.
+- DAC tone frequency, amplitude, and per-lane phase control.
+- RF-reconstructed waveform preview from real RFDC preview IQ.
+- FFT-only production spectrum preview.
+
+Stage 27h production uses TIME ports `4300..4307`, SPEC ports `4308..4323`,
+and the `FENGINE_IQ16` FFT-only SPEC contract: `4096` channels, `16` blocks,
+`256` channels/block, `1` spectrum-time, `8` inputs, `8192B` payload.
+
+## Archived Bring-Up Notebooks
+
+Older notebooks remain in the repository only as bring-up references for clock,
+RFDC, UDP dry-run, DAC/ADC loopback, and historical debug checks. They are not
+Stage 27h production pass criteria. `14_stage27g_time_spec_fengine_control.ipynb`
+is retained as the Stage 27g `/32` cadence reference, and
+`13_astronomer_rf_observation_console.ipynb` remains an archived rich
+observation/debug console.

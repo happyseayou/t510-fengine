@@ -85,6 +85,8 @@ proc create_t510_rfdc_bd {} {
     apply_bd_automation -rule xilinx.com:bd_rule:zynq_ultra_ps_e -config {apply_board_preset "0"} $ps
     set_property -dict [list \
         CONFIG.PSU__USE__M_AXI_GP2 {1} \
+        CONFIG.PSU__USE__S_AXI_GP0 {1} \
+        CONFIG.PSU__SAXIGP0__DATA_WIDTH {128} \
         CONFIG.PSU__USE__IRQ0 {1} \
         CONFIG.PSU__GPIO_EMIO__PERIPHERAL__ENABLE {1} \
         CONFIG.PSU__GPIO_EMIO__PERIPHERAL__IO {1} \
@@ -112,7 +114,7 @@ proc create_t510_rfdc_bd {} {
     set_property -dict [list \
         CONFIG.PRIM_IN_FREQ {245.760} \
         CONFIG.PRIM_SOURCE {No_buffer} \
-        CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {61.440} \
+        CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {122.880} \
         CONFIG.CLKOUT2_USED {true} \
         CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {61.440} \
         CONFIG.RESET_TYPE {ACTIVE_LOW} \
@@ -260,6 +262,8 @@ proc create_t510_rfdc_bd {} {
     connect_bd_intf_net [get_bd_intf_pins zynq_ultra_ps_e_0/M_AXI_HPM0_LPD] [get_bd_intf_pins ps8_0_axi_periph/S00_AXI]
     connect_bd_intf_net [get_bd_intf_pins ps8_0_axi_periph/M00_AXI] [get_bd_intf_pins usp_rf_data_converter_0/s_axi]
     _externalize_intf [get_bd_intf_pins ps8_0_axi_periph/M01_AXI] core_s_axi
+    _externalize_intf [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HPC0_FPD] time_ddr_s_axi
+    _externalize_pin [get_bd_pins zynq_ultra_ps_e_0/saxihpc0_fpd_aclk] time_ddr_s_axi_aclk
     set ctrl_freq_hz [_pin_freq_or_default [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] 100000000]
 
     create_bd_port -dir I -type clk -freq_hz 245760000 pl_clk_p
@@ -270,8 +274,9 @@ proc create_t510_rfdc_bd {} {
     connect_bd_net [get_bd_ports pl_clk_n] [get_bd_pins pl_mts_sync_clk_0/pl_clk_n]
     connect_bd_net [get_bd_ports pl_sys_ref_p] [get_bd_pins pl_mts_sync_clk_0/pl_sys_ref_p]
     connect_bd_net [get_bd_ports pl_sys_ref_n] [get_bd_pins pl_mts_sync_clk_0/pl_sys_ref_n]
-    # RFDC AXIS and F-engine data clocks are derived from the LMK/PL 245.760 MHz
-    # clock so the 61.440 MHz beat rate matches the RFDC sample-rate contract.
+    # RFDC ADC AXIS and the F-engine data path run at 122.880 MHz so the
+    # 1024b-to-256b F-engine feed can sustain the 100 MHz production SPEC rate.
+    # DAC AXIS remains at 61.440 MHz for the existing loopback source contract.
     # PS pl_clk0 stays on AXI/control and RFDC s_axi only.
     connect_bd_net [get_bd_pins pl_mts_sync_clk_0/pl_clk] [get_bd_pins clk_wiz_0/clk_in1]
     connect_bd_net [get_bd_pins pl_mts_sync_clk_0/user_sysref_adc] [get_bd_pins usp_rf_data_converter_0/user_sysref_adc]
@@ -295,18 +300,21 @@ proc create_t510_rfdc_bd {} {
         [get_bd_pins usp_rf_data_converter_0/s1_axis_aresetn] \
         [get_bd_pins usp_rf_data_converter_0/s2_axis_aresetn] \
         [get_bd_pins usp_rf_data_converter_0/s3_axis_aresetn]
-    set axis_freq_hz [_pin_freq_or_default [get_bd_pins clk_wiz_0/clk_out1] 61440000]
+    set adc_axis_freq_hz [_pin_freq_or_default [get_bd_pins clk_wiz_0/clk_out1] 122880000]
+    set dac_axis_freq_hz [_pin_freq_or_default [get_bd_pins clk_wiz_0/clk_out2] 61440000]
     create_bd_port -dir O -type clk adc_m_axis_clk
     create_bd_port -dir O -type clk dac_s_axis_clk
     create_bd_port -dir O -type clk ctrl_clk
     create_bd_port -dir O data_rst_n
     create_bd_port -dir O ctrl_rst_n
-    set_property CONFIG.FREQ_HZ $axis_freq_hz [get_bd_ports adc_m_axis_clk]
-    set_property CONFIG.FREQ_HZ $axis_freq_hz [get_bd_ports dac_s_axis_clk]
+    set_property CONFIG.FREQ_HZ $adc_axis_freq_hz [get_bd_ports adc_m_axis_clk]
+    set_property CONFIG.FREQ_HZ $dac_axis_freq_hz [get_bd_ports dac_s_axis_clk]
     set_property CONFIG.FREQ_HZ $ctrl_freq_hz [get_bd_ports ctrl_clk]
+    set_property CONFIG.FREQ_HZ 322265625 [get_bd_ports time_ddr_s_axi_aclk]
     set_property CONFIG.ASSOCIATED_BUSIF {m00_axis:m01_axis:m02_axis:m03_axis:m10_axis:m11_axis:m12_axis:m13_axis:m20_axis:m21_axis:m22_axis:m23_axis:m30_axis:m31_axis:m32_axis:m33_axis} [get_bd_ports adc_m_axis_clk]
     set_property CONFIG.ASSOCIATED_BUSIF {s00_axis:s02_axis:s10_axis:s12_axis:s20_axis:s22_axis:s30_axis:s32_axis} [get_bd_ports dac_s_axis_clk]
     set_property CONFIG.ASSOCIATED_BUSIF {core_s_axi} [get_bd_ports ctrl_clk]
+    set_property CONFIG.ASSOCIATED_BUSIF {time_ddr_s_axi} [get_bd_ports time_ddr_s_axi_aclk]
     connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_ports adc_m_axis_clk]
     connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_ports dac_s_axis_clk]
     connect_bd_net [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] [get_bd_ports ctrl_clk]

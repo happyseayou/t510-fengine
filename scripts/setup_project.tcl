@@ -16,11 +16,14 @@ if {![file exists [file join $repo_root rtl pl_mts_sync_clk.v]]} {
     }
 }
 
+set t510_stage27h_production_only [expr {[info exists ::T510_STAGE27H_PRODUCTION_ONLY] && $::T510_STAGE27H_PRODUCTION_ONLY}]
+
 set rtl_files [list \
     [file join $repo_root rtl pl_mts_sync_clk.v] \
     [file join $repo_root rtl sync_fsm.sv] \
     [file join $repo_root rtl axis_stream_duplicator.sv] \
     [file join $repo_root rtl science_rate_selector.sv] \
+    [file join $repo_root rtl science_stream_decimator.sv] \
     [file join $repo_root rtl requantizer.sv] \
     [file join $repo_root rtl monitor_counters.sv] \
     [file join $repo_root rtl time_packetizer.sv] \
@@ -30,6 +33,12 @@ set rtl_files [list \
     [file join $repo_root rtl axis_packet_fifo.sv] \
     [file join $repo_root rtl tx_route_selector.sv] \
     [file join $repo_root rtl udp_frame_builder.sv] \
+    [file join $repo_root rtl axis64_to_cmac512_async.sv] \
+    [file join $repo_root rtl axis512_register_slice.sv] \
+    [file join $repo_root rtl time_axis512_ddr_ring.sv] \
+    [file join $repo_root rtl time_udp_cmac512.sv] \
+    [file join $repo_root rtl spec_udp_cmac512.sv] \
+    [file join $repo_root rtl cmac_tx_source_mux.sv] \
     [file join $repo_root rtl t510_qsfp_test_frame_gen.sv] \
     [file join $repo_root rtl t510_cmac_qsfp0.sv] \
     [file join $repo_root rtl tx_header_capture.sv] \
@@ -48,6 +57,30 @@ set rtl_files [list \
     [file join $repo_root rtl t510_fengine_board_top.sv] \
 ]
 
+if {$t510_stage27h_production_only} {
+    set stage27h_archived_bringup_rtl [list \
+        [file join $repo_root rtl science_stream_decimator.sv] \
+        [file join $repo_root rtl time_packetizer.sv] \
+        [file join $repo_root rtl spectral_packetizer.sv] \
+        [file join $repo_root rtl udp_tx_arbiter.sv] \
+        [file join $repo_root rtl axis_packet_fifo.sv] \
+        [file join $repo_root rtl tx_route_selector.sv] \
+        [file join $repo_root rtl udp_frame_builder.sv] \
+        [file join $repo_root rtl axis64_to_cmac512_async.sv] \
+        [file join $repo_root rtl tx_header_capture.sv] \
+        [file join $repo_root rtl tx_payload_witness_capture.sv] \
+        [file join $repo_root rtl rfdc_axis_raw_witness_capture.sv] \
+        [file join $repo_root rtl fft_debug_observer.sv] \
+    ]
+    set filtered_rtl_files [list]
+    foreach f $rtl_files {
+        if {[lsearch -exact $stage27h_archived_bringup_rtl $f] < 0} {
+            lappend filtered_rtl_files $f
+        }
+    }
+    set rtl_files $filtered_rtl_files
+}
+
 set xdc_files [list \
     [file join $repo_root xdc base_clocks.xdc] \
     [file join $repo_root xdc implementation_clocks.xdc] \
@@ -63,6 +96,7 @@ set sim_files [list \
     [file join $repo_root sim tb_t510_dac_loopback_source.sv] \
     [file join $repo_root sim tb_rfdc_adc_axis_adapter.sv] \
     [file join $repo_root sim tb_science_rate_selector.sv] \
+    [file join $repo_root sim tb_science_stream_decimator.sv] \
     [file join $repo_root sim tb_rfdc_fullrate_preview.sv] \
     [file join $repo_root sim tb_axis_stream_duplicator.sv] \
     [file join $repo_root sim tb_time_packetizer.sv] \
@@ -72,6 +106,11 @@ set sim_files [list \
     [file join $repo_root sim tb_axis_packet_fifo.sv] \
     [file join $repo_root sim tb_tx_route_selector.sv] \
     [file join $repo_root sim tb_udp_frame_builder.sv] \
+    [file join $repo_root sim tb_axis512_register_slice.sv] \
+    [file join $repo_root sim tb_time_axis512_ddr_ring.sv] \
+    [file join $repo_root sim tb_time_udp_cmac512.sv] \
+    [file join $repo_root sim tb_spec_udp_cmac512.sv] \
+    [file join $repo_root sim tb_stage25_cmac_live_tx.sv] \
     [file join $repo_root sim tb_tx_payload_witness_capture.sv] \
     [file join $repo_root sim tb_dac_tx_witness_capture.sv] \
     [file join $repo_root sim tb_rfdc_axis_raw_witness_capture.sv] \
@@ -86,11 +125,35 @@ foreach f $rtl_files {
     }
 }
 
-set debug_xfft_xci [file join $repo_root demo-ant.srcs sources_1 ip t510_debug_xfft t510_debug_xfft.xci]
-if {[file exists $debug_xfft_xci] && [llength [get_files -quiet $debug_xfft_xci]] == 0} {
-    add_files -norecurse -fileset sources_1 $debug_xfft_xci
+if {$t510_stage27h_production_only} {
+    foreach f $stage27h_archived_bringup_rtl {
+        set old_files [get_files -quiet $f]
+        if {[llength $old_files] != 0} {
+            remove_files -fileset sources_1 $old_files
+        }
+    }
 }
 
+set debug_xfft_xci [file join $repo_root demo-ant.srcs sources_1 ip t510_debug_xfft t510_debug_xfft.xci]
+if {!$t510_stage27h_production_only && [file exists $debug_xfft_xci] && [llength [get_files -quiet $debug_xfft_xci]] == 0} {
+    add_files -norecurse -fileset sources_1 $debug_xfft_xci
+} elseif {$t510_stage27h_production_only && [llength [get_files -quiet $debug_xfft_xci]] != 0} {
+    remove_files -fileset sources_1 [get_files -quiet $debug_xfft_xci]
+}
+
+set fengine_xfft_xci_candidates [list \
+    [file join $repo_root demo-ant.srcs sources_1 ip t510_fengine_xfft_4096 t510_fengine_xfft_4096.xci] \
+]
+foreach fengine_xfft_extra [glob -nocomplain [file join $repo_root demo-ant.srcs sources_1 ip t510_fengine_xfft_4096* t510_fengine_xfft_4096.xci]] {
+    if {[lsearch -exact $fengine_xfft_xci_candidates $fengine_xfft_extra] < 0} {
+        lappend fengine_xfft_xci_candidates $fengine_xfft_extra
+    }
+}
+foreach fengine_xfft_xci $fengine_xfft_xci_candidates {
+    if {[file exists $fengine_xfft_xci] && [llength [get_ips -quiet t510_fengine_xfft_4096]] == 0 && [llength [get_files -quiet $fengine_xfft_xci]] == 0} {
+        add_files -norecurse -fileset sources_1 $fengine_xfft_xci
+    }
+}
 set cmac_xci [file join $repo_root demo-ant.srcs sources_1 ip t510_cmac_usplus_0 t510_cmac_usplus_0.xci]
 if {[file exists $cmac_xci] && [llength [get_files -quiet $cmac_xci]] == 0} {
     add_files -norecurse -fileset sources_1 $cmac_xci

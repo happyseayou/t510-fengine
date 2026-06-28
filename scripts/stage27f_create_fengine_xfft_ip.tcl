@@ -1,0 +1,104 @@
+set script_path [info script]
+if {$script_path eq ""} {
+    set origin_dir [pwd]
+} else {
+    set origin_dir [file dirname [file normalize $script_path]]
+}
+set repo_root [file normalize [file join $origin_dir ".."]]
+set ip_name t510_fengine_xfft_4096
+set canonical_xci [file join $repo_root demo-ant.srcs sources_1 ip $ip_name ${ip_name}.xci]
+
+if {[llength [get_projects -quiet]] == 0} {
+    open_project [file join $repo_root demo-ant.xpr]
+}
+
+set existing [get_ips -quiet $ip_name]
+if {[llength $existing] != 0} {
+    set existing_ip_file [file normalize [get_property IP_FILE [lindex $existing 0]]]
+    if {$existing_ip_file ne [file normalize $canonical_xci]} {
+        puts "STAGE27F_XFFT: replacing non-canonical IP_FILE=$existing_ip_file"
+        set existing_files [get_files -quiet $existing_ip_file]
+        if {[llength $existing_files] != 0} {
+            remove_files $existing_files
+        }
+        set existing [get_ips -quiet $ip_name]
+    }
+}
+foreach stale_dir [list \
+    [file join $repo_root demo-ant.srcs sources_1 ip ${ip_name}_1] \
+    [file join $repo_root demo-ant.gen sources_1 ip ${ip_name}_1] \
+] {
+    if {[file exists $stale_dir]} {
+        puts "STAGE27F_XFFT: deleting stale duplicate $stale_dir"
+        file delete -force $stale_dir
+    }
+}
+if {[llength $existing] == 0 && [file exists $canonical_xci]} {
+    add_files -norecurse -fileset sources_1 $canonical_xci
+    set existing [get_ips -quiet $ip_name]
+}
+if {[llength $existing] == 0} {
+    create_ip -name xfft -vendor xilinx.com -library ip -version 9.1 -module_name $ip_name
+    set ip [get_ips $ip_name]
+} else {
+    set ip [lindex $existing 0]
+}
+
+proc set_cfg {ip key value {required 1}} {
+    set prop "CONFIG.$key"
+    if {[catch {set_property $prop $value $ip} msg]} {
+        if {$required} {
+            error "failed to set $prop=$value: $msg"
+        } else {
+            puts "WARN: skipped $prop=$value: $msg"
+        }
+        return 0
+    }
+    return 1
+}
+
+set_cfg $ip channels 8
+set_cfg $ip transform_length 4096
+set_cfg $ip target_clock_frequency 250
+set_cfg $ip target_data_throughput 100 0
+set_cfg $ip run_time_configurable_transform_length false
+set_cfg $ip data_format fixed_point
+set_cfg $ip input_width 16
+set_cfg $ip phase_factor_width 16
+set_cfg $ip scaling_options scaled
+set_cfg $ip rounding_modes truncation
+set_cfg $ip aclken false
+set_cfg $ip aresetn false
+set_cfg $ip ovflo true 0
+set_cfg $ip xk_index true 0
+set_cfg $ip throttle_scheme nonrealtime 0
+set_cfg $ip output_ordering natural_order 0
+set_cfg $ip cyclic_prefix_insertion false
+set_cfg $ip memory_options_data block_ram
+set_cfg $ip memory_options_phase_factors block_ram
+set_cfg $ip memory_options_reorder block_ram
+set_cfg $ip complex_mult_type use_mults_resources
+
+set impl_ok 0
+foreach impl {automatically_select radix_4_burst_io radix_2_burst_io radix_2_lite_burst_io} {
+    if {[set_cfg $ip implementation_options $impl 0]} {
+        set impl_ok 1
+        puts "STAGE27F_XFFT_IMPLEMENTATION_OPTIONS=$impl"
+        break
+    }
+}
+if {!$impl_ok} {
+    error "no supported XFFT implementation_options value accepted"
+}
+
+set ip_file_obj [get_files -quiet [get_property IP_FILE $ip]]
+if {[llength $ip_file_obj] != 0} {
+    set_property GENERATE_SYNTH_CHECKPOINT true $ip_file_obj
+}
+generate_target all $ip
+set ooc_run [get_runs -quiet ${ip_name}_synth_1]
+if {[llength $ooc_run] == 0} {
+    create_ip_run $ip
+}
+export_ip_user_files -of_objects $ip -no_script -sync -force -quiet
+puts "STAGE27F_XFFT_IP_READY name=$ip_name xci=[get_property IP_FILE $ip]"

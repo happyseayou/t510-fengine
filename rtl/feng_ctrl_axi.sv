@@ -1,7 +1,10 @@
 module feng_ctrl_axi #(
     parameter integer AXI_ADDR_W = 32,
     parameter integer AXI_DATA_W = 32,
-    parameter integer NINPUT     = 8
+    parameter integer NINPUT     = 8,
+    parameter integer N_TX_ENDPOINTS = 72,
+    parameter integer N_SPEC_ROUTES  = 64,
+    parameter integer N_TIME_ROUTES  = 8
 ) (
     input  wire                         s_axi_aclk,
     input  wire                         s_axi_aresetn,
@@ -39,6 +42,7 @@ module feng_ctrl_axi #(
     input  wire [31:0]                  time_packet_count,
     input  wire [31:0]                  time_udp_byte_count,
     input  wire [31:0]                  time_dropped_count,
+    input  wire [31:0]                  spec_dropped_count,
     input  wire [31:0]                  spec_seq_no,
     input  wire [31:0]                  time_seq_no,
     input  wire [63:0]                  time_sample0,
@@ -50,6 +54,7 @@ module feng_ctrl_axi #(
     input  wire [31:0]                  rfdc_dropped_count,
     input  wire [15:0]                  rfdc_current_valid_mask,
     input  wire [15:0]                  rfdc_seen_valid_mask,
+    input  wire [31:0]                  science_dropped_beat_count,
     input  wire [31:0]                  tx_link_status_flags,
     input  wire [31:0]                  tx_dry_run_packet_count,
     input  wire [31:0]                  tx_dry_run_byte_count,
@@ -63,8 +68,9 @@ module feng_ctrl_axi #(
     input  wire [31:0]                  tx_frame_byte_count,
     input  wire [31:0]                  tx_route_miss_count,
     input  wire [31:0]                  tx_route_error_count,
-    input  wire [2:0]                   tx_selected_endpoint_id,
-    input  wire [2:0]                   tx_selected_route_id,
+    input  wire [31:0]                  tx_cmac_source_status,
+    input  wire [7:0]                   tx_selected_endpoint_id,
+    input  wire [5:0]                   tx_selected_route_id,
     input  wire                         tx_selected_route_is_time,
     input  wire                         tx_header_capture_armed,
     input  wire                         tx_header_capture_valid,
@@ -118,13 +124,30 @@ module feng_ctrl_axi #(
     input  wire [31:0]                  rfdc_axis_raw_witness_rfdc_flags,
     input  wire [15:0]                  rfdc_axis_raw_witness_valid_mask,
     input  wire [31:0]                  rfdc_axis_raw_witness_rd_data,
-    input  wire [NINPUT*32-1:0]         tx_spec_route_hit_counts,
-    input  wire [NINPUT*32-1:0]         tx_time_route_hit_counts,
+    input  wire [N_SPEC_ROUTES*32-1:0]  tx_spec_route_hit_counts,
+    input  wire [N_TIME_ROUTES*32-1:0]  tx_time_route_hit_counts,
     input  wire [31:0]                  pfb_status,
     input  wire [31:0]                  pfb_frame_count,
     input  wire [31:0]                  pfb_overflow_count,
+    input  wire [31:0]                  pfb_data_halt_count,
+    input  wire [31:0]                  pfb_xfft_event_count,
+    input  wire [31:0]                  pfb_tile_overflow_count,
+    input  wire [31:0]                  pfb_xfft_tlast_unexpected_count,
+    input  wire [31:0]                  pfb_xfft_tlast_missing_count,
+    input  wire [31:0]                  pfb_xfft_fft_overflow_count,
+    input  wire [31:0]                  pfb_xfft_data_out_halt_count,
+    input  wire [31:0]                  pfb_xfft_status_halt_count,
+    input  wire [31:0]                  pfb_capture_backpressure_count,
+    input  wire [31:0]                  pfb_frame_sample0_overflow_count,
+    input  wire [31:0]                  pfb_input_fifo_level,
     input  wire [31:0]                  pfb_peak_chan,
     input  wire [31:0]                  pfb_peak_power,
+    input  wire [31:0]                  time_ddr_ring_status,
+    input  wire [31:0]                  time_ddr_ring_occupancy,
+    input  wire [31:0]                  time_ddr_ring_write_count,
+    input  wire [31:0]                  time_ddr_ring_read_count,
+    input  wire [31:0]                  time_ddr_ring_drop_count,
+    input  wire [31:0]                  time_ddr_ring_error_count,
     input  wire                         debug_busy,
     input  wire                         debug_done,
     input  wire                         debug_error,
@@ -197,19 +220,19 @@ module feng_ctrl_axi #(
     output logic [15:0]                 time_udp_port,
     output logic [31:0]                 tx_control,
     output logic                        tx_clear_pulse,
-    output logic [NINPUT-1:0]           tx_endpoint_enable,
-    output logic [NINPUT*32-1:0]        tx_endpoint_ip_vec,
-    output logic [NINPUT*48-1:0]        tx_endpoint_mac_vec,
-    output logic [NINPUT*16-1:0]        tx_endpoint_src_port_vec,
-    output logic [NINPUT*16-1:0]        tx_endpoint_dst_port_vec,
+    output logic [N_TX_ENDPOINTS-1:0]   tx_endpoint_enable,
+    output logic [N_TX_ENDPOINTS*32-1:0] tx_endpoint_ip_vec,
+    output logic [N_TX_ENDPOINTS*48-1:0] tx_endpoint_mac_vec,
+    output logic [N_TX_ENDPOINTS*16-1:0] tx_endpoint_src_port_vec,
+    output logic [N_TX_ENDPOINTS*16-1:0] tx_endpoint_dst_port_vec,
     output logic [31:0]                 qsfp_test_interval_cycles,
-    output logic [NINPUT-1:0]           tx_spec_route_enable,
-    output logic [NINPUT*32-1:0]        tx_spec_route_chan0_vec,
-    output logic [NINPUT*16-1:0]        tx_spec_route_chan_count_vec,
-    output logic [NINPUT*3-1:0]         tx_spec_route_endpoint_vec,
-    output logic [NINPUT-1:0]           tx_time_route_enable,
-    output logic [NINPUT*16-1:0]        tx_time_route_input_mask_vec,
-    output logic [NINPUT*3-1:0]         tx_time_route_endpoint_vec,
+    output logic [N_SPEC_ROUTES-1:0]    tx_spec_route_enable,
+    output logic [N_SPEC_ROUTES*32-1:0] tx_spec_route_chan0_vec,
+    output logic [N_SPEC_ROUTES*16-1:0] tx_spec_route_chan_count_vec,
+    output logic [N_SPEC_ROUTES*8-1:0]  tx_spec_route_endpoint_vec,
+    output logic [N_TIME_ROUTES-1:0]    tx_time_route_enable,
+    output logic [N_TIME_ROUTES*16-1:0] tx_time_route_input_mask_vec,
+    output logic [N_TIME_ROUTES*8-1:0]  tx_time_route_endpoint_vec,
     output logic [15:0]                 rfdc_active_mask,
     output logic                        debug_capture_start_pulse,
     output logic                        debug_capture_clear_pulse,
@@ -255,11 +278,19 @@ module feng_ctrl_axi #(
     output logic [8:0]                  rfdc_axis_raw_witness_capture_beats,
     output logic [9:0]                  rfdc_axis_raw_witness_rd_word,
     output logic [63:0]                 unix_seconds,
+    output logic [31:0]                 time_live_interval_beats,
+    output logic                        time_ddr_ring_enable,
+    output logic                        time_ddr_ring_clear_pulse,
+    output logic [63:0]                 time_ddr_ring_base_addr,
+    output logic [15:0]                 time_ddr_ring_slots,
+    output logic                        time_multiflow_enable,
+    output logic [2:0]                  time_multiflow_base_endpoint,
+    output logic [3:0]                  time_multiflow_count,
     output wire [1:0]                   science_bandwidth_mode_cfg,
     output wire [2:0]                   science_output_mode_cfg
 );
 
-    localparam [31:0] CORE_VERSION = 32'h0001_001A;
+    localparam [31:0] CORE_VERSION = 32'h0001_0026;
     localparam [31:0] DEBUG_NFFT = 32'd1024;
     localparam [31:0] DEBUG_OBS_SAMPLE_RATE_HZ = 32'd61_440_000;
     localparam [31:0] PREVIEW_SAMPLE_RATE_HZ = 32'd245_760_000;
@@ -288,6 +319,9 @@ module feng_ctrl_axi #(
     wire         science_spec_enabled;
     wire         science_time_spec_rejected;
     wire         science_cmac_live_ready;
+    wire         fengine_science_valid;
+    wire         fengine_overflow_seen;
+    wire         science_rate_drop_seen;
     wire [31:0] science_block_reason;
     wire [31:0] science_status_word;
 
@@ -300,6 +334,9 @@ module feng_ctrl_axi #(
     logic                  read_pending;
     logic [17:0]           write_addr;
     logic [17:0]           read_addr;
+    logic [6:0]            tx_endpoint_indirect_index;
+    logic [5:0]            tx_spec_route_indirect_index;
+    logic [2:0]            tx_time_route_indirect_index;
 
     function automatic [31:0] lane_word(
         input [NINPUT*32-1:0] bus,
@@ -327,18 +364,25 @@ module feng_ctrl_axi #(
 
     integer lane_idx;
     integer write_idx;
+    integer reset_idx;
     logic [31:0] read_data_next;
     wire         aw_accept;
     wire         w_accept;
     wire         ar_accept;
     wire         have_write_addr;
     wire         have_write_data;
+    wire         tx_endpoint_indirect_valid;
+    wire         tx_spec_route_indirect_valid;
+    wire         tx_time_route_indirect_valid;
 
     assign aw_accept       = s_axi_awready && s_axi_awvalid && !s_axi_bvalid;
     assign w_accept        = s_axi_wready && s_axi_wvalid && !s_axi_bvalid;
     assign ar_accept       = s_axi_arready && s_axi_arvalid && !s_axi_rvalid;
     assign have_write_addr = awaddr_valid || aw_accept;
     assign have_write_data = wdata_valid || w_accept;
+    assign tx_endpoint_indirect_valid = ({25'd0, tx_endpoint_indirect_index} < N_TX_ENDPOINTS);
+    assign tx_spec_route_indirect_valid = ({26'd0, tx_spec_route_indirect_index} < N_SPEC_ROUTES);
+    assign tx_time_route_indirect_valid = ({29'd0, tx_time_route_indirect_index} < N_TIME_ROUTES);
     assign science_live_requested = science_control[1] && !science_control[0];
     assign science_bandwidth_mode_cfg = science_bandwidth_mode;
     assign science_output_mode_cfg = science_output_mode;
@@ -360,14 +404,22 @@ module feng_ctrl_axi #(
         !tx_link_status_flags[5] &&
         !tx_link_status_flags[6] &&
         !tx_link_status_flags[1];
+    assign fengine_science_valid = pfb_status[5];
+    assign fengine_overflow_seen = (pfb_overflow_count != 32'd0) || pfb_status[3];
+    assign science_rate_drop_seen = (science_dropped_beat_count != 32'd0);
     assign science_block_reason = {
-        25'd0,
+        20'd0,
+        science_rate_drop_seen,
+        1'b0,
+        science_spec_enabled && fengine_overflow_seen,
+        science_spec_enabled && !fengine_science_valid,
+        science_spec_enabled && fengine_science_valid,
         science_control[0],
         science_live_requested && !science_cmac_live_ready,
         1'b0,
-        1'b1,
         1'b0,
-        science_spec_enabled,
+        1'b0,
+        1'b0,
         science_time_spec_rejected
     };
     assign science_status_word = {
@@ -377,8 +429,8 @@ module feng_ctrl_axi #(
         science_bandwidth_mode,
         2'd0,
         science_cmac_live_ready,
-        1'b0,
-        1'b0,
+        1'b1,
+        fengine_science_valid,
         science_time_spec_rejected,
         science_spec_enabled,
         science_time_enabled
@@ -500,17 +552,28 @@ module feng_ctrl_axi #(
             scale_mode         <= 16'd0;
             scale_id           <= 32'd0;
             time_payload_nsamp <= 16'd256;
-            spec_time_count    <= 16'd4;
-            spec_chan_count    <= 16'd64;
+            spec_time_count    <= 16'd1;
+            spec_chan_count    <= 16'd256;
             pfb_enable         <= 1'b1;
-            pfb_taps           <= 16'd4;
+            pfb_taps           <= 16'd0;
             pfb_fft_shift      <= 16'd0;
             pfb_chan0          <= 32'd0;
-            pfb_chan_count     <= 16'd64;
-            pfb_time_count     <= 16'd4;
+            pfb_chan_count     <= 16'd256;
+            pfb_time_count     <= 16'd1;
             science_control    <= 32'h0000_0001;
             science_bandwidth_mode <= 2'd1;
             science_output_mode <= SCIENCE_MODE_OFF;
+            time_live_interval_beats <= 32'd7680;
+            time_ddr_ring_enable <= 1'b0;
+            time_ddr_ring_clear_pulse <= 1'b0;
+            time_ddr_ring_base_addr <= 64'h0000_0008_0000_0000;
+            time_ddr_ring_slots <= 16'd64;
+            time_multiflow_enable <= 1'b0;
+            time_multiflow_base_endpoint <= 3'd0;
+            time_multiflow_count <= 4'd1;
+            tx_endpoint_indirect_index <= 7'd0;
+            tx_spec_route_indirect_index <= 6'd0;
+            tx_time_route_indirect_index <= 3'd0;
             chan_split         <= 32'd2048;
             src_ip             <= 32'h0a00_0101;
             dgx_a_ip           <= 32'h0a00_010a;
@@ -524,37 +587,34 @@ module feng_ctrl_axi #(
             dgx_b_udp_port     <= 16'd4200;
             time_udp_port      <= 16'd4300;
             tx_control         <= 32'h0000_000d;
-            tx_endpoint_enable <= 8'h07;
-            tx_endpoint_ip_vec <= {
-                32'd0, 32'd0, 32'd0, 32'd0, 32'd0,
-                32'h0a00_0110, 32'h0a00_010b, 32'h0a00_010a
-            };
-            tx_endpoint_mac_vec <= {
-                48'd0, 48'd0, 48'd0, 48'd0, 48'd0,
-                48'h08c0_ebd5_95b2, 48'h0200_0000_000b, 48'h0200_0000_000a
-            };
-            tx_endpoint_src_port_vec <= {NINPUT{16'd4000}};
-            tx_endpoint_dst_port_vec <= {
-                16'd0, 16'd0, 16'd0, 16'd0, 16'd0,
-                16'd4300, 16'd4200, 16'd4100
-            };
-            tx_spec_route_enable <= 8'h03;
-            tx_spec_route_chan0_vec <= {
-                32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd2048, 32'd0
-            };
-            tx_spec_route_chan_count_vec <= {
-                16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd2048, 16'd2048
-            };
-            tx_spec_route_endpoint_vec <= {
-                3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd1, 3'd0
-            };
+            tx_endpoint_enable <= {N_TX_ENDPOINTS{1'b1}};
+            tx_endpoint_ip_vec <= {N_TX_ENDPOINTS{32'h0a00_0110}};
+            tx_endpoint_mac_vec <= {N_TX_ENDPOINTS{48'h08c0_ebd5_95b2}};
+            tx_endpoint_src_port_vec <= {N_TX_ENDPOINTS{16'd4000}};
+            tx_endpoint_dst_port_vec <= {N_TX_ENDPOINTS{16'd4300}};
+            for (reset_idx = 0; reset_idx < N_TX_ENDPOINTS; reset_idx = reset_idx + 1) begin
+                tx_endpoint_enable[reset_idx] <= 1'b1;
+                tx_endpoint_ip_vec[reset_idx*32 +: 32] <= 32'h0a00_0110;
+                tx_endpoint_mac_vec[reset_idx*48 +: 48] <= 48'h08c0_ebd5_95b2;
+                tx_endpoint_src_port_vec[reset_idx*16 +: 16] <= 16'd4000 + reset_idx;
+                tx_endpoint_dst_port_vec[reset_idx*16 +: 16] <= 16'd4300 + reset_idx;
+            end
+            tx_spec_route_enable <= {N_SPEC_ROUTES{1'b0}};
+            tx_spec_route_chan0_vec <= {N_SPEC_ROUTES{32'd0}};
+            tx_spec_route_chan_count_vec <= {N_SPEC_ROUTES{16'd0}};
+            tx_spec_route_endpoint_vec <= {N_SPEC_ROUTES{8'd8}};
+            for (reset_idx = 0; reset_idx < N_SPEC_ROUTES; reset_idx = reset_idx + 1) begin
+                tx_spec_route_enable[reset_idx] <= (reset_idx < 16);
+                tx_spec_route_chan0_vec[reset_idx*32 +: 32] <= (reset_idx < 16) ? (reset_idx * 32'd256) : 32'd0;
+                tx_spec_route_chan_count_vec[reset_idx*16 +: 16] <= (reset_idx < 16) ? 16'd256 : 16'd0;
+                tx_spec_route_endpoint_vec[reset_idx*8 +: 8] <= 8'd8 + reset_idx[7:0];
+            end
             tx_time_route_enable <= 8'h01;
             tx_time_route_input_mask_vec <= {
                 16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'h00ff
             };
-            tx_time_route_endpoint_vec <= {
-                3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd2
-            };
+            tx_time_route_endpoint_vec <= {N_TIME_ROUTES{8'd0}};
+            tx_time_route_endpoint_vec[0 +: 8] <= 8'd0;
             qsfp_test_interval_cycles <= 32'd322_266;
             rfdc_active_mask    <= 16'hffff;
             dac_tone_enable     <= 1'b1;
@@ -591,6 +651,7 @@ module feng_ctrl_axi #(
             rfdc_axis_raw_witness_arm_pulse <= 1'b0;
             rfdc_axis_raw_witness_clear_pulse <= 1'b0;
             tx_clear_pulse <= 1'b0;
+            time_ddr_ring_clear_pulse <= 1'b0;
             pfb_clear_pulse <= 1'b0;
             s_axi_awready    <= !awaddr_valid && !s_axi_bvalid;
             s_axi_wready     <= !wdata_valid && !s_axi_bvalid;
@@ -806,6 +867,66 @@ module feng_ctrl_axi #(
                             tx_frame_capture_arm_pulse <= 1'b1;
                         end
                     end
+                    16'hb100: tx_endpoint_indirect_index <= (w_accept ? s_axi_wdata[6:0] : wdata_latched[6:0]);
+                    16'hb104: begin
+                        if (tx_endpoint_indirect_valid) begin
+                            tx_endpoint_enable[tx_endpoint_indirect_index] <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
+                        end
+                    end
+                    16'hb108: begin
+                        if (tx_endpoint_indirect_valid) begin
+                            tx_endpoint_ip_vec[tx_endpoint_indirect_index*32 +: 32] <= (w_accept ? s_axi_wdata : wdata_latched);
+                        end
+                    end
+                    16'hb10c: begin
+                        if (tx_endpoint_indirect_valid) begin
+                            tx_endpoint_mac_vec[tx_endpoint_indirect_index*48 +: 32] <= (w_accept ? s_axi_wdata : wdata_latched);
+                        end
+                    end
+                    16'hb110: begin
+                        if (tx_endpoint_indirect_valid) begin
+                            tx_endpoint_mac_vec[tx_endpoint_indirect_index*48 + 32 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                        end
+                    end
+                    16'hb114: begin
+                        if (tx_endpoint_indirect_valid) begin
+                            tx_endpoint_dst_port_vec[tx_endpoint_indirect_index*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                        end
+                    end
+                    16'hb118: begin
+                        if (tx_endpoint_indirect_valid) begin
+                            tx_endpoint_src_port_vec[tx_endpoint_indirect_index*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                        end
+                    end
+                    16'hb130: tx_spec_route_indirect_index <= (w_accept ? s_axi_wdata[5:0] : wdata_latched[5:0]);
+                    16'hb134: begin
+                        if (tx_spec_route_indirect_valid) begin
+                            tx_spec_route_enable[tx_spec_route_indirect_index] <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
+                            tx_spec_route_endpoint_vec[tx_spec_route_indirect_index*8 +: 8] <= (w_accept ? s_axi_wdata[15:8] : wdata_latched[15:8]);
+                        end
+                    end
+                    16'hb138: begin
+                        if (tx_spec_route_indirect_valid) begin
+                            tx_spec_route_chan0_vec[tx_spec_route_indirect_index*32 +: 32] <= (w_accept ? s_axi_wdata : wdata_latched);
+                        end
+                    end
+                    16'hb13c: begin
+                        if (tx_spec_route_indirect_valid) begin
+                            tx_spec_route_chan_count_vec[tx_spec_route_indirect_index*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                        end
+                    end
+                    16'hb150: tx_time_route_indirect_index <= (w_accept ? s_axi_wdata[2:0] : wdata_latched[2:0]);
+                    16'hb154: begin
+                        if (tx_time_route_indirect_valid) begin
+                            tx_time_route_enable[tx_time_route_indirect_index] <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
+                            tx_time_route_endpoint_vec[tx_time_route_indirect_index*8 +: 8] <= (w_accept ? s_axi_wdata[15:8] : wdata_latched[15:8]);
+                        end
+                    end
+                    16'hb158: begin
+                        if (tx_time_route_indirect_valid) begin
+                            tx_time_route_input_mask_vec[tx_time_route_indirect_index*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                        end
+                    end
                     16'h0400: begin
                         if ((w_accept ? s_axi_wdata[0] : wdata_latched[0])) begin
                             debug_capture_start_pulse <= 1'b1;
@@ -970,47 +1091,86 @@ module feng_ctrl_axi #(
                             default: science_output_mode <= SCIENCE_MODE_OFF;
                         endcase
                     end
+                    16'hd024: begin
+                        if ((w_accept ? s_axi_wdata[31:0] : wdata_latched[31:0]) == 32'd0) begin
+                            time_live_interval_beats <= 32'd0;
+                        end else if ((w_accept ? s_axi_wdata[31:0] : wdata_latched[31:0]) < 32'd16) begin
+                            time_live_interval_beats <= 32'd16;
+                        end else begin
+                            time_live_interval_beats <= (w_accept ? s_axi_wdata[31:0] : wdata_latched[31:0]);
+                        end
+                    end
+                    16'hd028: begin
+                        time_ddr_ring_enable <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
+                        if ((w_accept ? s_axi_wdata[1] : wdata_latched[1])) begin
+                            time_ddr_ring_clear_pulse <= 1'b1;
+                        end
+                    end
+                    16'hd02c: time_ddr_ring_base_addr[31:0] <= (w_accept ? s_axi_wdata : wdata_latched);
+                    16'hd030: time_ddr_ring_base_addr[63:32] <= (w_accept ? s_axi_wdata : wdata_latched);
+                    16'hd034: begin
+                        if ((w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]) != 16'd0) begin
+                            time_ddr_ring_slots <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                        end
+                    end
+                    16'hd050: begin
+                        time_multiflow_enable <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
+                        time_multiflow_base_endpoint <= (w_accept ? s_axi_wdata[10:8] : wdata_latched[10:8]);
+                        if ((w_accept ? s_axi_wdata[19:16] : wdata_latched[19:16]) == 4'd0) begin
+                            time_multiflow_count <= 4'd1;
+                        end else if ((w_accept ? s_axi_wdata[19:16] : wdata_latched[19:16]) > 4'd8) begin
+                            time_multiflow_count <= 4'd8;
+                        end else begin
+                            time_multiflow_count <= (w_accept ? s_axi_wdata[19:16] : wdata_latched[19:16]);
+                        end
+                    end
                     16'hb700: begin
                         if ((w_accept ? s_axi_wdata[31:0] : wdata_latched[31:0]) >= 32'd1024) begin
                             qsfp_test_interval_cycles <= (w_accept ? s_axi_wdata[31:0] : wdata_latched[31:0]);
                         end
                     end
                     default: begin
-                        if ((write_addr >= 16'hb100) && (write_addr < 16'hb200)) begin
-                            write_idx = (write_addr - 16'hb100) >> 5;
-                            case ((write_addr - 16'hb100) & 16'h001f)
-                                16'h0000: tx_endpoint_enable[write_idx] <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
-                                16'h0004: tx_endpoint_ip_vec[write_idx*32 +: 32] <= (w_accept ? s_axi_wdata : wdata_latched);
-                                16'h0008: tx_endpoint_mac_vec[write_idx*48 +: 32] <= (w_accept ? s_axi_wdata : wdata_latched);
-                                16'h000c: tx_endpoint_mac_vec[write_idx*48 + 32 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
-                                16'h0010: tx_endpoint_dst_port_vec[write_idx*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
-                                16'h0014: tx_endpoint_src_port_vec[write_idx*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
-                                default: begin
-                                end
-                            endcase
-                        end else if ((write_addr >= 16'hb300) && (write_addr < 16'hb400)) begin
-                            write_idx = (write_addr - 16'hb300) >> 5;
-                            case ((write_addr - 16'hb300) & 16'h001f)
-                                16'h0000: begin
-                                    tx_spec_route_enable[write_idx] <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
-                                    tx_spec_route_endpoint_vec[write_idx*3 +: 3] <= (w_accept ? s_axi_wdata[10:8] : wdata_latched[10:8]);
-                                end
-                                16'h0004: tx_spec_route_chan0_vec[write_idx*32 +: 32] <= (w_accept ? s_axi_wdata : wdata_latched);
-                                16'h0008: tx_spec_route_chan_count_vec[write_idx*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
-                                default: begin
-                                end
-                            endcase
-                        end else if ((write_addr >= 16'hb500) && (write_addr < 16'hb600)) begin
-                            write_idx = (write_addr - 16'hb500) >> 5;
-                            case ((write_addr - 16'hb500) & 16'h001f)
-                                16'h0000: begin
-                                    tx_time_route_enable[write_idx] <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
-                                    tx_time_route_endpoint_vec[write_idx*3 +: 3] <= (w_accept ? s_axi_wdata[10:8] : wdata_latched[10:8]);
-                                end
-                                16'h0004: tx_time_route_input_mask_vec[write_idx*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
-                                default: begin
-                                end
-                            endcase
+                        if ((write_addr >= 18'h13000) && (write_addr < 18'h13900)) begin
+                            write_idx = (write_addr - 18'h13000) >> 5;
+                            if (write_idx < N_TX_ENDPOINTS) begin
+                                case ((write_addr - 18'h13000) & 18'h0001f)
+                                    16'h0000: tx_endpoint_enable[write_idx] <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
+                                    16'h0004: tx_endpoint_ip_vec[write_idx*32 +: 32] <= (w_accept ? s_axi_wdata : wdata_latched);
+                                    16'h0008: tx_endpoint_mac_vec[write_idx*48 +: 32] <= (w_accept ? s_axi_wdata : wdata_latched);
+                                    16'h000c: tx_endpoint_mac_vec[write_idx*48 + 32 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                                    16'h0010: tx_endpoint_dst_port_vec[write_idx*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                                    16'h0014: tx_endpoint_src_port_vec[write_idx*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                                    default: begin
+                                    end
+                                endcase
+                            end
+                        end else if ((write_addr >= 18'h14000) && (write_addr < 18'h14800)) begin
+                            write_idx = (write_addr - 18'h14000) >> 5;
+                            if (write_idx < N_SPEC_ROUTES) begin
+                                case ((write_addr - 18'h14000) & 18'h0001f)
+                                    16'h0000: begin
+                                        tx_spec_route_enable[write_idx] <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
+                                        tx_spec_route_endpoint_vec[write_idx*8 +: 8] <= (w_accept ? s_axi_wdata[15:8] : wdata_latched[15:8]);
+                                    end
+                                    16'h0004: tx_spec_route_chan0_vec[write_idx*32 +: 32] <= (w_accept ? s_axi_wdata : wdata_latched);
+                                    16'h0008: tx_spec_route_chan_count_vec[write_idx*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                                    default: begin
+                                    end
+                                endcase
+                            end
+                        end else if ((write_addr >= 18'h14800) && (write_addr < 18'h14900)) begin
+                            write_idx = (write_addr - 18'h14800) >> 5;
+                            if (write_idx < N_TIME_ROUTES) begin
+                                case ((write_addr - 18'h14800) & 18'h0001f)
+                                    16'h0000: begin
+                                        tx_time_route_enable[write_idx] <= (w_accept ? s_axi_wdata[0] : wdata_latched[0]);
+                                        tx_time_route_endpoint_vec[write_idx*8 +: 8] <= (w_accept ? s_axi_wdata[15:8] : wdata_latched[15:8]);
+                                    end
+                                    16'h0004: tx_time_route_input_mask_vec[write_idx*16 +: 16] <= (w_accept ? s_axi_wdata[15:0] : wdata_latched[15:0]);
+                                    default: begin
+                                    end
+                                endcase
+                            end
                         end
                     end
                 endcase
@@ -1138,6 +1298,7 @@ module feng_ctrl_axi #(
             16'h0330: read_data_next = spec_frame_id[31:0];
             16'h0334: read_data_next = spec_frame_id[63:32];
             16'h0338: read_data_next = spec_chan0;
+            16'h033c: read_data_next = spec_dropped_count;
             16'h0340: read_data_next = rfdc_status_flags;
             16'h0344: read_data_next = rfdc_sample_count[31:0];
             16'h0348: read_data_next = rfdc_sample_count[63:32];
@@ -1145,6 +1306,7 @@ module feng_ctrl_axi #(
             16'h0350: read_data_next = {16'd0, rfdc_active_mask};
             16'h0354: read_data_next = {16'd0, rfdc_current_valid_mask};
             16'h0358: read_data_next = {16'd0, rfdc_seen_valid_mask};
+            16'h035c: read_data_next = science_dropped_beat_count;
             16'h0360: read_data_next = tx_link_status_flags;
             16'h0364: read_data_next = tx_dry_run_packet_count;
             16'h0368: read_data_next = tx_dry_run_byte_count;
@@ -1253,11 +1415,80 @@ module feng_ctrl_axi #(
             16'hb01c: read_data_next = tx_route_error_count;
             16'hb020: read_data_next = tx_dry_run_packet_count;
             16'hb024: read_data_next = tx_dry_run_byte_count;
-            16'hb028: read_data_next = {29'd0, tx_selected_endpoint_id};
-            16'hb02c: read_data_next = {28'd0, tx_selected_route_is_time, tx_selected_route_id};
+            16'hb028: read_data_next = {24'd0, tx_selected_endpoint_id};
+            16'hb02c: read_data_next = {25'd0, tx_selected_route_is_time, tx_selected_route_id};
             16'hb030: read_data_next = 32'd0;
             16'hb034: read_data_next = {11'd0, tx_frame_capture_word_count, 14'd0, tx_frame_capture_valid, tx_frame_capture_armed};
+            16'hb100: read_data_next = {25'd0, tx_endpoint_indirect_index};
+            16'hb104: begin
+                if (tx_endpoint_indirect_valid) begin
+                    read_data_next = {31'd0, tx_endpoint_enable[tx_endpoint_indirect_index]};
+                end
+            end
+            16'hb108: begin
+                if (tx_endpoint_indirect_valid) begin
+                    read_data_next = tx_endpoint_ip_vec[tx_endpoint_indirect_index*32 +: 32];
+                end
+            end
+            16'hb10c: begin
+                if (tx_endpoint_indirect_valid) begin
+                    read_data_next = tx_endpoint_mac_vec[tx_endpoint_indirect_index*48 +: 32];
+                end
+            end
+            16'hb110: begin
+                if (tx_endpoint_indirect_valid) begin
+                    read_data_next = {16'd0, tx_endpoint_mac_vec[tx_endpoint_indirect_index*48 + 32 +: 16]};
+                end
+            end
+            16'hb114: begin
+                if (tx_endpoint_indirect_valid) begin
+                    read_data_next = {16'd0, tx_endpoint_dst_port_vec[tx_endpoint_indirect_index*16 +: 16]};
+                end
+            end
+            16'hb118: begin
+                if (tx_endpoint_indirect_valid) begin
+                    read_data_next = {16'd0, tx_endpoint_src_port_vec[tx_endpoint_indirect_index*16 +: 16]};
+                end
+            end
+            16'hb130: read_data_next = {26'd0, tx_spec_route_indirect_index};
+            16'hb134: begin
+                if (tx_spec_route_indirect_valid) begin
+                    read_data_next = {16'd0, tx_spec_route_endpoint_vec[tx_spec_route_indirect_index*8 +: 8], 7'd0, tx_spec_route_enable[tx_spec_route_indirect_index]};
+                end
+            end
+            16'hb138: begin
+                if (tx_spec_route_indirect_valid) begin
+                    read_data_next = tx_spec_route_chan0_vec[tx_spec_route_indirect_index*32 +: 32];
+                end
+            end
+            16'hb13c: begin
+                if (tx_spec_route_indirect_valid) begin
+                    read_data_next = {16'd0, tx_spec_route_chan_count_vec[tx_spec_route_indirect_index*16 +: 16]};
+                end
+            end
+            16'hb140: begin
+                if (tx_spec_route_indirect_valid) begin
+                    read_data_next = tx_spec_route_hit_counts[tx_spec_route_indirect_index*32 +: 32];
+                end
+            end
+            16'hb150: read_data_next = {29'd0, tx_time_route_indirect_index};
+            16'hb154: begin
+                if (tx_time_route_indirect_valid) begin
+                    read_data_next = {16'd0, tx_time_route_endpoint_vec[tx_time_route_indirect_index*8 +: 8], 7'd0, tx_time_route_enable[tx_time_route_indirect_index]};
+                end
+            end
+            16'hb158: begin
+                if (tx_time_route_indirect_valid) begin
+                    read_data_next = {16'd0, tx_time_route_input_mask_vec[tx_time_route_indirect_index*16 +: 16]};
+                end
+            end
+            16'hb15c: begin
+                if (tx_time_route_indirect_valid) begin
+                    read_data_next = tx_time_route_hit_counts[tx_time_route_indirect_index*32 +: 32];
+                end
+            end
             16'hb700: read_data_next = qsfp_test_interval_cycles;
+            16'hb704: read_data_next = tx_cmac_source_status;
             16'h0400: read_data_next = 32'd0;
             16'h0404: read_data_next = {29'd0, debug_done, debug_error, debug_busy};
             16'h0408: read_data_next = DEBUG_NFFT;
@@ -1363,6 +1594,17 @@ module feng_ctrl_axi #(
             16'h0924: read_data_next = pfb_overflow_count;
             16'h0928: read_data_next = pfb_peak_chan;
             16'h092c: read_data_next = pfb_peak_power;
+            16'h0930: read_data_next = pfb_data_halt_count;
+            16'h0934: read_data_next = pfb_xfft_event_count;
+            16'h0938: read_data_next = pfb_tile_overflow_count;
+            16'h093c: read_data_next = pfb_input_fifo_level;
+            16'h0940: read_data_next = pfb_xfft_tlast_unexpected_count;
+            16'h0944: read_data_next = pfb_xfft_tlast_missing_count;
+            16'h0948: read_data_next = pfb_xfft_fft_overflow_count;
+            16'h094c: read_data_next = pfb_xfft_data_out_halt_count;
+            16'h0950: read_data_next = pfb_xfft_status_halt_count;
+            16'h0954: read_data_next = pfb_capture_backpressure_count;
+            16'h0958: read_data_next = pfb_frame_sample0_overflow_count;
             16'hd000: read_data_next = science_control;
             16'hd004: read_data_next = science_status_word;
             16'hd008: read_data_next = {30'd0, science_bandwidth_mode};
@@ -1372,6 +1614,18 @@ module feng_ctrl_axi #(
             16'hd018: read_data_next = science_payload_rate_mbps(science_bandwidth_mode, science_output_mode);
             16'hd01c: read_data_next = science_block_reason;
             16'hd020: read_data_next = SCIENCE_CAPABILITY_WORD;
+            16'hd024: read_data_next = time_live_interval_beats;
+            16'hd028: read_data_next = {30'd0, time_ddr_ring_clear_pulse, time_ddr_ring_enable};
+            16'hd02c: read_data_next = time_ddr_ring_base_addr[31:0];
+            16'hd030: read_data_next = time_ddr_ring_base_addr[63:32];
+            16'hd034: read_data_next = {16'd0, time_ddr_ring_slots};
+            16'hd038: read_data_next = time_ddr_ring_status;
+            16'hd03c: read_data_next = time_ddr_ring_occupancy;
+            16'hd040: read_data_next = time_ddr_ring_write_count;
+            16'hd044: read_data_next = time_ddr_ring_read_count;
+            16'hd048: read_data_next = time_ddr_ring_drop_count;
+            16'hd04c: read_data_next = time_ddr_ring_error_count;
+            16'hd050: read_data_next = {12'd0, time_multiflow_count, 5'd0, time_multiflow_base_endpoint, 7'd0, time_multiflow_enable};
             default: begin
                 if ((read_addr >= 16'h0500) && (read_addr < 16'h0520)) begin
                     lane_idx = (read_addr - 16'h0500) >> 2;
@@ -1383,34 +1637,40 @@ module feng_ctrl_axi #(
                     read_data_next = tx_header_capture_rd_data;
                 end else if ((read_addr >= 16'hb040) && (read_addr < 16'hb0c0)) begin
                     read_data_next = tx_frame_capture_rd_data;
-                end else if ((read_addr >= 16'hb100) && (read_addr < 16'hb200)) begin
-                    lane_idx = (read_addr - 16'hb100) >> 5;
-                    case ((read_addr - 16'hb100) & 16'h001f)
-                        16'h0000: read_data_next = {31'd0, tx_endpoint_enable[lane_idx]};
-                        16'h0004: read_data_next = tx_endpoint_ip_vec[lane_idx*32 +: 32];
-                        16'h0008: read_data_next = tx_endpoint_mac_vec[lane_idx*48 +: 32];
-                        16'h000c: read_data_next = {16'd0, tx_endpoint_mac_vec[lane_idx*48 + 32 +: 16]};
-                        16'h0010: read_data_next = {16'd0, tx_endpoint_dst_port_vec[lane_idx*16 +: 16]};
-                        16'h0014: read_data_next = {16'd0, tx_endpoint_src_port_vec[lane_idx*16 +: 16]};
-                        default: read_data_next = 32'd0;
-                    endcase
-                end else if ((read_addr >= 16'hb300) && (read_addr < 16'hb400)) begin
-                    lane_idx = (read_addr - 16'hb300) >> 5;
-                    case ((read_addr - 16'hb300) & 16'h001f)
-                        16'h0000: read_data_next = {21'd0, tx_spec_route_endpoint_vec[lane_idx*3 +: 3], 7'd0, tx_spec_route_enable[lane_idx]};
-                        16'h0004: read_data_next = tx_spec_route_chan0_vec[lane_idx*32 +: 32];
-                        16'h0008: read_data_next = {16'd0, tx_spec_route_chan_count_vec[lane_idx*16 +: 16]};
-                        16'h000c: read_data_next = tx_spec_route_hit_counts[lane_idx*32 +: 32];
-                        default: read_data_next = 32'd0;
-                    endcase
-                end else if ((read_addr >= 16'hb500) && (read_addr < 16'hb600)) begin
-                    lane_idx = (read_addr - 16'hb500) >> 5;
-                    case ((read_addr - 16'hb500) & 16'h001f)
-                        16'h0000: read_data_next = {21'd0, tx_time_route_endpoint_vec[lane_idx*3 +: 3], 7'd0, tx_time_route_enable[lane_idx]};
-                        16'h0004: read_data_next = {16'd0, tx_time_route_input_mask_vec[lane_idx*16 +: 16]};
-                        16'h000c: read_data_next = tx_time_route_hit_counts[lane_idx*32 +: 32];
-                        default: read_data_next = 32'd0;
-                    endcase
+                end else if ((read_addr >= 18'h13000) && (read_addr < 18'h13900)) begin
+                    lane_idx = (read_addr - 18'h13000) >> 5;
+                    if (lane_idx < N_TX_ENDPOINTS) begin
+                        case ((read_addr - 18'h13000) & 18'h0001f)
+                            16'h0000: read_data_next = {31'd0, tx_endpoint_enable[lane_idx]};
+                            16'h0004: read_data_next = tx_endpoint_ip_vec[lane_idx*32 +: 32];
+                            16'h0008: read_data_next = tx_endpoint_mac_vec[lane_idx*48 +: 32];
+                            16'h000c: read_data_next = {16'd0, tx_endpoint_mac_vec[lane_idx*48 + 32 +: 16]};
+                            16'h0010: read_data_next = {16'd0, tx_endpoint_dst_port_vec[lane_idx*16 +: 16]};
+                            16'h0014: read_data_next = {16'd0, tx_endpoint_src_port_vec[lane_idx*16 +: 16]};
+                            default: read_data_next = 32'd0;
+                        endcase
+                    end
+                end else if ((read_addr >= 18'h14000) && (read_addr < 18'h14800)) begin
+                    lane_idx = (read_addr - 18'h14000) >> 5;
+                    if (lane_idx < N_SPEC_ROUTES) begin
+                        case ((read_addr - 18'h14000) & 18'h0001f)
+                            16'h0000: read_data_next = {16'd0, tx_spec_route_endpoint_vec[lane_idx*8 +: 8], 7'd0, tx_spec_route_enable[lane_idx]};
+                            16'h0004: read_data_next = tx_spec_route_chan0_vec[lane_idx*32 +: 32];
+                            16'h0008: read_data_next = {16'd0, tx_spec_route_chan_count_vec[lane_idx*16 +: 16]};
+                            16'h000c: read_data_next = tx_spec_route_hit_counts[lane_idx*32 +: 32];
+                            default: read_data_next = 32'd0;
+                        endcase
+                    end
+                end else if ((read_addr >= 18'h14800) && (read_addr < 18'h14900)) begin
+                    lane_idx = (read_addr - 18'h14800) >> 5;
+                    if (lane_idx < N_TIME_ROUTES) begin
+                        case ((read_addr - 18'h14800) & 18'h0001f)
+                            16'h0000: read_data_next = {16'd0, tx_time_route_endpoint_vec[lane_idx*8 +: 8], 7'd0, tx_time_route_enable[lane_idx]};
+                            16'h0004: read_data_next = {16'd0, tx_time_route_input_mask_vec[lane_idx*16 +: 16]};
+                            16'h000c: read_data_next = tx_time_route_hit_counts[lane_idx*32 +: 32];
+                            default: read_data_next = 32'd0;
+                        endcase
+                    end
                 end else if ((read_addr >= 16'h0800) && (read_addr < 16'h1800)) begin
                     read_data_next = debug_time_rd_data;
                 end else if ((read_addr >= 16'h1800) && (read_addr < 16'h2800)) begin

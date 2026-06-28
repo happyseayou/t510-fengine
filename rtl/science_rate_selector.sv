@@ -55,6 +55,11 @@ module science_rate_selector #(
     logic candidate_tlast;
     logic candidate_valid;
 
+    // Live science preview must never backpressure the RFDC adapter.  If the
+    // selected-rate output is still pending, accept the new RFDC beat and count
+    // the newly formed output beat as dropped instead of pulling tready low.
+    wire input_fire = s_axis_tvalid;
+
     assign s_axis_tready = 1'b1;
     assign m_axis_tdata = pending_tdata;
     assign m_axis_tuser = pending_tuser;
@@ -78,7 +83,7 @@ module science_rate_selector #(
         candidate_tlast = s_axis_tlast;
         candidate_valid = 1'b0;
 
-        if (s_axis_tvalid) begin
+        if (input_fire) begin
             case (bandwidth_mode)
                 BW_200MHZ: begin
                     candidate_tdata = s_axis_tdata;
@@ -148,7 +153,7 @@ module science_rate_selector #(
                 pending_valid <= 1'b0;
             end
 
-            if (s_axis_tvalid) begin
+            if (input_fire) begin
                 case (bandwidth_mode)
                     BW_100MHZ: begin
                         decim2_phase <= ~decim2_phase;

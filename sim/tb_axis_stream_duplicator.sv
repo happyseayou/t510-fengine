@@ -8,6 +8,7 @@ module tb_axis_stream_duplicator;
     logic time_enable = 1'b0;
     logic snapshot_enable = 1'b0;
     logic monitor_enable = 1'b0;
+    logic spec_drop_when_full = 1'b0;
     logic time_drop_when_full = 1'b1;
     logic snapshot_drop_when_full = 1'b1;
     logic monitor_drop_when_full = 1'b1;
@@ -41,6 +42,7 @@ module tb_axis_stream_duplicator;
     wire          m_monitor_tvalid;
     wire          m_monitor_tlast;
     logic         m_monitor_tready = 1'b0;
+    wire [31:0]   dropped_spec_count;
     wire [31:0]   dropped_time_count;
     wire [31:0]   dropped_snapshot_count;
     wire [31:0]   dropped_monitor_count;
@@ -54,6 +56,7 @@ module tb_axis_stream_duplicator;
         .time_enable(time_enable),
         .snapshot_enable(snapshot_enable),
         .monitor_enable(monitor_enable),
+        .spec_drop_when_full(spec_drop_when_full),
         .time_drop_when_full(time_drop_when_full),
         .snapshot_drop_when_full(snapshot_drop_when_full),
         .monitor_drop_when_full(monitor_drop_when_full),
@@ -87,6 +90,7 @@ module tb_axis_stream_duplicator;
         .m_monitor_tvalid(m_monitor_tvalid),
         .m_monitor_tlast(m_monitor_tlast),
         .m_monitor_tready(m_monitor_tready),
+        .dropped_spec_count(dropped_spec_count),
         .dropped_time_count(dropped_time_count),
         .dropped_snapshot_count(dropped_snapshot_count),
         .dropped_monitor_count(dropped_monitor_count)
@@ -125,6 +129,7 @@ module tb_axis_stream_duplicator;
         `TB_CHECK_EQ(dropped_time_count, 32'd1, "TIME drop count")
         `TB_CHECK_EQ(dropped_snapshot_count, 32'd1, "SNAPSHOT drop count")
         `TB_CHECK_EQ(dropped_monitor_count, 32'd1, "MONITOR drop count")
+        `TB_CHECK_EQ(dropped_spec_count, 32'd0, "SPEC no drop while ready")
 
         s_axis_tvalid = 1'b1;
         m_spec_tready = 1'b0;
@@ -133,10 +138,30 @@ module tb_axis_stream_duplicator;
         m_monitor_tready = 1'b1;
         #1;
         `TB_CHECK(!s_axis_tready, "SPEC backpressure blocks input")
+        `TB_CHECK(!m_time_tvalid, "TIME does not consume while SPEC backpressures")
         @(posedge clk);
         s_axis_tvalid = 1'b0;
         @(posedge clk);
         `TB_CHECK_EQ(dropped_time_count, 32'd1, "no drop when input not accepted")
+        `TB_CHECK_EQ(dropped_spec_count, 32'd0, "SPEC no drop when input not accepted")
+
+        spec_drop_when_full = 1'b1;
+        spec_enable = 1'b1;
+        time_enable = 1'b1;
+        m_spec_tready = 1'b0;
+        m_time_tready = 1'b1;
+        m_snapshot_tready = 1'b1;
+        m_monitor_tready = 1'b1;
+        s_axis_tvalid = 1'b1;
+        #1;
+        `TB_CHECK(s_axis_tready, "dropping SPEC does not backpressure input")
+        `TB_CHECK(!m_spec_tvalid, "SPEC valid suppressed while dropping")
+        `TB_CHECK(m_time_tvalid, "TIME still valid while SPEC drops")
+        @(posedge clk);
+        @(negedge clk);
+        s_axis_tvalid = 1'b0;
+        @(posedge clk);
+        `TB_CHECK_EQ(dropped_spec_count, 32'd1, "SPEC drop count")
 
         spec_enable = 1'b0;
         time_enable = 1'b1;

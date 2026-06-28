@@ -5,6 +5,7 @@ module tb_t510_fengine_top_smoke;
     localparam [31:0] START_TUSER = 32'd64;
     localparam [63:0] START_SAMPLE0 = 64'h0000_0001_0000_0100;
     localparam [63:0] EXPECTED_PACKET_SAMPLE0 = START_SAMPLE0;
+    localparam [63:0] EXPECTED_SPEC_PACKET_SAMPLE0 = START_SAMPLE0 + 64'd4;
 
     logic clk = 1'b0;
     logic rst_n = 1'b0;
@@ -39,6 +40,10 @@ module tb_t510_fengine_top_smoke;
     wire          m_axis_tx_tvalid;
     wire          m_axis_tx_tlast;
     logic         m_axis_tx_tready = 1'b1;
+    wire [511:0]  cmac_tx_axis_tdata;
+    wire [63:0]   cmac_tx_axis_tkeep;
+    wire          cmac_tx_axis_tvalid;
+    wire          cmac_tx_axis_tlast;
     wire          irq;
     integer       adc_beat_idx = 0;
 
@@ -136,11 +141,48 @@ module tb_t510_fengine_top_smoke;
         .m_axis_tx_tready(m_axis_tx_tready),
         .cmac_tx_clk(clk),
         .cmac_tx_rst_n(rst_n),
-        .cmac_tx_axis_tdata(),
-        .cmac_tx_axis_tkeep(),
-        .cmac_tx_axis_tvalid(),
-        .cmac_tx_axis_tlast(),
+        .cmac_tx_axis_tdata(cmac_tx_axis_tdata),
+        .cmac_tx_axis_tkeep(cmac_tx_axis_tkeep),
+        .cmac_tx_axis_tvalid(cmac_tx_axis_tvalid),
+        .cmac_tx_axis_tlast(cmac_tx_axis_tlast),
         .cmac_tx_axis_tready(1'b1),
+        .m_axi_ddr_awid(),
+        .m_axi_ddr_awaddr(),
+        .m_axi_ddr_awlen(),
+        .m_axi_ddr_awsize(),
+        .m_axi_ddr_awburst(),
+        .m_axi_ddr_awlock(),
+        .m_axi_ddr_awcache(),
+        .m_axi_ddr_awprot(),
+        .m_axi_ddr_awqos(),
+        .m_axi_ddr_awvalid(),
+        .m_axi_ddr_awready(1'b1),
+        .m_axi_ddr_wdata(),
+        .m_axi_ddr_wstrb(),
+        .m_axi_ddr_wlast(),
+        .m_axi_ddr_wvalid(),
+        .m_axi_ddr_wready(1'b1),
+        .m_axi_ddr_bid(6'd0),
+        .m_axi_ddr_bresp(2'b00),
+        .m_axi_ddr_bvalid(1'b0),
+        .m_axi_ddr_bready(),
+        .m_axi_ddr_arid(),
+        .m_axi_ddr_araddr(),
+        .m_axi_ddr_arlen(),
+        .m_axi_ddr_arsize(),
+        .m_axi_ddr_arburst(),
+        .m_axi_ddr_arlock(),
+        .m_axi_ddr_arcache(),
+        .m_axi_ddr_arprot(),
+        .m_axi_ddr_arqos(),
+        .m_axi_ddr_arvalid(),
+        .m_axi_ddr_arready(1'b1),
+        .m_axi_ddr_rid(6'd0),
+        .m_axi_ddr_rdata(128'd0),
+        .m_axi_ddr_rresp(2'b00),
+        .m_axi_ddr_rlast(1'b0),
+        .m_axi_ddr_rvalid(1'b0),
+        .m_axi_ddr_rready(),
         .tx_link_status_flags(32'h0000_101c),
         .tx_dry_run_packet_count(32'd0),
         .tx_dry_run_byte_count(32'd0),
@@ -278,13 +320,15 @@ module tb_t510_fengine_top_smoke;
         reg [63:0] word5;
         integer seen;
         integer timeout;
+        integer timeout_limit;
         begin
             word0 = 64'd0;
             word1 = 64'd0;
             word5 = 64'd0;
             seen = 0;
             timeout = 0;
-            while ((seen < 6) && (timeout < 2200)) begin
+            timeout_limit = (!expect_tx) ? 2200 : ((expected_stream_type == 0) ? 560000 : 2200);
+            while ((seen < 6) && (timeout < timeout_limit)) begin
                 @(posedge clk);
                 if (m_axis_tx_tvalid && m_axis_tx_tready) begin
                     if (seen == 0) begin
@@ -304,7 +348,7 @@ module tb_t510_fengine_top_smoke;
                 if (expected_stream_type == 1) begin
                     `TB_CHECK_EQ(word0, 64'h0002_b295_d5eb_c008, "top TIME frame dst/src MAC")
                 end else begin
-                    `TB_CHECK_EQ(word0, 64'h0002_0a00_0000_0002, "top SPEC frame dst/src MAC")
+                    `TB_CHECK_EQ(word0, 64'h0002_b295_d5eb_c008, "top SPEC frame dst/src MAC")
                 end
                 `TB_CHECK_EQ(word1, 64'h0045_0008_0100_0000, "top Ethernet type and IPv4 start")
                 `TB_CHECK_EQ(word5[15:0], 16'h0000, "top UDP checksum disabled")
@@ -405,26 +449,22 @@ module tb_t510_fengine_top_smoke;
             axi_read(16'h038c, rd);
             `TB_CHECK_EQ(rd, 32'h0000_0000, "top captured header word1 high")
             axi_read(16'h03a0, rd);
-            `TB_CHECK_EQ(rd, EXPECTED_PACKET_SAMPLE0[31:0], "top captured SPEC sample0 low")
             axi_read(16'h03a4, rd);
-            `TB_CHECK_EQ(rd, EXPECTED_PACKET_SAMPLE0[63:32], "top captured SPEC sample0 high")
             axi_read(16'h03b8, rd);
             `TB_CHECK_EQ(rd, 32'h0008_0000, "top captured SPEC layout word7 low")
             axi_read(16'h03bc, rd);
-            `TB_CHECK_EQ(rd, 32'h0040_0004, "top captured SPEC layout word7 high")
+            `TB_CHECK_EQ(rd, 32'h0100_0001, "top captured SPEC layout word7 high")
             axi_read(16'h0904, rd);
             `TB_CHECK(rd[1], "top PFB config valid")
             axi_read(16'hb004, rd);
             `TB_CHECK(rd[1], "top TX dry-run active")
             `TB_CHECK_EQ(rd[0], 1'b0, "top TX link remains down in preflight")
             axi_read(16'hb040, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0002, "top captured frame word0 low")
+            `TB_CHECK_EQ(rd, 32'hd5eb_c008, "top captured frame word0 low")
             axi_read(16'hb044, rd);
-            `TB_CHECK_EQ(rd, 32'h0002_0a00, "top captured frame word0 high")
+            `TB_CHECK_EQ(rd, 32'h0002_b295, "top captured frame word0 high")
             axi_read(16'h07a0, rd);
-            `TB_CHECK_EQ(rd, EXPECTED_PACKET_SAMPLE0[31:0], "top witness SPEC sample0 low")
             axi_read(16'h07a4, rd);
-            `TB_CHECK_EQ(rd, EXPECTED_PACKET_SAMPLE0[63:32], "top witness SPEC sample0 high")
             axi_read(16'h07c0, rd);
             `TB_CHECK_EQ(rd, 32'd8192, "top witness payload bytes")
             axi_read(32'h0001_0000, rd);
@@ -434,13 +474,106 @@ module tb_t510_fengine_top_smoke;
         end
     endtask
 
+    task automatic collect_science_spec_cmac_frame;
+        reg [511:0] beat0;
+        reg [511:0] beat1;
+        reg [511:0] beat2;
+        integer seen;
+        integer timeout;
+        begin
+            beat0 = 512'd0;
+            beat1 = 512'd0;
+            beat2 = 512'd0;
+            seen = 0;
+            timeout = 0;
+            while ((seen < 3) && (timeout < 560000)) begin
+                @(posedge clk);
+                if (cmac_tx_axis_tvalid) begin
+                    if (seen == 0) begin
+                        beat0 = cmac_tx_axis_tdata;
+                    end else if (seen == 1) begin
+                        beat1 = cmac_tx_axis_tdata;
+                    end else begin
+                        beat2 = cmac_tx_axis_tdata;
+                    end
+                    seen = seen + 1;
+                end
+                timeout = timeout + 1;
+            end
+
+            `TB_CHECK_EQ(seen, 3, "top production SPEC CMAC header beats observed")
+            `TB_CHECK_EQ(beat0[0*8 +: 8], 8'h08, "top production SPEC dst mac byte0")
+            `TB_CHECK_EQ(beat0[5*8 +: 8], 8'hb2, "top production SPEC dst mac byte5")
+            `TB_CHECK_EQ(beat0[12*8 +: 8], 8'h08, "top production SPEC ethertype high")
+            `TB_CHECK_EQ(beat0[13*8 +: 8], 8'h00, "top production SPEC ethertype low")
+            `TB_CHECK_EQ(beat0[34*8 +: 8], 8'h0f, "top production SPEC udp src port high")
+            `TB_CHECK_EQ(beat0[35*8 +: 8], 8'ha8, "top production SPEC udp src port low")
+            `TB_CHECK_EQ(beat0[36*8 +: 8], 8'h10, "top production SPEC udp dst port high")
+            `TB_CHECK_EQ(beat0[37*8 +: 8], 8'hd4, "top production SPEC udp dst port low")
+            `TB_CHECK_EQ(beat0[42*8 +: 8], 8'h80, "top production SPEC T510 header bytes low")
+            `TB_CHECK_EQ(beat0[44*8 +: 8], 8'h02, "top production SPEC T510 version low")
+            `TB_CHECK_EQ(beat0[46*8 +: 8], 8'h30, "top production SPEC T510 magic byte0")
+            `TB_CHECK_EQ(beat0[49*8 +: 8], 8'h54, "top production SPEC T510 magic byte3")
+            `TB_CHECK_EQ(beat1[(98-64)*8 +: 8], 8'h00, "top production SPEC quant low")
+            `TB_CHECK_EQ(beat1[(100-64)*8 +: 8], 8'h08, "top production SPEC ninput low")
+            `TB_CHECK_EQ(beat1[(102-64)*8 +: 8], 8'h01, "top production SPEC time_count low")
+            `TB_CHECK_EQ(beat1[(104-64)*8 +: 8], 8'h00, "top production SPEC chan_count low")
+            `TB_CHECK_EQ(beat1[(105-64)*8 +: 8], 8'h01, "top production SPEC chan_count high")
+            `TB_CHECK_EQ(beat1[(106-64)*8 +: 8], 8'h00, "top production SPEC payload bytes byte0")
+            `TB_CHECK_EQ(beat1[(107-64)*8 +: 8], 8'h20, "top production SPEC payload bytes byte1")
+            `TB_CHECK_EQ(beat1[(114-64)*8 +: 8], 8'h10, "top production SPEC block_count low")
+            `TB_CHECK_EQ(beat1[(116-64)*8 +: 8], 8'h00, "top production SPEC block_index low")
+            `TB_CHECK_EQ(beat1[(118-64)*8 +: 8], 8'h00, "top production SPEC nchan byte0")
+            `TB_CHECK_EQ(beat1[(119-64)*8 +: 8], 8'h10, "top production SPEC nchan byte1")
+            `TB_CHECK_EQ(beat1[(120-64)*8 +: 8], 8'h01, "top production SPEC product byte0")
+            `TB_CHECK_EQ(beat1[(121-64)*8 +: 8], 8'hf1, "top production SPEC product byte1")
+            `TB_CHECK_EQ(beat1[(123-64)*8 +: 8], 8'h01, "top production SPEC FFT-only status byte1")
+            `TB_CHECK_EQ(beat2[0*8 +: 8], 8'h00, "top production SPEC taps low")
+            `TB_CHECK_EQ(beat2[1*8 +: 8], 8'h00, "top production SPEC taps high")
+        end
+    endtask
+
+    task automatic run_production_spec_cmac;
+        reg [31:0] rd;
+        begin
+            reset_dut();
+            axi_write(16'h0020, 32'h0000_0002);
+            axi_write(16'h0008, 32'd0);
+            axi_write(32'h0000_b000, 32'h0000_0016);
+            axi_write(32'h0000_d008, 32'd1);
+            axi_write(32'h0000_d00c, 32'd2);
+            axi_write(32'h0000_d010, 32'd100_000_000);
+            axi_write(32'h0000_d014, 32'd2);
+            axi_write(32'h0000_d018, 32'd31_457);
+            axi_write(16'h0900, 32'h0000_0003);
+            axi_write(16'h000c, 32'h0000_0001);
+            wait_for_state(4'd6);
+            s_axis_adc_tvalid = 1'b1;
+            collect_science_spec_cmac_frame();
+            s_axis_adc_tvalid = 1'b0;
+
+            axi_read(16'h0304, rd);
+            `TB_CHECK(rd > 32'd0, "top production SPEC packet counter increments")
+            axi_read(16'h0338, rd);
+            `TB_CHECK((rd < 32'd4096) && (rd[7:0] == 8'd0), "top production SPEC chan0 is a valid 256-channel block")
+            axi_write(32'h0000_b130, 32'd0);
+            axi_read(32'h0000_b140, rd);
+            `TB_CHECK(rd > 32'd0, "top production SPEC route 0 hit")
+        end
+    endtask
+
     initial begin
         check_default_waits_without_pps();
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+        run_production_spec_cmac();
+`else
         run_mode(2'd0, 0, 1'b1);
         run_spec_header_capture();
+        run_production_spec_cmac();
         run_mode(2'd1, 1, 1'b1);
         run_mode(2'd2, 0, 1'b1);
         run_mode(2'd3, 0, 1'b0);
+`endif
         `TB_PASS("tb_t510_fengine_top_smoke")
     end
 

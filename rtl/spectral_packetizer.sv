@@ -19,6 +19,11 @@ module spectral_packetizer #(
     input  wire [31:0]          spec_chan0,
     input  wire [15:0]          spec_time_count,
     input  wire [15:0]          spec_chan_count,
+    input  wire [15:0]          spec_nchan,
+    input  wire [15:0]          spec_taps,
+    input  wire [15:0]          spec_fft_shift,
+    input  wire [31:0]          spec_sample_rate_hz,
+    input  wire [31:0]          spec_status_flags,
     input  wire [31:0]          chan_split,
     input  wire [DATA_W-1:0]    s_axis_tdata,
     input  wire [63:0]          s_axis_sample0,
@@ -45,6 +50,7 @@ module spectral_packetizer #(
 
     localparam [31:0] T510_MAGIC    = 32'h5435_3130;
     localparam [15:0] STREAM_TYPE   = 16'd0;
+    localparam [15:0] PRODUCT_FENGINE_IQ16 = 16'hf101;
     localparam [15:0] LOCAL_NINPUT  = 16'd8;
     localparam [15:0] HEADER_BYTES  = 16'd128;
     localparam [31:0] PAYLOAD_BYTES = 32'd8192;
@@ -65,24 +71,92 @@ module spectral_packetizer #(
     logic [31:0]               seq_no;
     logic [63:0]               sample0;
     logic [63:0]               frame_id;
+    logic [15:0]               pkt_epoch_mode;
+    logic [15:0]               pkt_packet_flags;
+    logic [15:0]               pkt_quant_mode;
+    logic [15:0]               pkt_scale_mode;
+    logic [31:0]               pkt_scale_id;
+    logic [31:0]               pkt_spec_chan0;
+    logic [15:0]               pkt_spec_time_count;
+    logic [15:0]               pkt_spec_chan_count;
+    logic [15:0]               pkt_spec_nchan;
+    logic [15:0]               pkt_spec_taps;
+    logic [15:0]               pkt_spec_fft_shift;
+    logic [31:0]               pkt_spec_sample_rate_hz;
+    logic [31:0]               pkt_spec_status_flags;
+    logic [31:0]               pkt_chan_split;
     wire                       capture_write_en =
         ((state == ST_IDLE) || (state == ST_CAPTURE)) && enable && s_axis_tvalid;
     wire [ADDR_W-1:0]          capture_write_addr =
         (state == ST_IDLE) ? {ADDR_W{1'b0}} : capture_idx[ADDR_W-1:0];
+    wire [15:0]                block_count =
+        block_count_from_pow2_chan_count(pkt_spec_nchan, pkt_spec_chan_count);
+    wire [15:0]                block_index =
+        block_index_from_pow2_chan_count(pkt_spec_chan0, pkt_spec_chan_count);
+
+    function automatic [15:0] block_count_from_pow2_chan_count(
+        input [15:0] nchan_value,
+        input [15:0] chan_count_value
+    );
+        begin
+            case (chan_count_value)
+                16'd1:    block_count_from_pow2_chan_count = nchan_value;
+                16'd2:    block_count_from_pow2_chan_count = (nchan_value[0] == 1'b0) ? {1'b0, nchan_value[15:1]} : 16'd0;
+                16'd4:    block_count_from_pow2_chan_count = (nchan_value[1:0] == 2'd0) ? {2'd0, nchan_value[15:2]} : 16'd0;
+                16'd8:    block_count_from_pow2_chan_count = (nchan_value[2:0] == 3'd0) ? {3'd0, nchan_value[15:3]} : 16'd0;
+                16'd16:   block_count_from_pow2_chan_count = (nchan_value[3:0] == 4'd0) ? {4'd0, nchan_value[15:4]} : 16'd0;
+                16'd32:   block_count_from_pow2_chan_count = (nchan_value[4:0] == 5'd0) ? {5'd0, nchan_value[15:5]} : 16'd0;
+                16'd64:   block_count_from_pow2_chan_count = (nchan_value[5:0] == 6'd0) ? {6'd0, nchan_value[15:6]} : 16'd0;
+                16'd128:  block_count_from_pow2_chan_count = (nchan_value[6:0] == 7'd0) ? {7'd0, nchan_value[15:7]} : 16'd0;
+                16'd256:  block_count_from_pow2_chan_count = (nchan_value[7:0] == 8'd0) ? {8'd0, nchan_value[15:8]} : 16'd0;
+                16'd512:  block_count_from_pow2_chan_count = (nchan_value[8:0] == 9'd0) ? {9'd0, nchan_value[15:9]} : 16'd0;
+                16'd1024: block_count_from_pow2_chan_count = (nchan_value[9:0] == 10'd0) ? {10'd0, nchan_value[15:10]} : 16'd0;
+                16'd2048: block_count_from_pow2_chan_count = (nchan_value[10:0] == 11'd0) ? {11'd0, nchan_value[15:11]} : 16'd0;
+                16'd4096: block_count_from_pow2_chan_count = (nchan_value[11:0] == 12'd0) ? {12'd0, nchan_value[15:12]} : 16'd0;
+                default:  block_count_from_pow2_chan_count = 16'd0;
+            endcase
+        end
+    endfunction
+
+    function automatic [15:0] block_index_from_pow2_chan_count(
+        input [31:0] chan0_value,
+        input [15:0] chan_count_value
+    );
+        begin
+            case (chan_count_value)
+                16'd1:    block_index_from_pow2_chan_count = chan0_value[15:0];
+                16'd2:    block_index_from_pow2_chan_count = (chan0_value[0] == 1'b0) ? chan0_value[16:1] : 16'd0;
+                16'd4:    block_index_from_pow2_chan_count = (chan0_value[1:0] == 2'd0) ? chan0_value[17:2] : 16'd0;
+                16'd8:    block_index_from_pow2_chan_count = (chan0_value[2:0] == 3'd0) ? chan0_value[18:3] : 16'd0;
+                16'd16:   block_index_from_pow2_chan_count = (chan0_value[3:0] == 4'd0) ? chan0_value[19:4] : 16'd0;
+                16'd32:   block_index_from_pow2_chan_count = (chan0_value[4:0] == 5'd0) ? chan0_value[20:5] : 16'd0;
+                16'd64:   block_index_from_pow2_chan_count = (chan0_value[5:0] == 6'd0) ? chan0_value[21:6] : 16'd0;
+                16'd128:  block_index_from_pow2_chan_count = (chan0_value[6:0] == 7'd0) ? chan0_value[22:7] : 16'd0;
+                16'd256:  block_index_from_pow2_chan_count = (chan0_value[7:0] == 8'd0) ? chan0_value[23:8] : 16'd0;
+                16'd512:  block_index_from_pow2_chan_count = (chan0_value[8:0] == 9'd0) ? chan0_value[24:9] : 16'd0;
+                16'd1024: block_index_from_pow2_chan_count = (chan0_value[9:0] == 10'd0) ? chan0_value[25:10] : 16'd0;
+                16'd2048: block_index_from_pow2_chan_count = (chan0_value[10:0] == 11'd0) ? chan0_value[26:11] : 16'd0;
+                16'd4096: block_index_from_pow2_chan_count = (chan0_value[11:0] == 12'd0) ? chan0_value[27:12] : 16'd0;
+                default:  block_index_from_pow2_chan_count = 16'd0;
+            endcase
+        end
+    endfunction
 
     function automatic [63:0] header_word(input [4:0] idx);
         begin
             case (idx)
                 5'd0:  header_word = {T510_MAGIC, 16'd2, HEADER_BYTES};
-                5'd1:  header_word = {board_id, STREAM_TYPE, epoch_mode, packet_flags};
+                5'd1:  header_word = {board_id, STREAM_TYPE, pkt_epoch_mode, pkt_packet_flags};
                 5'd2:  header_word = unix_seconds;
                 5'd3:  header_word = pps_count;
                 5'd4:  header_word = sample0;
                 5'd5:  header_word = frame_id;
-                5'd6:  header_word = {seq_no, spec_chan0};
-                5'd7:  header_word = {spec_chan_count, spec_time_count, LOCAL_NINPUT, quant_mode};
-                5'd8:  header_word = {scale_id, PAYLOAD_BYTES};
-                5'd9:  header_word = {32'd0, 31'd0, (spec_chan0 >= chan_split)};
+                5'd6:  header_word = {seq_no, pkt_spec_chan0};
+                5'd7:  header_word = {pkt_spec_chan_count, pkt_spec_time_count, LOCAL_NINPUT, pkt_quant_mode};
+                5'd8:  header_word = {pkt_scale_id, PAYLOAD_BYTES};
+                5'd9:  header_word = {PRODUCT_FENGINE_IQ16, pkt_spec_nchan, block_index, block_count};
+                5'd10: header_word = {pkt_spec_taps, pkt_spec_fft_shift, pkt_spec_status_flags};
+                5'd11: header_word = {pkt_spec_sample_rate_hz, pkt_scale_mode, 15'd0, (pkt_spec_chan0 >= pkt_chan_split)};
                 default: header_word = 64'd0;
             endcase
         end
@@ -100,6 +174,20 @@ module spectral_packetizer #(
             seq_no               <= 32'd0;
             sample0              <= 64'd0;
             frame_id             <= 64'd0;
+            pkt_epoch_mode        <= 16'd0;
+            pkt_packet_flags      <= 16'd0;
+            pkt_quant_mode        <= 16'd0;
+            pkt_scale_mode        <= 16'd0;
+            pkt_scale_id          <= 32'd0;
+            pkt_spec_chan0        <= 32'd0;
+            pkt_spec_time_count   <= 16'd0;
+            pkt_spec_chan_count   <= 16'd0;
+            pkt_spec_nchan        <= 16'd0;
+            pkt_spec_taps         <= 16'd0;
+            pkt_spec_fft_shift    <= 16'd0;
+            pkt_spec_sample_rate_hz <= 32'd0;
+            pkt_spec_status_flags <= 32'd0;
+            pkt_chan_split        <= 32'd0;
             packet_count         <= 32'd0;
             udp_byte_count       <= 32'd0;
         end else begin
@@ -114,6 +202,20 @@ module spectral_packetizer #(
                 seq_no               <= 32'd0;
                 sample0              <= 64'd0;
                 frame_id             <= 64'd0;
+                pkt_epoch_mode        <= 16'd0;
+                pkt_packet_flags      <= 16'd0;
+                pkt_quant_mode        <= 16'd0;
+                pkt_scale_mode        <= 16'd0;
+                pkt_scale_id          <= 32'd0;
+                pkt_spec_chan0        <= 32'd0;
+                pkt_spec_time_count   <= 16'd0;
+                pkt_spec_chan_count   <= 16'd0;
+                pkt_spec_nchan        <= 16'd0;
+                pkt_spec_taps         <= 16'd0;
+                pkt_spec_fft_shift    <= 16'd0;
+                pkt_spec_sample_rate_hz <= 32'd0;
+                pkt_spec_status_flags <= 32'd0;
+                pkt_chan_split        <= 32'd0;
             end else begin
             case (state)
                 ST_IDLE: begin
@@ -122,6 +224,20 @@ module spectral_packetizer #(
                         payload_subword  <= 2'd0;
                         payload_read_idx <= 16'd0;
                         sample0          <= s_axis_sample0;
+                        pkt_epoch_mode    <= epoch_mode;
+                        pkt_packet_flags  <= packet_flags;
+                        pkt_quant_mode    <= quant_mode;
+                        pkt_scale_mode    <= scale_mode;
+                        pkt_scale_id      <= scale_id;
+                        pkt_spec_chan0    <= spec_chan0;
+                        pkt_spec_time_count <= spec_time_count;
+                        pkt_spec_chan_count <= spec_chan_count;
+                        pkt_spec_nchan    <= spec_nchan;
+                        pkt_spec_taps     <= spec_taps;
+                        pkt_spec_fft_shift <= spec_fft_shift;
+                        pkt_spec_sample_rate_hz <= spec_sample_rate_hz;
+                        pkt_spec_status_flags <= spec_status_flags;
+                        pkt_chan_split    <= chan_split;
                         packet_count     <= packet_count + 32'd1;
                         if (PAYLOAD_BEATS <= 1) begin
                             state      <= ST_HEADER;
@@ -176,7 +292,9 @@ module spectral_packetizer #(
                                 state            <= ST_IDLE;
                                 payload_read_idx <= 16'd0;
                                 seq_no           <= seq_no + 32'd1;
-                                frame_id         <= frame_id + 64'd1;
+                                if ((block_count == 16'd0) || (block_index + 16'd1 >= block_count)) begin
+                                    frame_id     <= frame_id + 64'd1;
+                                end
                             end else begin
                                 payload_read_idx <= payload_read_idx + 16'd1;
                                 payload_rd_addr  <= payload_read_idx + 16'd1;
@@ -228,7 +346,7 @@ module spectral_packetizer #(
 
     assign seq_no_debug   = seq_no;
     assign frame_id_debug = frame_id;
-    assign chan0_debug    = spec_chan0;
+    assign chan0_debug    = pkt_spec_chan0;
 
     xpm_memory_sdpram #(
         .ADDR_WIDTH_A(ADDR_W),

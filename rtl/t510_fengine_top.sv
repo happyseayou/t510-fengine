@@ -73,6 +73,43 @@ module t510_fengine_top (
     output wire         cmac_tx_axis_tvalid,
     output wire         cmac_tx_axis_tlast,
     input  wire         cmac_tx_axis_tready,
+    output wire [5:0]   m_axi_ddr_awid,
+    output wire [39:0]  m_axi_ddr_awaddr,
+    output wire [7:0]   m_axi_ddr_awlen,
+    output wire [2:0]   m_axi_ddr_awsize,
+    output wire [1:0]   m_axi_ddr_awburst,
+    output wire         m_axi_ddr_awlock,
+    output wire [3:0]   m_axi_ddr_awcache,
+    output wire [2:0]   m_axi_ddr_awprot,
+    output wire [3:0]   m_axi_ddr_awqos,
+    output wire         m_axi_ddr_awvalid,
+    input  wire         m_axi_ddr_awready,
+    output wire [127:0] m_axi_ddr_wdata,
+    output wire [15:0]  m_axi_ddr_wstrb,
+    output wire         m_axi_ddr_wlast,
+    output wire         m_axi_ddr_wvalid,
+    input  wire         m_axi_ddr_wready,
+    input  wire [5:0]   m_axi_ddr_bid,
+    input  wire [1:0]   m_axi_ddr_bresp,
+    input  wire         m_axi_ddr_bvalid,
+    output wire         m_axi_ddr_bready,
+    output wire [5:0]   m_axi_ddr_arid,
+    output wire [39:0]  m_axi_ddr_araddr,
+    output wire [7:0]   m_axi_ddr_arlen,
+    output wire [2:0]   m_axi_ddr_arsize,
+    output wire [1:0]   m_axi_ddr_arburst,
+    output wire         m_axi_ddr_arlock,
+    output wire [3:0]   m_axi_ddr_arcache,
+    output wire [2:0]   m_axi_ddr_arprot,
+    output wire [3:0]   m_axi_ddr_arqos,
+    output wire         m_axi_ddr_arvalid,
+    input  wire         m_axi_ddr_arready,
+    input  wire [5:0]   m_axi_ddr_rid,
+    input  wire [127:0] m_axi_ddr_rdata,
+    input  wire [1:0]   m_axi_ddr_rresp,
+    input  wire         m_axi_ddr_rlast,
+    input  wire         m_axi_ddr_rvalid,
+    output wire         m_axi_ddr_rready,
     input  wire [31:0]  tx_link_status_flags,
     input  wire [31:0]  tx_dry_run_packet_count,
     input  wire [31:0]  tx_dry_run_byte_count,
@@ -97,6 +134,19 @@ module t510_fengine_top (
     localparam [1:0] MODE_TIME     = 2'd1;
     localparam [1:0] MODE_DUAL     = 2'd2;
     localparam [1:0] MODE_SNAPSHOT = 2'd3;
+    localparam bit   TIME_DDR_RING_COMPILED = 1'b0;
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    localparam integer TX_ENDPOINTS = 24;
+    localparam integer TX_SPEC_ROUTES = 16;
+`else
+    localparam integer TX_ENDPOINTS = 72;
+    localparam integer TX_SPEC_ROUTES = 64;
+`endif
+    localparam integer TX_TIME_ROUTES = 8;
+    localparam [2:0] SCIENCE_MODE_TIME_ONLY = 3'd1;
+    localparam [2:0] SCIENCE_MODE_SPEC_ONLY = 3'd2;
+    localparam [2:0] SCIENCE_MODE_TIME_SPEC = 3'd3;
+    integer tx_reset_idx;
 
     wire [15:0] ctrl_board_id;
     wire [1:0]  ctrl_mode;
@@ -134,19 +184,19 @@ module t510_fengine_top (
     wire [15:0] ctrl_time_udp_port;
     wire [31:0] ctrl_tx_control;
     wire        ctrl_tx_clear_pulse;
-    wire [7:0]  ctrl_tx_endpoint_enable;
-    wire [255:0] ctrl_tx_endpoint_ip_vec;
-    wire [383:0] ctrl_tx_endpoint_mac_vec;
-    wire [127:0] ctrl_tx_endpoint_src_port_vec;
-    wire [127:0] ctrl_tx_endpoint_dst_port_vec;
+    wire [TX_ENDPOINTS-1:0]  ctrl_tx_endpoint_enable;
+    wire [TX_ENDPOINTS*32-1:0] ctrl_tx_endpoint_ip_vec;
+    wire [TX_ENDPOINTS*48-1:0] ctrl_tx_endpoint_mac_vec;
+    wire [TX_ENDPOINTS*16-1:0] ctrl_tx_endpoint_src_port_vec;
+    wire [TX_ENDPOINTS*16-1:0] ctrl_tx_endpoint_dst_port_vec;
     wire [31:0] ctrl_qsfp_test_interval_cycles;
-    wire [7:0]  ctrl_tx_spec_route_enable;
-    wire [255:0] ctrl_tx_spec_route_chan0_vec;
-    wire [127:0] ctrl_tx_spec_route_chan_count_vec;
-    wire [23:0] ctrl_tx_spec_route_endpoint_vec;
+    wire [TX_SPEC_ROUTES-1:0]  ctrl_tx_spec_route_enable;
+    wire [TX_SPEC_ROUTES*32-1:0] ctrl_tx_spec_route_chan0_vec;
+    wire [TX_SPEC_ROUTES*16-1:0] ctrl_tx_spec_route_chan_count_vec;
+    wire [TX_SPEC_ROUTES*8-1:0] ctrl_tx_spec_route_endpoint_vec;
     wire [7:0]  ctrl_tx_time_route_enable;
     wire [127:0] ctrl_tx_time_route_input_mask_vec;
-    wire [23:0] ctrl_tx_time_route_endpoint_vec;
+    wire [TX_TIME_ROUTES*8-1:0] ctrl_tx_time_route_endpoint_vec;
     wire [15:0] ctrl_rfdc_active_mask;
     wire        ctrl_debug_capture_start_pulse;
     wire        ctrl_debug_capture_clear_pulse;
@@ -188,6 +238,13 @@ module t510_fengine_top (
     wire [8:0]  ctrl_rfdc_axis_raw_witness_capture_beats;
     wire [9:0]  ctrl_rfdc_axis_raw_witness_rd_word;
     wire [63:0] ctrl_unix_seconds;
+    wire        ctrl_time_ddr_ring_enable;
+    wire        ctrl_time_ddr_ring_clear_pulse;
+    wire [63:0] ctrl_time_ddr_ring_base_addr;
+    wire [15:0] ctrl_time_ddr_ring_slots;
+    wire        ctrl_time_multiflow_enable;
+    wire [2:0]  ctrl_time_multiflow_base_endpoint;
+    wire [3:0]  ctrl_time_multiflow_count;
 
     (* ASYNC_REG = "TRUE" *) logic [15:0] board_id_meta;
     (* ASYNC_REG = "TRUE" *) logic [15:0] board_id;
@@ -226,30 +283,30 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [47:0] src_mac;
     (* ASYNC_REG = "TRUE" *) logic [31:0] tx_control_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0] tx_control;
-    (* ASYNC_REG = "TRUE" *) logic [7:0] tx_endpoint_enable_meta;
-    (* ASYNC_REG = "TRUE" *) logic [7:0] tx_endpoint_enable;
-    (* ASYNC_REG = "TRUE" *) logic [255:0] tx_endpoint_ip_vec_meta;
-    (* ASYNC_REG = "TRUE" *) logic [255:0] tx_endpoint_ip_vec;
-    (* ASYNC_REG = "TRUE" *) logic [383:0] tx_endpoint_mac_vec_meta;
-    (* ASYNC_REG = "TRUE" *) logic [383:0] tx_endpoint_mac_vec;
-    (* ASYNC_REG = "TRUE" *) logic [127:0] tx_endpoint_src_port_vec_meta;
-    (* ASYNC_REG = "TRUE" *) logic [127:0] tx_endpoint_src_port_vec;
-    (* ASYNC_REG = "TRUE" *) logic [127:0] tx_endpoint_dst_port_vec_meta;
-    (* ASYNC_REG = "TRUE" *) logic [127:0] tx_endpoint_dst_port_vec;
-    (* ASYNC_REG = "TRUE" *) logic [7:0] tx_spec_route_enable_meta;
-    (* ASYNC_REG = "TRUE" *) logic [7:0] tx_spec_route_enable;
-    (* ASYNC_REG = "TRUE" *) logic [255:0] tx_spec_route_chan0_vec_meta;
-    (* ASYNC_REG = "TRUE" *) logic [255:0] tx_spec_route_chan0_vec;
-    (* ASYNC_REG = "TRUE" *) logic [127:0] tx_spec_route_chan_count_vec_meta;
-    (* ASYNC_REG = "TRUE" *) logic [127:0] tx_spec_route_chan_count_vec;
-    (* ASYNC_REG = "TRUE" *) logic [23:0] tx_spec_route_endpoint_vec_meta;
-    (* ASYNC_REG = "TRUE" *) logic [23:0] tx_spec_route_endpoint_vec;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS-1:0] tx_endpoint_enable_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS-1:0] tx_endpoint_enable;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS*32-1:0] tx_endpoint_ip_vec_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS*32-1:0] tx_endpoint_ip_vec;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS*48-1:0] tx_endpoint_mac_vec_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS*48-1:0] tx_endpoint_mac_vec;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS*16-1:0] tx_endpoint_src_port_vec_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS*16-1:0] tx_endpoint_src_port_vec;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS*16-1:0] tx_endpoint_dst_port_vec_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_ENDPOINTS*16-1:0] tx_endpoint_dst_port_vec;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES-1:0] tx_spec_route_enable_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES-1:0] tx_spec_route_enable;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES*32-1:0] tx_spec_route_chan0_vec_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES*32-1:0] tx_spec_route_chan0_vec;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES*16-1:0] tx_spec_route_chan_count_vec_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES*16-1:0] tx_spec_route_chan_count_vec;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES*8-1:0] tx_spec_route_endpoint_vec_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES*8-1:0] tx_spec_route_endpoint_vec;
     (* ASYNC_REG = "TRUE" *) logic [7:0] tx_time_route_enable_meta;
     (* ASYNC_REG = "TRUE" *) logic [7:0] tx_time_route_enable;
     (* ASYNC_REG = "TRUE" *) logic [127:0] tx_time_route_input_mask_vec_meta;
     (* ASYNC_REG = "TRUE" *) logic [127:0] tx_time_route_input_mask_vec;
-    (* ASYNC_REG = "TRUE" *) logic [23:0] tx_time_route_endpoint_vec_meta;
-    (* ASYNC_REG = "TRUE" *) logic [23:0] tx_time_route_endpoint_vec;
+    (* ASYNC_REG = "TRUE" *) logic [TX_TIME_ROUTES*8-1:0] tx_time_route_endpoint_vec_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_TIME_ROUTES*8-1:0] tx_time_route_endpoint_vec;
     (* ASYNC_REG = "TRUE" *) logic [15:0] rfdc_active_mask_meta;
     (* ASYNC_REG = "TRUE" *) logic [15:0] rfdc_active_mask;
     (* ASYNC_REG = "TRUE" *) logic [1:0]  sync_mode_meta;
@@ -262,18 +319,21 @@ module t510_fengine_top (
     logic        ctrl_soft_reset_toggle;
     logic        ctrl_pfb_clear_toggle;
     logic        ctrl_tx_clear_toggle;
+    logic        ctrl_time_ddr_ring_clear_toggle;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  soft_epoch_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  stop_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  soft_reset_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_clear_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_cmac_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  time_ddr_ring_clear_toggle_cmac_sync;
     logic        soft_epoch_toggle_seen;
     logic        stop_toggle_seen;
     logic        soft_reset_toggle_seen;
     logic        pfb_clear_toggle_seen;
     logic        tx_clear_toggle_seen;
     logic        tx_clear_toggle_cmac_seen;
+    logic        time_ddr_ring_clear_toggle_cmac_seen;
     wire         arm_latched;
     wire         soft_epoch_pulse;
     wire         stop_pulse;
@@ -281,6 +341,7 @@ module t510_fengine_top (
     wire         pfb_clear_pulse;
     wire         tx_clear_pulse;
     wire         tx_clear_pulse_cmac;
+    wire         time_ddr_ring_clear_pulse_cmac;
     logic [1:0]  mode_prev;
     logic [31:0] mode_switch_reset_count;
     wire         mode_change_pulse;
@@ -374,6 +435,8 @@ module t510_fengine_top (
     wire         time_tvalid;
     wire         time_tlast;
     wire         time_tready;
+    wire         legacy_time_tready;
+    wire         wide_time_tready;
     wire [SCIENCE_DATA_W-1:0] snapshot_tdata;
     wire [31:0]  snapshot_tuser;
     wire [63:0]  snapshot_sample0;
@@ -393,9 +456,22 @@ module t510_fengine_top (
     wire [63:0]  pfb_spec_sample0;
     wire         pfb_spec_tvalid;
     wire         pfb_spec_tready;
+    wire         legacy_pfb_spec_tready;
+    wire         wide_pfb_spec_tready;
     wire [31:0] pfb_status;
     wire [31:0] pfb_frame_count;
     wire [31:0] pfb_overflow_count;
+    wire [31:0] pfb_data_halt_count;
+    wire [31:0] pfb_xfft_event_count;
+    wire [31:0] pfb_tile_overflow_count;
+    wire [31:0] pfb_xfft_tlast_unexpected_count;
+    wire [31:0] pfb_xfft_tlast_missing_count;
+    wire [31:0] pfb_xfft_fft_overflow_count;
+    wire [31:0] pfb_xfft_data_out_halt_count;
+    wire [31:0] pfb_xfft_status_halt_count;
+    wire [31:0] pfb_capture_backpressure_count;
+    wire [31:0] pfb_frame_sample0_overflow_count;
+    wire [31:0] pfb_input_fifo_level;
     wire [31:0] pfb_peak_chan;
     wire [31:0] pfb_peak_power;
     wire [31:0] pfb_packet_chan0;
@@ -403,8 +479,25 @@ module t510_fengine_top (
     wire [15:0] pfb_packet_time_count;
     wire [1:0] ctrl_science_bandwidth_mode_cfg;
     wire [2:0] ctrl_science_output_mode_cfg;
+    wire [31:0] ctrl_time_live_interval_beats;
+    (* ASYNC_REG = "TRUE" *) logic        time_multiflow_enable_meta;
+    (* ASYNC_REG = "TRUE" *) logic        time_multiflow_enable;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  time_multiflow_base_endpoint_meta;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  time_multiflow_base_endpoint;
+    (* ASYNC_REG = "TRUE" *) logic [3:0]  time_multiflow_count_meta;
+    (* ASYNC_REG = "TRUE" *) logic [3:0]  time_multiflow_count;
+    (* ASYNC_REG = "TRUE" *) logic        time_ddr_ring_enable_meta;
+    (* ASYNC_REG = "TRUE" *) logic        time_ddr_ring_enable_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] time_ddr_ring_base_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] time_ddr_ring_base_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] time_ddr_ring_slots_meta;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] time_ddr_ring_slots_cmac;
     (* ASYNC_REG = "TRUE" *) logic [1:0] science_bandwidth_mode_meta;
     (* ASYNC_REG = "TRUE" *) logic [1:0] science_bandwidth_mode;
+    (* ASYNC_REG = "TRUE" *) logic [2:0] science_output_mode_meta;
+    (* ASYNC_REG = "TRUE" *) logic [2:0] science_output_mode;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_live_interval_beats_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_live_interval_beats;
 
     wire [63:0] spec_axis_tdata;
     wire [7:0]  spec_axis_tkeep;
@@ -447,20 +540,51 @@ module t510_fengine_top (
     wire [15:0] routed_dst_udp_port;
     wire [31:0] routed_t510_payload_bytes;
     wire [15:0] routed_stream_type;
-    wire [2:0]  routed_endpoint_id;
-    wire [2:0]  routed_route_id;
+    wire [7:0]  routed_endpoint_id;
+    wire [5:0]  routed_route_id;
     wire        routed_route_is_time;
     wire [31:0] tx_route_forwarded_count;
+    wire [31:0] legacy_tx_route_forwarded_count;
+    wire [31:0] wide_tx_route_forwarded_count;
+    wire [31:0] wide_spec_tx_route_forwarded_count;
     wire [31:0] tx_route_dropped_count;
+    wire [31:0] legacy_tx_route_dropped_count;
+    wire [31:0] wide_tx_route_dropped_count;
+    wire [31:0] wide_spec_tx_route_dropped_count;
     wire [31:0] tx_route_miss_count;
+    wire [31:0] legacy_tx_route_miss_count;
+    wire [31:0] wide_tx_route_miss_count;
+    wire [31:0] wide_spec_tx_route_miss_count;
     wire [31:0] tx_route_error_count;
-    wire [2:0]  tx_selected_endpoint_id;
-    wire [2:0]  tx_selected_route_id;
+    wire [31:0] legacy_tx_route_error_count;
+    wire [31:0] wide_tx_route_error_count;
+    wire [31:0] wide_spec_tx_route_error_count;
+    wire [7:0]  tx_selected_endpoint_id;
+    wire [7:0]  legacy_tx_selected_endpoint_id;
+    wire [7:0]  wide_tx_selected_endpoint_id;
+    wire [7:0]  wide_spec_tx_selected_endpoint_id;
+    wire [5:0]  tx_selected_route_id;
+    wire [5:0]  legacy_tx_selected_route_id;
+    wire [5:0]  wide_tx_selected_route_id;
+    wire [5:0]  wide_spec_tx_selected_route_id;
     wire        tx_selected_route_is_time;
-    wire [255:0] tx_spec_route_hit_counts;
+    wire        legacy_tx_selected_route_is_time;
+    wire        wide_tx_selected_route_is_time;
+    wire        wide_spec_tx_selected_route_is_time;
+    wire [TX_SPEC_ROUTES*32-1:0] tx_spec_route_hit_counts;
+    wire [TX_SPEC_ROUTES*32-1:0] legacy_tx_spec_route_hit_counts;
+    wire [TX_SPEC_ROUTES*32-1:0] wide_spec_tx_route_hit_counts;
     wire [255:0] tx_time_route_hit_counts;
+    wire [255:0] legacy_tx_time_route_hit_counts;
+    wire [255:0] wide_tx_time_route_hit_counts;
     wire [31:0] tx_frame_built_count;
+    wire [31:0] legacy_tx_frame_built_count;
+    wire [31:0] wide_tx_frame_built_count;
+    wire [31:0] wide_spec_tx_frame_built_count;
     wire [31:0] tx_frame_byte_count;
+    wire [31:0] legacy_tx_frame_byte_count;
+    wire [31:0] wide_tx_frame_byte_count;
+    wire [31:0] wide_spec_tx_frame_byte_count;
     wire [31:0] tx_preflight_status_flags;
     wire        tx_dry_run_active;
     wire        tx_qsfp_link_up;
@@ -472,6 +596,104 @@ module t510_fengine_top (
     wire [31:0] tx_count_byte_status;
     wire [31:0] tx_cmac_test_packet_count;
     wire [31:0] tx_cmac_test_byte_count;
+    wire [511:0] heartbeat_cmac_tdata;
+    wire [63:0]  heartbeat_cmac_tkeep;
+    wire         heartbeat_cmac_tvalid;
+    wire         heartbeat_cmac_tlast;
+    wire         heartbeat_cmac_tready;
+    wire [511:0] time_live_cmac_tdata;
+    wire [63:0]  time_live_cmac_tkeep;
+    wire         time_live_cmac_tvalid;
+    wire         time_live_cmac_tlast;
+    wire         time_live_cmac_tready;
+    wire [511:0] time_live_cmac_mux_tdata;
+    wire [63:0]  time_live_cmac_mux_tkeep;
+    wire         time_live_cmac_mux_tvalid;
+    wire         time_live_cmac_mux_tlast;
+    wire         time_live_cmac_mux_tready;
+    wire [511:0] cmac_mux_axis_tdata;
+    wire [63:0]  cmac_mux_axis_tkeep;
+    wire         cmac_mux_axis_tvalid;
+    wire         cmac_mux_axis_tlast;
+    wire         cmac_mux_axis_tready;
+    wire [511:0] time_live_ddr_tdata;
+    wire [63:0]  time_live_ddr_tkeep;
+    wire         time_live_ddr_tvalid;
+    wire         time_live_ddr_tlast;
+    wire         time_live_ddr_tready;
+    wire [31:0] time_ddr_ring_status;
+    wire [31:0] time_ddr_ring_occupancy;
+    wire [31:0] time_ddr_ring_write_count;
+    wire [31:0] time_ddr_ring_read_count;
+    wire [31:0] time_ddr_ring_drop_count;
+    wire [31:0] time_ddr_ring_error_count;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_status_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_status_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_occupancy_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_occupancy_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_write_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_write_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_read_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_read_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_drop_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_drop_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_error_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] time_ddr_ring_error_count_ctrl;
+    wire [511:0] legacy_time_live_cmac_tdata;
+    wire [63:0]  legacy_time_live_cmac_tkeep;
+    wire         legacy_time_live_cmac_tvalid;
+    wire         legacy_time_live_cmac_tlast;
+    wire         legacy_time_live_cmac_tready;
+    wire [511:0] wide_time_live_cmac_tdata;
+    wire [63:0]  wide_time_live_cmac_tkeep;
+    wire         wide_time_live_cmac_tvalid;
+    wire         wide_time_live_cmac_tlast;
+    wire         wide_time_live_cmac_tready;
+    wire [511:0] wide_spec_live_cmac_tdata;
+    wire [63:0]  wide_spec_live_cmac_tkeep;
+    wire         wide_spec_live_cmac_tvalid;
+    wire         wide_spec_live_cmac_tlast;
+    wire         wide_spec_live_cmac_tready;
+    wire         time_live_bridge_s_tready;
+    wire         legacy_time_live_bridge_s_tready;
+    wire         wide_time_live_bridge_s_tready;
+    wire [31:0] time_live_bridge_fifo_level;
+    wire [31:0] legacy_time_live_bridge_fifo_level;
+    wire [31:0] wide_time_live_bridge_fifo_level;
+    wire [31:0] time_live_bridge_input_frames;
+    wire [31:0] legacy_time_live_bridge_input_frames;
+    wire [31:0] wide_time_live_bridge_input_frames;
+    wire [31:0] time_live_bridge_output_frames;
+    wire [31:0] legacy_time_live_bridge_output_frames;
+    wire [31:0] wide_time_live_bridge_output_frames;
+    wire [31:0] time_live_bridge_backpressure_cycles;
+    wire [31:0] legacy_time_live_bridge_backpressure_cycles;
+    wire [31:0] wide_time_live_bridge_backpressure_cycles;
+    wire         time_live_bridge_fifo_full;
+    wire         legacy_time_live_bridge_fifo_full;
+    wire         wide_time_live_bridge_fifo_full;
+    wire         time_live_bridge_fifo_empty;
+    wire         legacy_time_live_bridge_fifo_empty;
+    wire         wide_time_live_bridge_fifo_empty;
+    wire [31:0] tx_cmac_source_mux_status;
+    wire [31:0] tx_cmac_source_status;
+    wire        time_live_requested_data;
+    logic       time_live_requested_cmac;
+    wire        time_live_requested_cmac_comb;
+    wire        spec_live_requested_data;
+    logic       spec_live_requested_cmac;
+    wire        spec_live_requested_cmac_comb;
+    wire        legacy_bridge_requested_data;
+    logic       legacy_bridge_requested_cmac;
+    wire        legacy_bridge_requested_cmac_comb;
+    wire        time_live_full_rate_data;
+    (* ASYNC_REG = "TRUE" *) logic time_live_full_rate_cmac_meta;
+    logic       time_live_full_rate_cmac;
+    wire        frame_tx_tready;
+    wire [63:0] frame_tx_tdata;
+    wire [7:0]  frame_tx_tkeep;
+    wire        frame_tx_tvalid;
+    wire        frame_tx_tlast;
     wire [47:0] tx_qsfp_test_dst_mac;
     wire [31:0] tx_qsfp_test_dst_ip;
     wire [15:0] tx_qsfp_test_src_port;
@@ -482,6 +704,8 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [31:0] tx_link_status_flags_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0] tx_control_cmac_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0] tx_control_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [2:0] science_output_mode_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [2:0] science_output_mode_cmac;
     (* ASYNC_REG = "TRUE" *) logic [47:0] src_mac_cmac_meta;
     (* ASYNC_REG = "TRUE" *) logic [47:0] src_mac_cmac;
     (* ASYNC_REG = "TRUE" *) logic [31:0] src_ip_cmac_meta;
@@ -530,16 +754,44 @@ module t510_fengine_top (
     wire        tx_payload_witness_filter_mismatch_ctrl;
 
     wire [31:0] spec_packet_count;
+    wire [31:0] legacy_spec_packet_count;
+    wire [31:0] wide_spec_packet_count;
     wire [31:0] spec_udp_byte_count;
+    wire [31:0] legacy_spec_udp_byte_count;
+    wire [31:0] wide_spec_udp_byte_count;
+    wire [31:0] spec_duplicator_dropped_count;
+    wire [31:0] spec_decimator_selected_count;
+    wire [31:0] spec_decimator_discarded_count;
+    wire [31:0] spec_decimator_dropped_count;
     wire [31:0] spec_seq_no;
+    wire [31:0] legacy_spec_seq_no;
+    wire [31:0] wide_spec_seq_no;
     wire [63:0] spec_frame_id;
+    wire [63:0] legacy_spec_frame_id;
+    wire [63:0] wide_spec_sample0;
+    wire [63:0] wide_spec_frame_id;
     wire [31:0] spec_chan0;
+    wire [31:0] legacy_spec_chan0;
+    wire [31:0] wide_spec_chan0;
     wire [31:0] time_packet_count;
+    wire [31:0] legacy_time_packet_count;
+    wire [31:0] wide_time_packet_count;
     wire [31:0] time_dropped_count;
+    wire [31:0] time_duplicator_dropped_count;
+    wire [31:0] legacy_time_dropped_count;
+    wire [31:0] wide_time_dropped_count;
     wire [31:0] time_udp_byte_count;
+    wire [31:0] legacy_time_udp_byte_count;
+    wire [31:0] wide_time_udp_byte_count;
     wire [31:0] time_seq_no;
+    wire [31:0] legacy_time_seq_no;
+    wire [31:0] wide_time_seq_no;
     wire [63:0] time_sample0;
+    wire [63:0] legacy_time_sample0;
+    wire [63:0] wide_time_sample0;
     wire [63:0] time_frame_id;
+    wire [63:0] legacy_time_frame_id;
+    wire [63:0] wide_time_frame_id;
     wire [63:0] spec_input_sample0;
     wire [63:0] time_input_sample0;
 
@@ -557,6 +809,8 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [31:0]  spec_packet_count_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  spec_udp_byte_count_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  spec_udp_byte_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  spec_dropped_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  spec_dropped_count_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  time_packet_count_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  time_packet_count_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  time_udp_byte_count_ctrl_meta;
@@ -581,6 +835,28 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_frame_count_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_overflow_count_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_overflow_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_data_halt_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_data_halt_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_event_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_event_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_tile_overflow_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_tile_overflow_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_tlast_unexpected_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_tlast_unexpected_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_tlast_missing_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_tlast_missing_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_fft_overflow_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_fft_overflow_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_data_out_halt_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_data_out_halt_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_status_halt_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_xfft_status_halt_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_capture_backpressure_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_capture_backpressure_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_frame_sample0_overflow_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_frame_sample0_overflow_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_input_fifo_level_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_input_fifo_level_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_peak_chan_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_peak_chan_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_peak_power_ctrl_meta;
@@ -591,6 +867,8 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [63:0]  rfdc_sample_count_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  rfdc_dropped_count_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  rfdc_dropped_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  science_dropped_beat_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  science_dropped_beat_count_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [15:0]  rfdc_current_valid_mask_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [15:0]  rfdc_current_valid_mask_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [15:0]  rfdc_seen_valid_mask_ctrl_meta;
@@ -607,14 +885,16 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [31:0]  tx_route_miss_count_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  tx_route_error_count_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  tx_route_error_count_ctrl;
-    (* ASYNC_REG = "TRUE" *) logic [2:0]   tx_selected_endpoint_id_ctrl_meta;
-    (* ASYNC_REG = "TRUE" *) logic [2:0]   tx_selected_endpoint_id_ctrl;
-    (* ASYNC_REG = "TRUE" *) logic [2:0]   tx_selected_route_id_ctrl_meta;
-    (* ASYNC_REG = "TRUE" *) logic [2:0]   tx_selected_route_id_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  tx_cmac_source_status_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  tx_cmac_source_status_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [7:0]   tx_selected_endpoint_id_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [7:0]   tx_selected_endpoint_id_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [5:0]   tx_selected_route_id_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [5:0]   tx_selected_route_id_ctrl;
     (* ASYNC_REG = "TRUE" *) logic         tx_selected_route_is_time_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic         tx_selected_route_is_time_ctrl;
-    (* ASYNC_REG = "TRUE" *) logic [255:0] tx_spec_route_hit_counts_ctrl_meta;
-    (* ASYNC_REG = "TRUE" *) logic [255:0] tx_spec_route_hit_counts_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES*32-1:0] tx_spec_route_hit_counts_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [TX_SPEC_ROUTES*32-1:0] tx_spec_route_hit_counts_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [255:0] tx_time_route_hit_counts_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [255:0] tx_time_route_hit_counts_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  dac_phase_epoch_data_meta;
@@ -645,8 +925,197 @@ module t510_fengine_top (
         ((!tx_qsfp_link_up) && !tx_control[4]) ||
         !tx_control[1] ||
         !tx_cmac_tx_ready;
-    assign tx_count_packet_status = tx_dry_run_active ? tx_dry_run_packet_count : tx_cmac_test_packet_count_ctrl;
-    assign tx_count_byte_status = tx_dry_run_active ? tx_dry_run_byte_count : tx_cmac_test_byte_count_ctrl;
+    assign tx_count_packet_status = tx_dry_run_active ? tx_dry_run_packet_count :
+                                    ((time_live_requested_data || spec_live_requested_data) ? tx_frame_built_count : tx_cmac_test_packet_count_ctrl);
+    assign tx_count_byte_status = tx_dry_run_active ? tx_dry_run_byte_count :
+                                  ((time_live_requested_data || spec_live_requested_data) ? tx_frame_byte_count : tx_cmac_test_byte_count_ctrl);
+    assign tx_route_forwarded_count = legacy_tx_route_forwarded_count +
+                                      (time_live_full_rate_data ? wide_tx_route_forwarded_count : 32'd0) +
+                                      (spec_live_requested_data ? wide_spec_tx_route_forwarded_count : 32'd0);
+    assign tx_route_dropped_count = legacy_tx_route_dropped_count +
+                                    (time_live_full_rate_data ? wide_tx_route_dropped_count : 32'd0) +
+                                    (spec_live_requested_data ? wide_spec_tx_route_dropped_count : 32'd0);
+    assign tx_route_miss_count = legacy_tx_route_miss_count +
+                                 (time_live_full_rate_data ? wide_tx_route_miss_count : 32'd0) +
+                                 (spec_live_requested_data ? wide_spec_tx_route_miss_count : 32'd0);
+    assign tx_route_error_count = legacy_tx_route_error_count +
+                                  (time_live_full_rate_data ? wide_tx_route_error_count : 32'd0) +
+                                  (spec_live_requested_data ? wide_spec_tx_route_error_count : 32'd0);
+    assign tx_selected_endpoint_id =
+        spec_live_requested_data ? wide_spec_tx_selected_endpoint_id :
+        (!time_live_full_rate_data ? legacy_tx_selected_endpoint_id : wide_tx_selected_endpoint_id);
+    assign tx_selected_route_id =
+        spec_live_requested_data ? wide_spec_tx_selected_route_id :
+        (!time_live_full_rate_data ? legacy_tx_selected_route_id : wide_tx_selected_route_id);
+    assign tx_selected_route_is_time =
+        spec_live_requested_data ? wide_spec_tx_selected_route_is_time :
+        (!time_live_full_rate_data ? legacy_tx_selected_route_is_time : wide_tx_selected_route_is_time);
+    assign tx_spec_route_hit_counts = spec_live_requested_data ? wide_spec_tx_route_hit_counts : legacy_tx_spec_route_hit_counts;
+    assign tx_time_route_hit_counts = time_live_full_rate_data ? wide_tx_time_route_hit_counts : legacy_tx_time_route_hit_counts;
+    assign tx_frame_built_count = legacy_tx_frame_built_count +
+                                  (time_live_full_rate_data ? wide_tx_frame_built_count : 32'd0) +
+                                  (spec_live_requested_data ? wide_spec_tx_frame_built_count : 32'd0);
+    assign tx_frame_byte_count = legacy_tx_frame_byte_count +
+                                 (time_live_full_rate_data ? wide_tx_frame_byte_count : 32'd0) +
+                                 (spec_live_requested_data ? wide_spec_tx_frame_byte_count : 32'd0);
+    assign spec_packet_count = spec_live_requested_data ? wide_spec_packet_count : legacy_spec_packet_count;
+    assign spec_udp_byte_count = spec_live_requested_data ? wide_spec_udp_byte_count : legacy_spec_udp_byte_count;
+    assign spec_seq_no = spec_live_requested_data ? wide_spec_seq_no : legacy_spec_seq_no;
+    assign spec_frame_id = spec_live_requested_data ? wide_spec_frame_id : legacy_spec_frame_id;
+    assign spec_chan0 = spec_live_requested_data ? wide_spec_chan0 : legacy_spec_chan0;
+    assign time_packet_count = time_live_full_rate_data ? wide_time_packet_count : legacy_time_packet_count;
+    assign time_dropped_count = (time_live_full_rate_data ? wide_time_dropped_count : legacy_time_dropped_count) +
+                                time_duplicator_dropped_count;
+    assign time_udp_byte_count = time_live_full_rate_data ? wide_time_udp_byte_count : legacy_time_udp_byte_count;
+    assign time_seq_no = time_live_full_rate_data ? wide_time_seq_no : legacy_time_seq_no;
+    assign time_sample0 = time_live_full_rate_data ? wide_time_sample0 : legacy_time_sample0;
+    assign time_frame_id = time_live_full_rate_data ? wide_time_frame_id : legacy_time_frame_id;
+    assign time_live_bridge_s_tready = time_live_full_rate_data ? wide_time_live_bridge_s_tready : legacy_time_live_bridge_s_tready;
+    assign time_live_bridge_fifo_level = time_live_full_rate_data ? wide_time_live_bridge_fifo_level : legacy_time_live_bridge_fifo_level;
+    assign time_live_bridge_input_frames = time_live_full_rate_data ? wide_time_live_bridge_input_frames : legacy_time_live_bridge_input_frames;
+    assign time_live_bridge_output_frames = time_live_full_rate_data ? wide_time_live_bridge_output_frames : legacy_time_live_bridge_output_frames;
+    assign time_live_bridge_backpressure_cycles = time_live_full_rate_data ? wide_time_live_bridge_backpressure_cycles : legacy_time_live_bridge_backpressure_cycles;
+    assign time_live_bridge_fifo_full = time_live_full_rate_data ? wide_time_live_bridge_fifo_full : legacy_time_live_bridge_fifo_full;
+    assign time_live_bridge_fifo_empty = time_live_full_rate_data ? wide_time_live_bridge_fifo_empty : legacy_time_live_bridge_fifo_empty;
+    assign time_live_cmac_tdata = wide_time_live_cmac_tdata;
+    assign time_live_cmac_tkeep = wide_time_live_cmac_tkeep;
+    assign time_live_cmac_tvalid = time_live_full_rate_cmac ? wide_time_live_cmac_tvalid : 1'b0;
+    assign time_live_cmac_tlast = wide_time_live_cmac_tlast;
+    assign wide_time_live_cmac_tready = time_live_full_rate_cmac ? time_live_cmac_tready : 1'b0;
+
+    generate
+        if (TIME_DDR_RING_COMPILED) begin : g_time_ddr_ring
+            time_axis512_ddr_ring #(
+                .AXI_ADDR_W(40),
+                .AXI_DATA_W(128),
+                .AXI_ID_W(6),
+                .AXIS_DATA_W(512),
+                .AXIS_KEEP_W(64),
+                .FRAME_BEATS(131),
+                .DEFAULT_SLOTS(64)
+            ) u_time_live_ddr_ring (
+                .clk(cmac_tx_clk),
+                .rst_n(cmac_tx_rst_n),
+                .clear(tx_clear_pulse_cmac || time_ddr_ring_clear_pulse_cmac),
+                .enable(time_ddr_ring_enable_cmac),
+                .base_addr(time_ddr_ring_base_cmac[39:0]),
+                .ring_slots_cfg(time_ddr_ring_slots_cmac),
+                .s_axis_tdata(time_live_cmac_tdata),
+                .s_axis_tkeep(time_live_cmac_tkeep),
+                .s_axis_tvalid(time_live_cmac_tvalid),
+                .s_axis_tlast(time_live_cmac_tlast),
+                .s_axis_tready(time_live_cmac_tready),
+                .m_axis_tdata(time_live_ddr_tdata),
+                .m_axis_tkeep(time_live_ddr_tkeep),
+                .m_axis_tvalid(time_live_ddr_tvalid),
+                .m_axis_tlast(time_live_ddr_tlast),
+                .m_axis_tready(time_live_ddr_tready),
+                .m_axi_awid(m_axi_ddr_awid),
+                .m_axi_awaddr(m_axi_ddr_awaddr),
+                .m_axi_awlen(m_axi_ddr_awlen),
+                .m_axi_awsize(m_axi_ddr_awsize),
+                .m_axi_awburst(m_axi_ddr_awburst),
+                .m_axi_awlock(m_axi_ddr_awlock),
+                .m_axi_awcache(m_axi_ddr_awcache),
+                .m_axi_awprot(m_axi_ddr_awprot),
+                .m_axi_awqos(m_axi_ddr_awqos),
+                .m_axi_awvalid(m_axi_ddr_awvalid),
+                .m_axi_awready(m_axi_ddr_awready),
+                .m_axi_wdata(m_axi_ddr_wdata),
+                .m_axi_wstrb(m_axi_ddr_wstrb),
+                .m_axi_wlast(m_axi_ddr_wlast),
+                .m_axi_wvalid(m_axi_ddr_wvalid),
+                .m_axi_wready(m_axi_ddr_wready),
+                .m_axi_bid(m_axi_ddr_bid),
+                .m_axi_bresp(m_axi_ddr_bresp),
+                .m_axi_bvalid(m_axi_ddr_bvalid),
+                .m_axi_bready(m_axi_ddr_bready),
+                .m_axi_arid(m_axi_ddr_arid),
+                .m_axi_araddr(m_axi_ddr_araddr),
+                .m_axi_arlen(m_axi_ddr_arlen),
+                .m_axi_arsize(m_axi_ddr_arsize),
+                .m_axi_arburst(m_axi_ddr_arburst),
+                .m_axi_arlock(m_axi_ddr_arlock),
+                .m_axi_arcache(m_axi_ddr_arcache),
+                .m_axi_arprot(m_axi_ddr_arprot),
+                .m_axi_arqos(m_axi_ddr_arqos),
+                .m_axi_arvalid(m_axi_ddr_arvalid),
+                .m_axi_arready(m_axi_ddr_arready),
+                .m_axi_rid(m_axi_ddr_rid),
+                .m_axi_rdata(m_axi_ddr_rdata),
+                .m_axi_rresp(m_axi_ddr_rresp),
+                .m_axi_rlast(m_axi_ddr_rlast),
+                .m_axi_rvalid(m_axi_ddr_rvalid),
+                .m_axi_rready(m_axi_ddr_rready),
+                .occupancy_frames(time_ddr_ring_occupancy),
+                .write_frame_count(time_ddr_ring_write_count),
+                .read_frame_count(time_ddr_ring_read_count),
+                .drop_frame_count(time_ddr_ring_drop_count),
+                .error_count(time_ddr_ring_error_count),
+                .status(time_ddr_ring_status)
+            );
+        end else begin : g_time_ddr_bypass
+            assign time_live_ddr_tdata = time_live_cmac_tdata;
+            assign time_live_ddr_tkeep = time_live_cmac_tkeep;
+            assign time_live_ddr_tvalid = time_live_cmac_tvalid;
+            assign time_live_ddr_tlast = time_live_cmac_tlast;
+            assign time_live_cmac_tready = time_live_ddr_tready;
+
+            assign m_axi_ddr_awid = 6'd0;
+            assign m_axi_ddr_awaddr = 40'd0;
+            assign m_axi_ddr_awlen = 8'd0;
+            assign m_axi_ddr_awsize = 3'd0;
+            assign m_axi_ddr_awburst = 2'd1;
+            assign m_axi_ddr_awlock = 1'b0;
+            assign m_axi_ddr_awcache = 4'd0;
+            assign m_axi_ddr_awprot = 3'd0;
+            assign m_axi_ddr_awqos = 4'd0;
+            assign m_axi_ddr_awvalid = 1'b0;
+            assign m_axi_ddr_wdata = 128'd0;
+            assign m_axi_ddr_wstrb = 16'd0;
+            assign m_axi_ddr_wlast = 1'b0;
+            assign m_axi_ddr_wvalid = 1'b0;
+            assign m_axi_ddr_bready = 1'b1;
+            assign m_axi_ddr_arid = 6'd0;
+            assign m_axi_ddr_araddr = 40'd0;
+            assign m_axi_ddr_arlen = 8'd0;
+            assign m_axi_ddr_arsize = 3'd0;
+            assign m_axi_ddr_arburst = 2'd1;
+            assign m_axi_ddr_arlock = 1'b0;
+            assign m_axi_ddr_arcache = 4'd0;
+            assign m_axi_ddr_arprot = 3'd0;
+            assign m_axi_ddr_arqos = 4'd0;
+            assign m_axi_ddr_arvalid = 1'b0;
+            assign m_axi_ddr_rready = 1'b1;
+
+            assign time_ddr_ring_status = 32'd0;
+            assign time_ddr_ring_occupancy = 32'd0;
+            assign time_ddr_ring_write_count = 32'd0;
+            assign time_ddr_ring_read_count = 32'd0;
+            assign time_ddr_ring_drop_count = 32'd0;
+            assign time_ddr_ring_error_count = 32'd0;
+        end
+    endgenerate
+
+    axis512_register_slice #(
+        .DATA_W(512),
+        .KEEP_W(64),
+        .DEPTH(2)
+    ) u_time_live_cmac_tx_slice (
+        .clk(cmac_tx_clk),
+        .rst_n(cmac_tx_rst_n),
+        .clear(tx_clear_pulse_cmac),
+        .s_axis_tdata(time_live_ddr_tdata),
+        .s_axis_tkeep(time_live_ddr_tkeep),
+        .s_axis_tvalid(time_live_ddr_tvalid),
+        .s_axis_tlast(time_live_ddr_tlast),
+        .s_axis_tready(time_live_ddr_tready),
+        .m_axis_tdata(time_live_cmac_mux_tdata),
+        .m_axis_tkeep(time_live_cmac_mux_tkeep),
+        .m_axis_tvalid(time_live_cmac_mux_tvalid),
+        .m_axis_tlast(time_live_cmac_mux_tlast),
+        .m_axis_tready(time_live_cmac_mux_tready)
+    );
     assign tx_preflight_status_flags = {
         14'd0,
         tx_link_status_flags_data[17],
@@ -672,10 +1141,58 @@ module t510_fengine_top (
     assign tx_qsfp_test_dst_ip = tx_endpoint_ip_vec[2*32 +: 32];
     assign tx_qsfp_test_src_port = tx_endpoint_src_port_vec[2*16 +: 16];
     assign tx_qsfp_test_dst_port = tx_endpoint_dst_port_vec[2*16 +: 16];
+    assign time_live_requested_data =
+        tx_control[1] &&
+        !tx_control[0] &&
+        tx_control[2] &&
+        ((science_output_mode == SCIENCE_MODE_TIME_ONLY) || (science_output_mode == SCIENCE_MODE_TIME_SPEC));
+    assign spec_live_requested_data =
+        tx_control[1] &&
+        !tx_control[0] &&
+        tx_control[2] &&
+        ((science_output_mode == SCIENCE_MODE_SPEC_ONLY) || (science_output_mode == SCIENCE_MODE_TIME_SPEC));
+    assign time_live_requested_cmac_comb =
+        tx_control_cmac[1] &&
+        !tx_control_cmac[0] &&
+        tx_control_cmac[2] &&
+        ((science_output_mode_cmac == SCIENCE_MODE_TIME_ONLY) || (science_output_mode_cmac == SCIENCE_MODE_TIME_SPEC));
+    assign spec_live_requested_cmac_comb =
+        tx_control_cmac[1] &&
+        !tx_control_cmac[0] &&
+        tx_control_cmac[2] &&
+        ((science_output_mode_cmac == SCIENCE_MODE_SPEC_ONLY) || (science_output_mode_cmac == SCIENCE_MODE_TIME_SPEC));
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign time_live_full_rate_data = time_live_requested_data;
+    assign legacy_bridge_requested_data = 1'b0;
+    assign legacy_bridge_requested_cmac_comb = 1'b0;
+`else
+    assign time_live_full_rate_data = time_live_requested_data && (time_live_interval_beats == 32'd0);
+    assign legacy_bridge_requested_data = time_live_requested_data && !time_live_full_rate_data;
+    assign legacy_bridge_requested_cmac_comb =
+        time_live_requested_cmac_comb && !time_live_full_rate_cmac;
+`endif
+
+    always_ff @(posedge cmac_tx_clk or negedge cmac_tx_rst_n) begin
+        if (!cmac_tx_rst_n) begin
+            time_live_requested_cmac <= 1'b0;
+            spec_live_requested_cmac <= 1'b0;
+            time_live_full_rate_cmac_meta <= 1'b0;
+            time_live_full_rate_cmac <= 1'b0;
+            legacy_bridge_requested_cmac <= 1'b0;
+        end else begin
+            time_live_requested_cmac <= time_live_requested_cmac_comb;
+            spec_live_requested_cmac <= spec_live_requested_cmac_comb;
+            time_live_full_rate_cmac_meta <= time_live_full_rate_data;
+            time_live_full_rate_cmac <= time_live_full_rate_cmac_meta;
+            legacy_bridge_requested_cmac <= legacy_bridge_requested_cmac_comb;
+        end
+    end
     assign tx_qsfp_test_enable =
         tx_control_cmac[1] &&
         tx_control_cmac[2] &&
         !tx_control_cmac[0] &&
+        !time_live_requested_cmac &&
+        !spec_live_requested_cmac &&
         tx_link_status_flags_cmac[4] &&
         (
             tx_control_cmac[4] ||
@@ -686,6 +1203,37 @@ module t510_fengine_top (
             )
         ) &&
         cmac_tx_rst_n;
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign frame_tx_tready = 1'b0;
+    assign m_axis_tx_tdata = 64'd0;
+    assign m_axis_tx_tkeep = 8'd0;
+    assign m_axis_tx_tvalid = 1'b0;
+    assign m_axis_tx_tlast = 1'b0;
+`else
+    assign frame_tx_tready = legacy_bridge_requested_data ? legacy_time_live_bridge_s_tready : m_axis_tx_tready;
+    assign m_axis_tx_tdata = frame_tx_tdata;
+    assign m_axis_tx_tkeep = frame_tx_tkeep;
+    assign m_axis_tx_tvalid = frame_tx_tvalid && !legacy_bridge_requested_data;
+    assign m_axis_tx_tlast = frame_tx_tlast;
+`endif
+    assign tx_cmac_source_status = {
+        tx_cmac_source_mux_status[15:0],
+        wide_time_live_bridge_fifo_empty,
+        wide_time_live_bridge_fifo_full,
+        legacy_time_live_bridge_fifo_empty,
+        legacy_time_live_bridge_fifo_full,
+        legacy_bridge_requested_cmac,
+        legacy_bridge_requested_data,
+        spec_live_requested_cmac,
+        spec_live_requested_data,
+        time_live_requested_cmac,
+        time_live_requested_data,
+        (legacy_time_live_cmac_tready || wide_spec_live_cmac_tready),
+        time_live_cmac_mux_tvalid,
+        heartbeat_cmac_tvalid,
+        tx_qsfp_test_enable,
+        tx_cmac_source_mux_status[1:0]
+    };
     assign udp_packet_flags = {
         10'd0,
         (time_dropped_count != 32'd0),
@@ -704,6 +1252,8 @@ module t510_fengine_top (
     assign pfb_clear_pulse = pfb_clear_toggle_sync[2] ^ pfb_clear_toggle_seen;
     assign tx_clear_pulse = tx_clear_toggle_sync[2] ^ tx_clear_toggle_seen;
     assign tx_clear_pulse_cmac = tx_clear_toggle_cmac_sync[2] ^ tx_clear_toggle_cmac_seen;
+    assign time_ddr_ring_clear_pulse_cmac =
+        time_ddr_ring_clear_toggle_cmac_sync[2] ^ time_ddr_ring_clear_toggle_cmac_seen;
     assign mode_change_pulse = (mode != mode_prev);
     assign packet_stream_reset_pulse = epoch_reset_pulse || stop_pulse || soft_reset_pulse || tx_clear_pulse || mode_change_pulse;
     assign rfdc_active_port_mask = rfdc_active_mask;
@@ -719,6 +1269,11 @@ module t510_fengine_top (
     assign dac_phase_epoch = ctrl_dac_phase_epoch;
     assign spec_input_sample0 = spec_sample0;
     assign time_input_sample0 = time_sample0_sideband;
+    assign time_tready = time_live_full_rate_data ? wide_time_tready : legacy_time_tready;
+    assign pfb_spec_tready = spec_live_requested_data ? wide_pfb_spec_tready : legacy_pfb_spec_tready;
+    assign spec_decimator_selected_count = spec_tvalid && spec_tready ? 32'd1 : 32'd0;
+    assign spec_decimator_discarded_count = 32'd0;
+    assign spec_decimator_dropped_count = 32'd0;
 
     always_ff @(posedge ctrl_clk or negedge ctrl_rst_n) begin
         if (!ctrl_rst_n) begin
@@ -727,6 +1282,7 @@ module t510_fengine_top (
             ctrl_soft_reset_toggle <= 1'b0;
             ctrl_pfb_clear_toggle  <= 1'b0;
             ctrl_tx_clear_toggle   <= 1'b0;
+            ctrl_time_ddr_ring_clear_toggle <= 1'b0;
         end else begin
             if (ctrl_soft_epoch_pulse) begin
                 ctrl_soft_epoch_toggle <= ~ctrl_soft_epoch_toggle;
@@ -742,6 +1298,9 @@ module t510_fengine_top (
             end
             if (ctrl_tx_clear_pulse) begin
                 ctrl_tx_clear_toggle <= ~ctrl_tx_clear_toggle;
+            end
+            if (ctrl_time_ddr_ring_clear_pulse) begin
+                ctrl_time_ddr_ring_clear_toggle <= ~ctrl_time_ddr_ring_clear_toggle;
             end
         end
     end
@@ -767,18 +1326,28 @@ module t510_fengine_top (
             spec_chan_count_meta   <= 16'd0;
             spec_chan_count        <= 16'd0;
             pfb_enable_sync        <= 2'b00;
-            pfb_taps_meta          <= 16'd4;
-            pfb_taps               <= 16'd4;
+            pfb_taps_meta          <= 16'd0;
+            pfb_taps               <= 16'd0;
             pfb_fft_shift_meta     <= 16'd0;
             pfb_fft_shift          <= 16'd0;
             pfb_chan0_meta         <= 32'd0;
             pfb_chan0              <= 32'd0;
-            pfb_chan_count_meta    <= 16'd64;
-            pfb_chan_count         <= 16'd64;
-            pfb_time_count_meta    <= 16'd4;
-            pfb_time_count         <= 16'd4;
+            pfb_chan_count_meta    <= 16'd256;
+            pfb_chan_count         <= 16'd256;
+            pfb_time_count_meta    <= 16'd1;
+            pfb_time_count         <= 16'd1;
             science_bandwidth_mode_meta <= 2'd1;
             science_bandwidth_mode <= 2'd1;
+            science_output_mode_meta <= 3'd0;
+            science_output_mode <= 3'd0;
+            time_live_interval_beats_meta <= 32'd7680;
+            time_live_interval_beats <= 32'd7680;
+            time_multiflow_enable_meta <= 1'b0;
+            time_multiflow_enable <= 1'b0;
+            time_multiflow_base_endpoint_meta <= 3'd0;
+            time_multiflow_base_endpoint <= 3'd0;
+            time_multiflow_count_meta <= 4'd1;
+            time_multiflow_count <= 4'd1;
             chan_split_meta        <= 32'd0;
             chan_split             <= 32'd0;
             src_ip_meta            <= 32'd0;
@@ -787,30 +1356,52 @@ module t510_fengine_top (
             src_mac                <= 48'd0;
             tx_control_meta        <= 32'h0000_000d;
             tx_control             <= 32'h0000_000d;
-            tx_endpoint_enable_meta <= 8'h07;
-            tx_endpoint_enable     <= 8'h07;
-            tx_endpoint_ip_vec_meta <= 256'd0;
-            tx_endpoint_ip_vec     <= 256'd0;
-            tx_endpoint_mac_vec_meta <= 384'd0;
-            tx_endpoint_mac_vec    <= 384'd0;
-            tx_endpoint_src_port_vec_meta <= {8{16'd4000}};
-            tx_endpoint_src_port_vec <= {8{16'd4000}};
-            tx_endpoint_dst_port_vec_meta <= 128'd0;
-            tx_endpoint_dst_port_vec <= 128'd0;
-            tx_spec_route_enable_meta <= 8'h03;
-            tx_spec_route_enable   <= 8'h03;
-            tx_spec_route_chan0_vec_meta <= 256'd0;
-            tx_spec_route_chan0_vec <= 256'd0;
-            tx_spec_route_chan_count_vec_meta <= 128'd0;
-            tx_spec_route_chan_count_vec <= 128'd0;
-            tx_spec_route_endpoint_vec_meta <= 24'd0;
-            tx_spec_route_endpoint_vec <= 24'd0;
+            tx_endpoint_enable_meta <= {TX_ENDPOINTS{1'b1}};
+            tx_endpoint_enable     <= {TX_ENDPOINTS{1'b1}};
+            tx_endpoint_ip_vec_meta <= {TX_ENDPOINTS{32'h0a00_0110}};
+            tx_endpoint_ip_vec     <= {TX_ENDPOINTS{32'h0a00_0110}};
+            tx_endpoint_mac_vec_meta <= {TX_ENDPOINTS{48'h08c0_ebd5_95b2}};
+            tx_endpoint_mac_vec    <= {TX_ENDPOINTS{48'h08c0_ebd5_95b2}};
+            tx_endpoint_src_port_vec_meta <= {TX_ENDPOINTS{16'd4000}};
+            tx_endpoint_src_port_vec <= {TX_ENDPOINTS{16'd4000}};
+            tx_endpoint_dst_port_vec_meta <= {TX_ENDPOINTS{16'd4300}};
+            tx_endpoint_dst_port_vec <= {TX_ENDPOINTS{16'd4300}};
+            for (tx_reset_idx = 0; tx_reset_idx < TX_ENDPOINTS; tx_reset_idx = tx_reset_idx + 1) begin
+                tx_endpoint_enable_meta[tx_reset_idx] <= 1'b1;
+                tx_endpoint_enable[tx_reset_idx] <= 1'b1;
+                tx_endpoint_ip_vec_meta[tx_reset_idx*32 +: 32] <= 32'h0a00_0110;
+                tx_endpoint_ip_vec[tx_reset_idx*32 +: 32] <= 32'h0a00_0110;
+                tx_endpoint_mac_vec_meta[tx_reset_idx*48 +: 48] <= 48'h08c0_ebd5_95b2;
+                tx_endpoint_mac_vec[tx_reset_idx*48 +: 48] <= 48'h08c0_ebd5_95b2;
+                tx_endpoint_src_port_vec_meta[tx_reset_idx*16 +: 16] <= 16'd4000 + tx_reset_idx;
+                tx_endpoint_src_port_vec[tx_reset_idx*16 +: 16] <= 16'd4000 + tx_reset_idx;
+                tx_endpoint_dst_port_vec_meta[tx_reset_idx*16 +: 16] <= 16'd4300 + tx_reset_idx;
+                tx_endpoint_dst_port_vec[tx_reset_idx*16 +: 16] <= 16'd4300 + tx_reset_idx;
+            end
+            tx_spec_route_enable_meta <= {TX_SPEC_ROUTES{1'b0}};
+            tx_spec_route_enable   <= {TX_SPEC_ROUTES{1'b0}};
+            tx_spec_route_chan0_vec_meta <= {TX_SPEC_ROUTES{32'd0}};
+            tx_spec_route_chan0_vec <= {TX_SPEC_ROUTES{32'd0}};
+            tx_spec_route_chan_count_vec_meta <= {TX_SPEC_ROUTES{16'd0}};
+            tx_spec_route_chan_count_vec <= {TX_SPEC_ROUTES{16'd0}};
+            tx_spec_route_endpoint_vec_meta <= {TX_SPEC_ROUTES{8'd8}};
+            tx_spec_route_endpoint_vec <= {TX_SPEC_ROUTES{8'd8}};
+            for (tx_reset_idx = 0; tx_reset_idx < TX_SPEC_ROUTES; tx_reset_idx = tx_reset_idx + 1) begin
+                tx_spec_route_enable_meta[tx_reset_idx] <= (tx_reset_idx < 16);
+                tx_spec_route_enable[tx_reset_idx] <= (tx_reset_idx < 16);
+                tx_spec_route_chan0_vec_meta[tx_reset_idx*32 +: 32] <= (tx_reset_idx < 16) ? (tx_reset_idx * 32'd256) : 32'd0;
+                tx_spec_route_chan0_vec[tx_reset_idx*32 +: 32] <= (tx_reset_idx < 16) ? (tx_reset_idx * 32'd256) : 32'd0;
+                tx_spec_route_chan_count_vec_meta[tx_reset_idx*16 +: 16] <= (tx_reset_idx < 16) ? 16'd256 : 16'd0;
+                tx_spec_route_chan_count_vec[tx_reset_idx*16 +: 16] <= (tx_reset_idx < 16) ? 16'd256 : 16'd0;
+                tx_spec_route_endpoint_vec_meta[tx_reset_idx*8 +: 8] <= 8'd8 + tx_reset_idx[7:0];
+                tx_spec_route_endpoint_vec[tx_reset_idx*8 +: 8] <= 8'd8 + tx_reset_idx[7:0];
+            end
             tx_time_route_enable_meta <= 8'h01;
             tx_time_route_enable   <= 8'h01;
             tx_time_route_input_mask_vec_meta <= 128'd0;
             tx_time_route_input_mask_vec <= 128'd0;
-            tx_time_route_endpoint_vec_meta <= 24'd0;
-            tx_time_route_endpoint_vec <= 24'd0;
+            tx_time_route_endpoint_vec_meta <= {TX_TIME_ROUTES{8'd0}};
+            tx_time_route_endpoint_vec <= {TX_TIME_ROUTES{8'd0}};
             rfdc_active_mask_meta  <= 16'hffff;
             rfdc_active_mask       <= 16'hffff;
             sync_mode_meta         <= 2'd0;
@@ -878,6 +1469,16 @@ module t510_fengine_top (
             pfb_time_count          <= pfb_time_count_meta;
             science_bandwidth_mode_meta <= ctrl_science_bandwidth_mode_cfg;
             science_bandwidth_mode <= science_bandwidth_mode_meta;
+            science_output_mode_meta <= ctrl_science_output_mode_cfg;
+            science_output_mode <= science_output_mode_meta;
+            time_live_interval_beats_meta <= ctrl_time_live_interval_beats;
+            time_live_interval_beats <= time_live_interval_beats_meta;
+            time_multiflow_enable_meta <= ctrl_time_multiflow_enable;
+            time_multiflow_enable <= time_multiflow_enable_meta;
+            time_multiflow_base_endpoint_meta <= ctrl_time_multiflow_base_endpoint;
+            time_multiflow_base_endpoint <= time_multiflow_base_endpoint_meta;
+            time_multiflow_count_meta <= ctrl_time_multiflow_count;
+            time_multiflow_count <= time_multiflow_count_meta;
             chan_split_meta         <= ctrl_chan_split;
             chan_split              <= chan_split_meta;
             src_ip_meta             <= ctrl_src_ip;
@@ -948,16 +1549,26 @@ module t510_fengine_top (
             tx_qsfp_test_dst_port_cmac <= 16'd4300;
             tx_qsfp_test_interval_meta <= 32'd322_266;
             tx_qsfp_test_interval_cmac <= 32'd322_266;
+            time_ddr_ring_enable_meta <= 1'b0;
+            time_ddr_ring_enable_cmac <= 1'b0;
+            time_ddr_ring_base_meta <= 64'h0000_0008_0000_0000;
+            time_ddr_ring_base_cmac <= 64'h0000_0008_0000_0000;
+            time_ddr_ring_slots_meta <= 16'd64;
+            time_ddr_ring_slots_cmac <= 16'd64;
             tx_link_status_flags_cmac_meta <= 32'd0;
             tx_link_status_flags_cmac <= 32'd0;
             tx_control_cmac_meta <= 32'h0000_000d;
             tx_control_cmac <= 32'h0000_000d;
+            science_output_mode_cmac_meta <= 3'd0;
+            science_output_mode_cmac <= 3'd0;
             rfdc_sample_count_cmac_meta <= 64'd0;
             rfdc_sample_count_cmac <= 64'd0;
             ctrl_board_id_cmac_meta <= 16'd0;
             ctrl_board_id_cmac <= 16'd0;
             tx_clear_toggle_cmac_sync <= 3'b000;
             tx_clear_toggle_cmac_seen <= 1'b0;
+            time_ddr_ring_clear_toggle_cmac_sync <= 3'b000;
+            time_ddr_ring_clear_toggle_cmac_seen <= 1'b0;
         end else begin
             src_mac_cmac_meta <= src_mac;
             src_mac_cmac <= src_mac_cmac_meta;
@@ -973,16 +1584,29 @@ module t510_fengine_top (
             tx_qsfp_test_dst_port_cmac <= tx_qsfp_test_dst_port_meta;
             tx_qsfp_test_interval_meta <= ctrl_qsfp_test_interval_cycles;
             tx_qsfp_test_interval_cmac <= tx_qsfp_test_interval_meta;
+            time_ddr_ring_enable_meta <= ctrl_time_ddr_ring_enable;
+            time_ddr_ring_enable_cmac <= time_ddr_ring_enable_meta;
+            time_ddr_ring_base_meta <= ctrl_time_ddr_ring_base_addr;
+            time_ddr_ring_base_cmac <= time_ddr_ring_base_meta;
+            time_ddr_ring_slots_meta <= ctrl_time_ddr_ring_slots;
+            time_ddr_ring_slots_cmac <= time_ddr_ring_slots_meta;
             tx_link_status_flags_cmac_meta <= tx_link_status_flags;
             tx_link_status_flags_cmac <= tx_link_status_flags_cmac_meta;
             tx_control_cmac_meta <= tx_control;
             tx_control_cmac <= tx_control_cmac_meta;
+            science_output_mode_cmac_meta <= science_output_mode;
+            science_output_mode_cmac <= science_output_mode_cmac_meta;
             rfdc_sample_count_cmac_meta <= rfdc_sample_count;
             rfdc_sample_count_cmac <= rfdc_sample_count_cmac_meta;
             ctrl_board_id_cmac_meta <= ctrl_board_id;
             ctrl_board_id_cmac <= ctrl_board_id_cmac_meta;
             tx_clear_toggle_cmac_sync <= {tx_clear_toggle_cmac_sync[1:0], ctrl_tx_clear_toggle};
             tx_clear_toggle_cmac_seen <= tx_clear_toggle_cmac_sync[2];
+            time_ddr_ring_clear_toggle_cmac_sync <= {
+                time_ddr_ring_clear_toggle_cmac_sync[1:0],
+                ctrl_time_ddr_ring_clear_toggle
+            };
+            time_ddr_ring_clear_toggle_cmac_seen <= time_ddr_ring_clear_toggle_cmac_sync[2];
         end
     end
 
@@ -1006,6 +1630,8 @@ module t510_fengine_top (
             spec_packet_count_ctrl          <= 32'd0;
             spec_udp_byte_count_ctrl_meta   <= 32'd0;
             spec_udp_byte_count_ctrl        <= 32'd0;
+            spec_dropped_count_ctrl_meta    <= 32'd0;
+            spec_dropped_count_ctrl         <= 32'd0;
             time_packet_count_ctrl_meta     <= 32'd0;
             time_packet_count_ctrl          <= 32'd0;
             time_udp_byte_count_ctrl_meta   <= 32'd0;
@@ -1030,6 +1656,28 @@ module t510_fengine_top (
             pfb_frame_count_ctrl            <= 32'd0;
             pfb_overflow_count_ctrl_meta    <= 32'd0;
             pfb_overflow_count_ctrl         <= 32'd0;
+            pfb_data_halt_count_ctrl_meta   <= 32'd0;
+            pfb_data_halt_count_ctrl        <= 32'd0;
+            pfb_xfft_event_count_ctrl_meta  <= 32'd0;
+            pfb_xfft_event_count_ctrl       <= 32'd0;
+            pfb_tile_overflow_count_ctrl_meta <= 32'd0;
+            pfb_tile_overflow_count_ctrl      <= 32'd0;
+            pfb_xfft_tlast_unexpected_count_ctrl_meta <= 32'd0;
+            pfb_xfft_tlast_unexpected_count_ctrl      <= 32'd0;
+            pfb_xfft_tlast_missing_count_ctrl_meta <= 32'd0;
+            pfb_xfft_tlast_missing_count_ctrl      <= 32'd0;
+            pfb_xfft_fft_overflow_count_ctrl_meta <= 32'd0;
+            pfb_xfft_fft_overflow_count_ctrl      <= 32'd0;
+            pfb_xfft_data_out_halt_count_ctrl_meta <= 32'd0;
+            pfb_xfft_data_out_halt_count_ctrl      <= 32'd0;
+            pfb_xfft_status_halt_count_ctrl_meta <= 32'd0;
+            pfb_xfft_status_halt_count_ctrl      <= 32'd0;
+            pfb_capture_backpressure_count_ctrl_meta <= 32'd0;
+            pfb_capture_backpressure_count_ctrl      <= 32'd0;
+            pfb_frame_sample0_overflow_count_ctrl_meta <= 32'd0;
+            pfb_frame_sample0_overflow_count_ctrl      <= 32'd0;
+            pfb_input_fifo_level_ctrl_meta  <= 32'd0;
+            pfb_input_fifo_level_ctrl       <= 32'd0;
             pfb_peak_chan_ctrl_meta         <= 32'd0;
             pfb_peak_chan_ctrl              <= 32'd0;
             pfb_peak_power_ctrl_meta        <= 32'd0;
@@ -1040,6 +1688,8 @@ module t510_fengine_top (
             rfdc_sample_count_ctrl          <= 64'd0;
             rfdc_dropped_count_ctrl_meta    <= 32'd0;
             rfdc_dropped_count_ctrl         <= 32'd0;
+            science_dropped_beat_count_ctrl_meta <= 32'd0;
+            science_dropped_beat_count_ctrl      <= 32'd0;
             rfdc_current_valid_mask_ctrl_meta <= 16'd0;
             rfdc_current_valid_mask_ctrl      <= 16'd0;
             rfdc_seen_valid_mask_ctrl_meta    <= 16'd0;
@@ -1056,22 +1706,36 @@ module t510_fengine_top (
             tx_route_miss_count_ctrl            <= 32'd0;
             tx_route_error_count_ctrl_meta      <= 32'd0;
             tx_route_error_count_ctrl           <= 32'd0;
+            tx_cmac_source_status_ctrl_meta     <= 32'd0;
+            tx_cmac_source_status_ctrl          <= 32'd0;
             tx_cmac_test_packet_count_ctrl_meta <= 32'd0;
             tx_cmac_test_packet_count_ctrl      <= 32'd0;
             tx_cmac_test_byte_count_ctrl_meta   <= 32'd0;
             tx_cmac_test_byte_count_ctrl        <= 32'd0;
             tx_link_status_flags_ctrl_meta      <= 32'd0;
             tx_link_status_flags_ctrl           <= 32'd0;
-            tx_selected_endpoint_id_ctrl_meta   <= 3'd0;
-            tx_selected_endpoint_id_ctrl        <= 3'd0;
-            tx_selected_route_id_ctrl_meta      <= 3'd0;
-            tx_selected_route_id_ctrl           <= 3'd0;
+            tx_selected_endpoint_id_ctrl_meta   <= 8'd0;
+            tx_selected_endpoint_id_ctrl        <= 8'd0;
+            tx_selected_route_id_ctrl_meta      <= 6'd0;
+            tx_selected_route_id_ctrl           <= 6'd0;
             tx_selected_route_is_time_ctrl_meta <= 1'b0;
             tx_selected_route_is_time_ctrl      <= 1'b0;
-            tx_spec_route_hit_counts_ctrl_meta  <= 256'd0;
-            tx_spec_route_hit_counts_ctrl       <= 256'd0;
+            tx_spec_route_hit_counts_ctrl_meta  <= {TX_SPEC_ROUTES*32{1'b0}};
+            tx_spec_route_hit_counts_ctrl       <= {TX_SPEC_ROUTES*32{1'b0}};
             tx_time_route_hit_counts_ctrl_meta  <= 256'd0;
             tx_time_route_hit_counts_ctrl       <= 256'd0;
+            time_ddr_ring_status_ctrl_meta      <= 32'd0;
+            time_ddr_ring_status_ctrl           <= 32'd0;
+            time_ddr_ring_occupancy_ctrl_meta   <= 32'd0;
+            time_ddr_ring_occupancy_ctrl        <= 32'd0;
+            time_ddr_ring_write_count_ctrl_meta <= 32'd0;
+            time_ddr_ring_write_count_ctrl      <= 32'd0;
+            time_ddr_ring_read_count_ctrl_meta  <= 32'd0;
+            time_ddr_ring_read_count_ctrl       <= 32'd0;
+            time_ddr_ring_drop_count_ctrl_meta  <= 32'd0;
+            time_ddr_ring_drop_count_ctrl       <= 32'd0;
+            time_ddr_ring_error_count_ctrl_meta <= 32'd0;
+            time_ddr_ring_error_count_ctrl      <= 32'd0;
         end else begin
             fsm_state_ctrl_meta             <= fsm_state;
             fsm_state_ctrl                  <= fsm_state_ctrl_meta;
@@ -1091,6 +1755,8 @@ module t510_fengine_top (
             spec_packet_count_ctrl          <= spec_packet_count_ctrl_meta;
             spec_udp_byte_count_ctrl_meta   <= spec_udp_byte_count;
             spec_udp_byte_count_ctrl        <= spec_udp_byte_count_ctrl_meta;
+            spec_dropped_count_ctrl_meta    <= spec_duplicator_dropped_count;
+            spec_dropped_count_ctrl         <= spec_dropped_count_ctrl_meta;
             time_packet_count_ctrl_meta     <= time_packet_count;
             time_packet_count_ctrl          <= time_packet_count_ctrl_meta;
             time_udp_byte_count_ctrl_meta   <= time_udp_byte_count;
@@ -1115,6 +1781,28 @@ module t510_fengine_top (
             pfb_frame_count_ctrl            <= pfb_frame_count_ctrl_meta;
             pfb_overflow_count_ctrl_meta    <= pfb_overflow_count;
             pfb_overflow_count_ctrl         <= pfb_overflow_count_ctrl_meta;
+            pfb_data_halt_count_ctrl_meta   <= pfb_data_halt_count;
+            pfb_data_halt_count_ctrl        <= pfb_data_halt_count_ctrl_meta;
+            pfb_xfft_event_count_ctrl_meta  <= pfb_xfft_event_count;
+            pfb_xfft_event_count_ctrl       <= pfb_xfft_event_count_ctrl_meta;
+            pfb_tile_overflow_count_ctrl_meta <= pfb_tile_overflow_count;
+            pfb_tile_overflow_count_ctrl      <= pfb_tile_overflow_count_ctrl_meta;
+            pfb_xfft_tlast_unexpected_count_ctrl_meta <= pfb_xfft_tlast_unexpected_count;
+            pfb_xfft_tlast_unexpected_count_ctrl      <= pfb_xfft_tlast_unexpected_count_ctrl_meta;
+            pfb_xfft_tlast_missing_count_ctrl_meta <= pfb_xfft_tlast_missing_count;
+            pfb_xfft_tlast_missing_count_ctrl      <= pfb_xfft_tlast_missing_count_ctrl_meta;
+            pfb_xfft_fft_overflow_count_ctrl_meta <= pfb_xfft_fft_overflow_count;
+            pfb_xfft_fft_overflow_count_ctrl      <= pfb_xfft_fft_overflow_count_ctrl_meta;
+            pfb_xfft_data_out_halt_count_ctrl_meta <= pfb_xfft_data_out_halt_count;
+            pfb_xfft_data_out_halt_count_ctrl      <= pfb_xfft_data_out_halt_count_ctrl_meta;
+            pfb_xfft_status_halt_count_ctrl_meta <= pfb_xfft_status_halt_count;
+            pfb_xfft_status_halt_count_ctrl      <= pfb_xfft_status_halt_count_ctrl_meta;
+            pfb_capture_backpressure_count_ctrl_meta <= pfb_capture_backpressure_count;
+            pfb_capture_backpressure_count_ctrl      <= pfb_capture_backpressure_count_ctrl_meta;
+            pfb_frame_sample0_overflow_count_ctrl_meta <= pfb_frame_sample0_overflow_count;
+            pfb_frame_sample0_overflow_count_ctrl      <= pfb_frame_sample0_overflow_count_ctrl_meta;
+            pfb_input_fifo_level_ctrl_meta  <= pfb_input_fifo_level;
+            pfb_input_fifo_level_ctrl       <= pfb_input_fifo_level_ctrl_meta;
             pfb_peak_chan_ctrl_meta         <= pfb_peak_chan;
             pfb_peak_chan_ctrl              <= pfb_peak_chan_ctrl_meta;
             pfb_peak_power_ctrl_meta        <= pfb_peak_power;
@@ -1125,6 +1813,8 @@ module t510_fengine_top (
             rfdc_sample_count_ctrl          <= rfdc_sample_count_ctrl_meta;
             rfdc_dropped_count_ctrl_meta    <= rfdc_dropped_count;
             rfdc_dropped_count_ctrl         <= rfdc_dropped_count_ctrl_meta;
+            science_dropped_beat_count_ctrl_meta <= science_dropped_beat_count;
+            science_dropped_beat_count_ctrl      <= science_dropped_beat_count_ctrl_meta;
             rfdc_current_valid_mask_ctrl_meta <= rfdc_current_valid_mask;
             rfdc_current_valid_mask_ctrl      <= rfdc_current_valid_mask_ctrl_meta;
             rfdc_seen_valid_mask_ctrl_meta    <= rfdc_seen_valid_mask;
@@ -1141,6 +1831,8 @@ module t510_fengine_top (
             tx_route_miss_count_ctrl            <= tx_route_miss_count_ctrl_meta;
             tx_route_error_count_ctrl_meta      <= tx_route_error_count;
             tx_route_error_count_ctrl           <= tx_route_error_count_ctrl_meta;
+            tx_cmac_source_status_ctrl_meta     <= tx_cmac_source_status;
+            tx_cmac_source_status_ctrl          <= tx_cmac_source_status_ctrl_meta;
             tx_cmac_test_packet_count_ctrl_meta <= tx_cmac_test_packet_count;
             tx_cmac_test_packet_count_ctrl      <= tx_cmac_test_packet_count_ctrl_meta;
             tx_cmac_test_byte_count_ctrl_meta   <= tx_cmac_test_byte_count;
@@ -1157,6 +1849,18 @@ module t510_fengine_top (
             tx_spec_route_hit_counts_ctrl       <= tx_spec_route_hit_counts_ctrl_meta;
             tx_time_route_hit_counts_ctrl_meta  <= tx_time_route_hit_counts;
             tx_time_route_hit_counts_ctrl       <= tx_time_route_hit_counts_ctrl_meta;
+            time_ddr_ring_status_ctrl_meta      <= time_ddr_ring_status;
+            time_ddr_ring_status_ctrl           <= time_ddr_ring_status_ctrl_meta;
+            time_ddr_ring_occupancy_ctrl_meta   <= time_ddr_ring_occupancy;
+            time_ddr_ring_occupancy_ctrl        <= time_ddr_ring_occupancy_ctrl_meta;
+            time_ddr_ring_write_count_ctrl_meta <= time_ddr_ring_write_count;
+            time_ddr_ring_write_count_ctrl      <= time_ddr_ring_write_count_ctrl_meta;
+            time_ddr_ring_read_count_ctrl_meta  <= time_ddr_ring_read_count;
+            time_ddr_ring_read_count_ctrl       <= time_ddr_ring_read_count_ctrl_meta;
+            time_ddr_ring_drop_count_ctrl_meta  <= time_ddr_ring_drop_count;
+            time_ddr_ring_drop_count_ctrl       <= time_ddr_ring_drop_count_ctrl_meta;
+            time_ddr_ring_error_count_ctrl_meta <= time_ddr_ring_error_count;
+            time_ddr_ring_error_count_ctrl      <= time_ddr_ring_error_count_ctrl_meta;
         end
     end
 
@@ -1216,6 +1920,16 @@ module t510_fengine_top (
         .mean_mags(mean_mags)
     );
 
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign debug_busy_ctrl = 1'b0;
+    assign debug_done_ctrl = 1'b0;
+    assign debug_error_ctrl = 1'b0;
+    assign debug_capture_count_ctrl = 32'd0;
+    assign debug_peak_bin_ctrl = 32'd0;
+    assign debug_peak_power_ctrl = 32'd0;
+    assign debug_time_rd_data_ctrl = 32'd0;
+    assign debug_fft_rd_data_ctrl = 32'd0;
+`else
     fft_debug_observer u_fft_debug_observer (
         .clk(clk),
         .rst_n(rst_n),
@@ -1238,6 +1952,7 @@ module t510_fengine_top (
         .ctrl_peak_bin(debug_peak_bin_ctrl),
         .ctrl_peak_power(debug_peak_power_ctrl)
     );
+`endif
 
     multi_preview_observer u_multi_preview_observer (
         .clk(clk),
@@ -1289,6 +2004,19 @@ module t510_fengine_top (
         .ctrl_event_dac_phase_epoch(preview_event_dac_phase_epoch_ctrl)
     );
 
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign rfdc_axis_raw_witness_rd_data_ctrl = 32'd0;
+    assign rfdc_axis_raw_witness_armed_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_valid_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_capturing_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_overflow_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_tvalid_seen_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_beat_count_ctrl = 9'd0;
+    assign rfdc_axis_raw_witness_channel_select_ctrl = 3'd0;
+    assign rfdc_axis_raw_witness_sample0_ctrl = 64'd0;
+    assign rfdc_axis_raw_witness_rfdc_flags_ctrl = 32'd0;
+    assign rfdc_axis_raw_witness_valid_mask_ctrl = 16'd0;
+`else
     rfdc_axis_raw_witness_capture #(
         .CAPTURE_BEATS(256)
     ) u_rfdc_axis_raw_witness_capture (
@@ -1321,6 +2049,7 @@ module t510_fengine_top (
         .ctrl_rfdc_flags(rfdc_axis_raw_witness_rfdc_flags_ctrl),
         .ctrl_valid_mask(rfdc_axis_raw_witness_valid_mask_ctrl)
     );
+`endif
 
     axis_stream_duplicator #(
         .DATA_W(SCIENCE_DATA_W),
@@ -1333,7 +2062,8 @@ module t510_fengine_top (
         .time_enable(time_enable),
         .snapshot_enable(snapshot_enable),
         .monitor_enable(monitor_enable),
-        .time_drop_when_full(1'b1),
+        .spec_drop_when_full(1'b0),
+        .time_drop_when_full(1'b0),
         .snapshot_drop_when_full(1'b1),
         .monitor_drop_when_full(1'b1),
         .s_axis_tdata(science_tdata),
@@ -1366,7 +2096,8 @@ module t510_fengine_top (
         .m_monitor_tvalid(monitor_tvalid),
         .m_monitor_tlast(monitor_tlast),
         .m_monitor_tready(monitor_tready),
-        .dropped_time_count(time_dropped_count),
+        .dropped_spec_count(spec_duplicator_dropped_count),
+        .dropped_time_count(time_duplicator_dropped_count),
         .dropped_snapshot_count(),
         .dropped_monitor_count()
     );
@@ -1407,6 +2138,17 @@ module t510_fengine_top (
         .status(pfb_status),
         .frame_count(pfb_frame_count),
         .overflow_count(pfb_overflow_count),
+        .data_halt_count(pfb_data_halt_count),
+        .xfft_event_count(pfb_xfft_event_count),
+        .tile_overflow_count(pfb_tile_overflow_count),
+        .xfft_tlast_unexpected_count(pfb_xfft_tlast_unexpected_count),
+        .xfft_tlast_missing_count(pfb_xfft_tlast_missing_count),
+        .xfft_fft_overflow_count(pfb_xfft_fft_overflow_count),
+        .xfft_data_out_halt_count(pfb_xfft_data_out_halt_count),
+        .xfft_status_halt_count(pfb_xfft_status_halt_count),
+        .capture_backpressure_count(pfb_capture_backpressure_count),
+        .frame_sample0_overflow_count(pfb_frame_sample0_overflow_count),
+        .input_fifo_level(pfb_input_fifo_level),
         .peak_chan(pfb_peak_chan),
         .peak_power(pfb_peak_power),
         .packet_chan0(pfb_packet_chan0),
@@ -1414,6 +2156,18 @@ module t510_fengine_top (
         .packet_time_count(pfb_packet_time_count)
     );
 
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign legacy_pfb_spec_tready = 1'b0;
+    assign spec_axis_tdata = 64'd0;
+    assign spec_axis_tkeep = 8'd0;
+    assign spec_axis_tvalid = 1'b0;
+    assign spec_axis_tlast = 1'b0;
+    assign legacy_spec_packet_count = 32'd0;
+    assign legacy_spec_udp_byte_count = 32'd0;
+    assign legacy_spec_seq_no = 32'd0;
+    assign legacy_spec_frame_id = 64'd0;
+    assign legacy_spec_chan0 = 32'd0;
+`else
     spectral_packetizer #(
         .DATA_W(SCIENCE_DATA_W),
         .OUT_W(64),
@@ -1421,7 +2175,7 @@ module t510_fengine_top (
     ) u_spectral_packetizer (
         .clk(clk),
         .rst_n(rst_n),
-        .enable(spec_enable),
+        .enable(spec_enable && !spec_live_requested_data),
         .stream_reset(packet_stream_reset_pulse),
         .board_id(board_id),
         .global_input0({board_id[12:0], 3'b000}),
@@ -1435,23 +2189,120 @@ module t510_fengine_top (
         .spec_chan0(pfb_packet_chan0),
         .spec_time_count(pfb_packet_time_count),
         .spec_chan_count(pfb_packet_chan_count),
+        .spec_nchan(16'd4096),
+        .spec_taps(pfb_taps),
+        .spec_fft_shift(pfb_fft_shift),
+        .spec_sample_rate_hz(sample_rate_hz),
+        .spec_status_flags(pfb_status),
         .chan_split(chan_split),
         .s_axis_tdata(pfb_spec_tdata),
         .s_axis_sample0(pfb_spec_sample0),
-        .s_axis_tvalid(pfb_spec_tvalid),
-        .s_axis_tready(pfb_spec_tready),
+        .s_axis_tvalid(pfb_spec_tvalid && !spec_live_requested_data),
+        .s_axis_tready(legacy_pfb_spec_tready),
         .m_axis_tdata(spec_axis_tdata),
         .m_axis_tkeep(spec_axis_tkeep),
         .m_axis_tvalid(spec_axis_tvalid),
         .m_axis_tlast(spec_axis_tlast),
         .m_axis_tready(spec_axis_tready),
-        .packet_count(spec_packet_count),
-        .udp_byte_count(spec_udp_byte_count),
-        .seq_no_debug(spec_seq_no),
-        .frame_id_debug(spec_frame_id),
-        .chan0_debug(spec_chan0)
+        .packet_count(legacy_spec_packet_count),
+        .udp_byte_count(legacy_spec_udp_byte_count),
+        .seq_no_debug(legacy_spec_seq_no),
+        .frame_id_debug(legacy_spec_frame_id),
+        .chan0_debug(legacy_spec_chan0)
     );
+`endif
 
+    spec_udp_cmac512 #(
+        .DATA_W(SCIENCE_DATA_W),
+        .N_ENDPOINTS(TX_ENDPOINTS),
+        .N_SPEC_ROUTES(TX_SPEC_ROUTES),
+        .DATA_FIFO_DEPTH(4096),
+        .DATA_COUNT_W(13),
+        .TOKEN_FIFO_DEPTH(64),
+        .TOKEN_COUNT_W(7)
+    ) u_spec_udp_cmac512 (
+        .s_clk(clk),
+        .s_rst_n(rst_n),
+        .s_clear(packet_stream_reset_pulse || tx_clear_pulse),
+        .enable(spec_enable && spec_live_requested_data),
+        .drop_on_route_miss(tx_control[3]),
+        .board_id(board_id),
+        .global_input0({board_id[12:0], 3'b000}),
+        .epoch_mode(udp_epoch_mode),
+        .packet_flags(udp_packet_flags),
+        .unix_seconds(unix_seconds),
+        .pps_count(pps_count),
+        .quant_mode(quant_mode),
+        .scale_mode(scale_mode),
+        .scale_id(scale_id),
+        .spec_chan0(pfb_packet_chan0),
+        .spec_chan_count(pfb_packet_chan_count),
+        .spec_time_count(pfb_packet_time_count),
+        .spec_nchan(16'd4096),
+        .spec_taps(pfb_taps),
+        .spec_fft_shift(pfb_fft_shift),
+        .spec_sample_rate_hz(sample_rate_hz),
+        .spec_status_flags(pfb_status),
+        .chan_split(chan_split),
+        .src_mac(src_mac),
+        .src_ip(src_ip),
+        .endpoint_enable(tx_endpoint_enable),
+        .endpoint_ip_vec(tx_endpoint_ip_vec),
+        .endpoint_mac_vec(tx_endpoint_mac_vec),
+        .endpoint_src_port_vec(tx_endpoint_src_port_vec),
+        .endpoint_dst_port_vec(tx_endpoint_dst_port_vec),
+        .spec_route_enable(tx_spec_route_enable),
+        .spec_route_chan0_vec(tx_spec_route_chan0_vec),
+        .spec_route_chan_count_vec(tx_spec_route_chan_count_vec),
+        .spec_route_endpoint_vec(tx_spec_route_endpoint_vec),
+        .s_axis_tdata(pfb_spec_tdata),
+        .s_axis_sample0(pfb_spec_sample0),
+        .s_axis_tvalid(pfb_spec_tvalid && spec_live_requested_data),
+        .s_axis_tready(wide_pfb_spec_tready),
+        .m_clk(cmac_tx_clk),
+        .m_rst_n(cmac_tx_rst_n),
+        .m_clear(tx_clear_pulse_cmac),
+        .m_axis_tdata(wide_spec_live_cmac_tdata),
+        .m_axis_tkeep(wide_spec_live_cmac_tkeep),
+        .m_axis_tvalid(wide_spec_live_cmac_tvalid),
+        .m_axis_tlast(wide_spec_live_cmac_tlast),
+        .m_axis_tready(wide_spec_live_cmac_tready),
+        .packet_count(wide_spec_packet_count),
+        .udp_byte_count(wide_spec_udp_byte_count),
+        .frame_built_count(wide_spec_tx_frame_built_count),
+        .frame_byte_count(wide_spec_tx_frame_byte_count),
+        .frame_dropped_count(wide_spec_tx_route_dropped_count),
+        .route_miss_count(wide_spec_tx_route_miss_count),
+        .route_error_count(wide_spec_tx_route_error_count),
+        .seq_no_debug(wide_spec_seq_no),
+        .sample0_debug(wide_spec_sample0),
+        .frame_id_debug(wide_spec_frame_id),
+        .chan0_debug(wide_spec_chan0),
+        .selected_endpoint_id(wide_spec_tx_selected_endpoint_id),
+        .selected_route_id(wide_spec_tx_selected_route_id),
+        .selected_route_is_time(wide_spec_tx_selected_route_is_time),
+        .spec_route_hit_count_vec(wide_spec_tx_route_hit_counts),
+        .fifo_level_words(),
+        .output_frame_count(),
+        .backpressure_cycles(),
+        .fifo_full(),
+        .fifo_empty()
+    );
+    assign wide_spec_tx_route_forwarded_count = wide_spec_tx_frame_built_count;
+
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign legacy_time_tready = 1'b0;
+    assign time_axis_tdata = 64'd0;
+    assign time_axis_tkeep = 8'd0;
+    assign time_axis_tvalid = 1'b0;
+    assign time_axis_tlast = 1'b0;
+    assign legacy_time_packet_count = 32'd0;
+    assign legacy_time_dropped_count = 32'd0;
+    assign legacy_time_udp_byte_count = 32'd0;
+    assign legacy_time_seq_no = 32'd0;
+    assign legacy_time_sample0 = 64'd0;
+    assign legacy_time_frame_id = 64'd0;
+`else
     time_packetizer #(
         .DATA_W(SCIENCE_DATA_W),
         .OUT_W(64),
@@ -1459,7 +2310,7 @@ module t510_fengine_top (
     ) u_time_packetizer (
         .clk(clk),
         .rst_n(rst_n),
-        .enable(time_enable),
+        .enable(time_enable && !time_live_full_rate_data),
         .stream_reset(packet_stream_reset_pulse),
         .board_id(board_id),
         .global_input0({board_id[12:0], 3'b000}),
@@ -1471,26 +2322,185 @@ module t510_fengine_top (
         .scale_mode(scale_mode),
         .scale_id(scale_id),
         .time_payload_nsamp(time_payload_nsamp),
+        .packet_interval_beats(time_live_interval_beats),
         .s_axis_tdata(time_tdata),
         .s_axis_sample0(time_input_sample0),
-        .s_axis_tvalid(time_tvalid),
-        .s_axis_tready(time_tready),
+        .s_axis_tvalid(time_tvalid && !time_live_full_rate_data),
+        .s_axis_tready(legacy_time_tready),
         .m_axis_tdata(time_axis_tdata),
         .m_axis_tkeep(time_axis_tkeep),
         .m_axis_tvalid(time_axis_tvalid),
         .m_axis_tlast(time_axis_tlast),
         .m_axis_tready(time_axis_tready),
-        .packet_count(time_packet_count),
-        .dropped_count(),
-        .udp_byte_count(time_udp_byte_count),
-        .seq_no_debug(time_seq_no),
-        .sample0_debug(time_sample0),
-        .frame_id_debug(time_frame_id)
+        .packet_count(legacy_time_packet_count),
+        .dropped_count(legacy_time_dropped_count),
+        .udp_byte_count(legacy_time_udp_byte_count),
+        .seq_no_debug(legacy_time_seq_no),
+        .sample0_debug(legacy_time_sample0),
+        .frame_id_debug(legacy_time_frame_id)
     );
+`endif
+
+    time_udp_cmac512 #(
+        .DATA_W(SCIENCE_DATA_W),
+        .N_ENDPOINTS(TX_ENDPOINTS),
+        .N_TIME_ROUTES(TX_TIME_ROUTES),
+        .DATA_FIFO_DEPTH(256),
+        .DATA_COUNT_W(9),
+        .TOKEN_FIFO_DEPTH(16),
+        .TOKEN_COUNT_W(5)
+    ) u_time_udp_cmac512 (
+        .s_clk(clk),
+        .s_rst_n(rst_n),
+        .s_clear(packet_stream_reset_pulse || tx_clear_pulse),
+        .enable(time_enable && time_live_full_rate_data),
+        .drop_on_route_miss(tx_control[3]),
+        .board_id(board_id),
+        .global_input0({board_id[12:0], 3'b000}),
+        .epoch_mode(udp_epoch_mode),
+        .packet_flags(udp_packet_flags),
+        .unix_seconds(unix_seconds),
+        .pps_count(pps_count),
+        .quant_mode(quant_mode),
+        .scale_id(scale_id),
+        .src_mac(src_mac),
+        .src_ip(src_ip),
+        .time_input_mask({8'd0, rfdc_active_mask[7:0]}),
+        .endpoint_enable(tx_endpoint_enable),
+        .endpoint_ip_vec(tx_endpoint_ip_vec),
+        .endpoint_mac_vec(tx_endpoint_mac_vec),
+        .endpoint_src_port_vec(tx_endpoint_src_port_vec),
+        .endpoint_dst_port_vec(tx_endpoint_dst_port_vec),
+        .time_route_enable(tx_time_route_enable),
+        .time_route_input_mask_vec(tx_time_route_input_mask_vec),
+        .time_route_endpoint_vec(tx_time_route_endpoint_vec),
+        .time_multiflow_enable(time_multiflow_enable),
+        .time_multiflow_base_endpoint(time_multiflow_base_endpoint),
+        .time_multiflow_count(time_multiflow_count),
+        .s_axis_tdata(time_tdata),
+        .s_axis_sample0(time_input_sample0),
+        .s_axis_tvalid(time_tvalid && time_live_full_rate_data),
+        .s_axis_tready(wide_time_tready),
+        .m_clk(cmac_tx_clk),
+        .m_rst_n(cmac_tx_rst_n),
+        .m_clear(tx_clear_pulse_cmac),
+        .m_axis_tdata(wide_time_live_cmac_tdata),
+        .m_axis_tkeep(wide_time_live_cmac_tkeep),
+        .m_axis_tvalid(wide_time_live_cmac_tvalid),
+        .m_axis_tlast(wide_time_live_cmac_tlast),
+        .m_axis_tready(wide_time_live_cmac_tready),
+        .packet_count(wide_time_packet_count),
+        .udp_byte_count(wide_time_udp_byte_count),
+        .frame_built_count(wide_tx_frame_built_count),
+        .frame_byte_count(wide_tx_frame_byte_count),
+        .frame_dropped_count(wide_tx_route_dropped_count),
+        .route_miss_count(wide_tx_route_miss_count),
+        .route_error_count(wide_tx_route_error_count),
+        .seq_no_debug(wide_time_seq_no),
+        .sample0_debug(wide_time_sample0),
+        .frame_id_debug(wide_time_frame_id),
+        .selected_endpoint_id(wide_tx_selected_endpoint_id),
+        .selected_route_id(wide_tx_selected_route_id),
+        .selected_route_is_time(wide_tx_selected_route_is_time),
+        .time_route_hit_count_vec(wide_tx_time_route_hit_counts),
+        .fifo_level_words(wide_time_live_bridge_fifo_level),
+        .output_frame_count(wide_time_live_bridge_output_frames),
+        .backpressure_cycles(wide_time_live_bridge_backpressure_cycles),
+        .fifo_full(wide_time_live_bridge_fifo_full),
+        .fifo_empty(wide_time_live_bridge_fifo_empty)
+    );
+    assign wide_tx_route_forwarded_count = wide_tx_frame_built_count;
+    assign wide_time_dropped_count = wide_tx_route_dropped_count;
+    assign wide_time_live_bridge_input_frames = wide_tx_frame_built_count;
+    assign wide_time_live_bridge_s_tready = wide_time_tready;
 
     assign snapshot_tready = 1'b1;
     assign monitor_tready  = 1'b1;
 
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign spec_axis_tready = 1'b0;
+    assign time_axis_tready = 1'b0;
+    assign arb_tx_tdata = 64'd0;
+    assign arb_tx_tkeep = 8'd0;
+    assign arb_tx_tvalid = 1'b0;
+    assign arb_tx_tlast = 1'b0;
+    assign arb_tx_tready = 1'b0;
+    assign tx_fifo_level_words = 32'd0;
+    assign tx_fifo_high_water_words = 32'd0;
+    assign tx_fifo_backpressure_cycles = 32'd0;
+    assign tx_header_capture_rd_data_ctrl = 32'd0;
+    assign tx_header_capture_armed_ctrl = 1'b0;
+    assign tx_header_capture_valid_ctrl = 1'b0;
+    assign tx_header_capture_word_count_ctrl = 5'd0;
+    assign tx_frame_capture_rd_data_ctrl = 32'd0;
+    assign tx_frame_capture_armed_ctrl = 1'b0;
+    assign tx_frame_capture_valid_ctrl = 1'b0;
+    assign tx_frame_capture_word_count_ctrl = 5'd0;
+    assign internal_tx_tdata = 64'd0;
+    assign internal_tx_tkeep = 8'd0;
+    assign internal_tx_tvalid = 1'b0;
+    assign internal_tx_tlast = 1'b0;
+    assign internal_tx_tready = 1'b0;
+    assign routed_tx_tdata = 64'd0;
+    assign routed_tx_tkeep = 8'd0;
+    assign routed_tx_tvalid = 1'b0;
+    assign routed_tx_tlast = 1'b0;
+    assign routed_tx_tready = 1'b0;
+    assign routed_dst_mac = 48'd0;
+    assign routed_dst_ip = 32'd0;
+    assign routed_src_udp_port = 16'd0;
+    assign routed_dst_udp_port = 16'd0;
+    assign routed_t510_payload_bytes = 32'd0;
+    assign routed_stream_type = 16'd0;
+    assign routed_endpoint_id = 8'd0;
+    assign routed_route_id = 6'd0;
+    assign routed_route_is_time = 1'b0;
+    assign legacy_tx_route_forwarded_count = 32'd0;
+    assign legacy_tx_route_dropped_count = 32'd0;
+    assign legacy_tx_route_miss_count = 32'd0;
+    assign legacy_tx_route_error_count = 32'd0;
+    assign legacy_tx_selected_endpoint_id = 8'd0;
+    assign legacy_tx_selected_route_id = 6'd0;
+    assign legacy_tx_selected_route_is_time = 1'b0;
+    assign legacy_tx_spec_route_hit_counts = {TX_SPEC_ROUTES*32{1'b0}};
+    assign legacy_tx_time_route_hit_counts = 256'd0;
+    assign tx_payload_witness_rd_data_ctrl = 32'd0;
+    assign tx_payload_witness_armed_ctrl = 1'b0;
+    assign tx_payload_witness_valid_ctrl = 1'b0;
+    assign tx_payload_witness_capturing_ctrl = 1'b0;
+    assign tx_payload_witness_word_count_ctrl = 11'd0;
+    assign tx_payload_witness_stream_type_ctrl = 16'd0;
+    assign tx_payload_witness_sample0_ctrl = 64'd0;
+    assign tx_payload_witness_frame_id_ctrl = 64'd0;
+    assign tx_payload_witness_seq_no_ctrl = 32'd0;
+    assign tx_payload_witness_chan0_ctrl = 32'd0;
+    assign tx_payload_witness_layout_word_ctrl = 64'd0;
+    assign tx_payload_witness_payload_bytes_ctrl = 32'd0;
+    assign tx_payload_witness_route_meta_ctrl = 32'd0;
+    assign tx_payload_witness_rfdc_flags_ctrl = 32'd0;
+    assign tx_payload_witness_rfdc_sample_count_ctrl = 64'd0;
+    assign tx_payload_witness_dac_phase_epoch_ctrl = 32'd0;
+    assign tx_payload_witness_overflow_ctrl = 1'b0;
+    assign tx_payload_witness_filter_mismatch_ctrl = 1'b0;
+    assign frame_tx_tdata = 64'd0;
+    assign frame_tx_tkeep = 8'd0;
+    assign frame_tx_tvalid = 1'b0;
+    assign frame_tx_tlast = 1'b0;
+    assign legacy_tx_frame_built_count = 32'd0;
+    assign legacy_tx_frame_byte_count = 32'd0;
+    assign legacy_time_live_cmac_tdata = 512'd0;
+    assign legacy_time_live_cmac_tkeep = 64'd0;
+    assign legacy_time_live_cmac_tvalid = 1'b0;
+    assign legacy_time_live_cmac_tlast = 1'b0;
+    assign legacy_time_live_cmac_tready = 1'b0;
+    assign legacy_time_live_bridge_s_tready = 1'b0;
+    assign legacy_time_live_bridge_fifo_level = 32'd0;
+    assign legacy_time_live_bridge_input_frames = 32'd0;
+    assign legacy_time_live_bridge_output_frames = 32'd0;
+    assign legacy_time_live_bridge_backpressure_cycles = 32'd0;
+    assign legacy_time_live_bridge_fifo_full = 1'b0;
+    assign legacy_time_live_bridge_fifo_empty = 1'b0;
+`else
     udp_tx_arbiter u_udp_tx_arbiter (
         .clk(clk),
         .rst_n(rst_n),
@@ -1567,9 +2577,9 @@ module t510_fengine_top (
 
     tx_route_selector #(
         .DATA_W(64),
-        .N_ENDPOINTS(8),
-        .N_SPEC_ROUTES(8),
-        .N_TIME_ROUTES(8),
+        .N_ENDPOINTS(TX_ENDPOINTS),
+        .N_SPEC_ROUTES(TX_SPEC_ROUTES),
+        .N_TIME_ROUTES(TX_TIME_ROUTES),
         .HEADER_WORDS(16)
     ) u_tx_route_selector (
         .clk(clk),
@@ -1609,15 +2619,15 @@ module t510_fengine_top (
         .m_endpoint_id(routed_endpoint_id),
         .m_route_id(routed_route_id),
         .m_route_is_time(routed_route_is_time),
-        .frame_forwarded_count(tx_route_forwarded_count),
-        .frame_dropped_count(tx_route_dropped_count),
-        .route_miss_count(tx_route_miss_count),
-        .route_error_count(tx_route_error_count),
-        .selected_endpoint_id(tx_selected_endpoint_id),
-        .selected_route_id(tx_selected_route_id),
-        .selected_route_is_time(tx_selected_route_is_time),
-        .spec_route_hit_count_vec(tx_spec_route_hit_counts),
-        .time_route_hit_count_vec(tx_time_route_hit_counts)
+        .frame_forwarded_count(legacy_tx_route_forwarded_count),
+        .frame_dropped_count(legacy_tx_route_dropped_count),
+        .route_miss_count(legacy_tx_route_miss_count),
+        .route_error_count(legacy_tx_route_error_count),
+        .selected_endpoint_id(legacy_tx_selected_endpoint_id),
+        .selected_route_id(legacy_tx_selected_route_id),
+        .selected_route_is_time(legacy_tx_selected_route_is_time),
+        .spec_route_hit_count_vec(legacy_tx_spec_route_hit_counts),
+        .time_route_hit_count_vec(legacy_tx_time_route_hit_counts)
     );
 
     tx_payload_witness_capture #(
@@ -1683,14 +2693,42 @@ module t510_fengine_top (
         .s_axis_tvalid(routed_tx_tvalid),
         .s_axis_tlast(routed_tx_tlast),
         .s_axis_tready(routed_tx_tready),
-        .m_axis_tdata(m_axis_tx_tdata),
-        .m_axis_tkeep(m_axis_tx_tkeep),
-        .m_axis_tvalid(m_axis_tx_tvalid),
-        .m_axis_tlast(m_axis_tx_tlast),
-        .m_axis_tready(m_axis_tx_tready),
-        .frame_built_count(tx_frame_built_count),
-        .frame_byte_count(tx_frame_byte_count)
+        .m_axis_tdata(frame_tx_tdata),
+        .m_axis_tkeep(frame_tx_tkeep),
+        .m_axis_tvalid(frame_tx_tvalid),
+        .m_axis_tlast(frame_tx_tlast),
+        .m_axis_tready(frame_tx_tready),
+        .frame_built_count(legacy_tx_frame_built_count),
+        .frame_byte_count(legacy_tx_frame_byte_count)
     );
+
+    axis64_to_cmac512_async #(
+        .FIFO_DEPTH(1024),
+        .COUNT_W(11)
+    ) u_time_live_cmac_bridge (
+        .s_clk(clk),
+        .s_rst_n(rst_n),
+        .s_clear(packet_stream_reset_pulse || tx_clear_pulse),
+        .s_axis_tdata(frame_tx_tdata),
+        .s_axis_tkeep(frame_tx_tkeep),
+        .s_axis_tvalid(frame_tx_tvalid && legacy_bridge_requested_data),
+        .s_axis_tlast(frame_tx_tlast),
+        .s_axis_tready(legacy_time_live_bridge_s_tready),
+        .m_clk(cmac_tx_clk),
+        .m_rst_n(cmac_tx_rst_n),
+        .m_axis_tdata(legacy_time_live_cmac_tdata),
+        .m_axis_tkeep(legacy_time_live_cmac_tkeep),
+        .m_axis_tvalid(legacy_time_live_cmac_tvalid),
+        .m_axis_tlast(legacy_time_live_cmac_tlast),
+        .m_axis_tready(legacy_time_live_cmac_tready),
+        .fifo_level_words(legacy_time_live_bridge_fifo_level),
+        .input_frame_count(legacy_time_live_bridge_input_frames),
+        .output_frame_count(legacy_time_live_bridge_output_frames),
+        .backpressure_cycles(legacy_time_live_bridge_backpressure_cycles),
+        .fifo_full(legacy_time_live_bridge_fifo_full),
+        .fifo_empty(legacy_time_live_bridge_fifo_empty)
+    );
+`endif
 
     t510_qsfp_test_frame_gen u_qsfp_test_frame_gen (
         .clk(cmac_tx_clk),
@@ -1704,19 +2742,69 @@ module t510_fengine_top (
         .dst_ip(tx_qsfp_test_dst_ip_cmac),
         .src_udp_port(tx_qsfp_test_src_port_cmac),
         .dst_udp_port(tx_qsfp_test_dst_port_cmac),
-        .core_version(32'h0001_001A),
+        .core_version(32'h0001_0026),
         .board_id(ctrl_board_id_cmac),
         .status_flags(tx_link_status_flags_cmac),
         .sample_count(rfdc_sample_count_cmac),
-        .m_axis_tdata(cmac_tx_axis_tdata),
-        .m_axis_tkeep(cmac_tx_axis_tkeep),
-        .m_axis_tvalid(cmac_tx_axis_tvalid),
-        .m_axis_tlast(cmac_tx_axis_tlast),
-        .m_axis_tready(cmac_tx_axis_tready),
+        .m_axis_tdata(heartbeat_cmac_tdata),
+        .m_axis_tkeep(heartbeat_cmac_tkeep),
+        .m_axis_tvalid(heartbeat_cmac_tvalid),
+        .m_axis_tlast(heartbeat_cmac_tlast),
+        .m_axis_tready(heartbeat_cmac_tready),
         .packet_count(tx_cmac_test_packet_count),
         .byte_count(tx_cmac_test_byte_count)
     );
 
+    cmac_tx_source_mux u_cmac_tx_source_mux (
+        .clk(cmac_tx_clk),
+        .rst_n(cmac_tx_rst_n),
+        .clear(tx_clear_pulse_cmac),
+        .select_time_live(time_live_full_rate_cmac),
+        .select_spec_live(spec_live_requested_cmac),
+        .heartbeat_tdata(heartbeat_cmac_tdata),
+        .heartbeat_tkeep(heartbeat_cmac_tkeep),
+        .heartbeat_tvalid(heartbeat_cmac_tvalid),
+        .heartbeat_tlast(heartbeat_cmac_tlast),
+        .heartbeat_tready(heartbeat_cmac_tready),
+        .time_tdata(time_live_cmac_mux_tdata),
+        .time_tkeep(time_live_cmac_mux_tkeep),
+        .time_tvalid(time_live_cmac_mux_tvalid),
+        .time_tlast(time_live_cmac_mux_tlast),
+        .time_tready(time_live_cmac_mux_tready),
+        .spec_tdata(wide_spec_live_cmac_tdata),
+        .spec_tkeep(wide_spec_live_cmac_tkeep),
+        .spec_tvalid(wide_spec_live_cmac_tvalid),
+        .spec_tlast(wide_spec_live_cmac_tlast),
+        .spec_tready(wide_spec_live_cmac_tready),
+        .m_axis_tdata(cmac_mux_axis_tdata),
+        .m_axis_tkeep(cmac_mux_axis_tkeep),
+        .m_axis_tvalid(cmac_mux_axis_tvalid),
+        .m_axis_tlast(cmac_mux_axis_tlast),
+        .m_axis_tready(cmac_mux_axis_tready),
+        .status(tx_cmac_source_mux_status)
+    );
+
+    axis512_register_slice #(
+        .DATA_W(512),
+        .KEEP_W(64),
+        .DEPTH(2)
+    ) u_cmac_tx_output_slice (
+        .clk(cmac_tx_clk),
+        .rst_n(cmac_tx_rst_n),
+        .clear(tx_clear_pulse_cmac),
+        .s_axis_tdata(cmac_mux_axis_tdata),
+        .s_axis_tkeep(cmac_mux_axis_tkeep),
+        .s_axis_tvalid(cmac_mux_axis_tvalid),
+        .s_axis_tlast(cmac_mux_axis_tlast),
+        .s_axis_tready(cmac_mux_axis_tready),
+        .m_axis_tdata(cmac_tx_axis_tdata),
+        .m_axis_tkeep(cmac_tx_axis_tkeep),
+        .m_axis_tvalid(cmac_tx_axis_tvalid),
+        .m_axis_tlast(cmac_tx_axis_tlast),
+        .m_axis_tready(cmac_tx_axis_tready)
+    );
+
+`ifndef T510_STAGE27H_PRODUCTION_ONLY
     tx_header_capture #(
         .DATA_W(64),
         .HEADER_WORDS(16)
@@ -1726,18 +2814,24 @@ module t510_fengine_top (
         .ctrl_clk(ctrl_clk),
         .ctrl_rst_n(ctrl_rst_n),
         .arm_pulse_ctrl(ctrl_tx_frame_capture_arm_pulse),
-        .s_axis_tdata(m_axis_tx_tdata),
-        .s_axis_tvalid(m_axis_tx_tvalid),
-        .s_axis_tlast(m_axis_tx_tlast),
-        .s_axis_tready(m_axis_tx_tready),
+        .s_axis_tdata(frame_tx_tdata),
+        .s_axis_tvalid(frame_tx_tvalid),
+        .s_axis_tlast(frame_tx_tlast),
+        .s_axis_tready(frame_tx_tready),
         .ctrl_rd_word(ctrl_tx_frame_capture_rd_word),
         .ctrl_rd_data(tx_frame_capture_rd_data_ctrl),
         .ctrl_armed(tx_frame_capture_armed_ctrl),
         .ctrl_valid(tx_frame_capture_valid_ctrl),
         .ctrl_word_count(tx_frame_capture_word_count_ctrl)
     );
+`endif
 
-    feng_ctrl_axi u_feng_ctrl_axi (
+    feng_ctrl_axi #(
+        .NINPUT(8),
+        .N_TX_ENDPOINTS(TX_ENDPOINTS),
+        .N_SPEC_ROUTES(TX_SPEC_ROUTES),
+        .N_TIME_ROUTES(TX_TIME_ROUTES)
+    ) u_feng_ctrl_axi (
         .s_axi_aclk(ctrl_clk),
         .s_axi_aresetn(ctrl_rst_n),
         .s_axi_awaddr(s_axi_awaddr),
@@ -1774,6 +2868,7 @@ module t510_fengine_top (
         .time_packet_count(time_packet_count_ctrl),
         .time_udp_byte_count(time_udp_byte_count_ctrl),
         .time_dropped_count(time_dropped_count_ctrl),
+        .spec_dropped_count(spec_dropped_count_ctrl),
         .spec_seq_no(spec_seq_no_ctrl),
         .time_seq_no(time_seq_no_ctrl),
         .time_sample0(time_sample0_ctrl),
@@ -1785,6 +2880,7 @@ module t510_fengine_top (
         .rfdc_dropped_count(rfdc_dropped_count_ctrl),
         .rfdc_current_valid_mask(rfdc_current_valid_mask_ctrl),
         .rfdc_seen_valid_mask(rfdc_seen_valid_mask_ctrl),
+        .science_dropped_beat_count(science_dropped_beat_count_ctrl),
         .tx_link_status_flags(tx_link_status_flags_ctrl),
         .tx_dry_run_packet_count(tx_count_packet_status),
         .tx_dry_run_byte_count(tx_count_byte_status),
@@ -1798,9 +2894,16 @@ module t510_fengine_top (
         .tx_frame_byte_count(tx_frame_byte_count_ctrl),
         .tx_route_miss_count(tx_route_miss_count_ctrl),
         .tx_route_error_count(tx_route_error_count_ctrl),
+        .tx_cmac_source_status(tx_cmac_source_status_ctrl),
         .tx_selected_endpoint_id(tx_selected_endpoint_id_ctrl),
         .tx_selected_route_id(tx_selected_route_id_ctrl),
         .tx_selected_route_is_time(tx_selected_route_is_time_ctrl),
+        .time_ddr_ring_status(time_ddr_ring_status_ctrl),
+        .time_ddr_ring_occupancy(time_ddr_ring_occupancy_ctrl),
+        .time_ddr_ring_write_count(time_ddr_ring_write_count_ctrl),
+        .time_ddr_ring_read_count(time_ddr_ring_read_count_ctrl),
+        .time_ddr_ring_drop_count(time_ddr_ring_drop_count_ctrl),
+        .time_ddr_ring_error_count(time_ddr_ring_error_count_ctrl),
         .tx_header_capture_armed(tx_header_capture_armed_ctrl),
         .tx_header_capture_valid(tx_header_capture_valid_ctrl),
         .tx_header_capture_word_count(tx_header_capture_word_count_ctrl),
@@ -1858,6 +2961,17 @@ module t510_fengine_top (
         .pfb_status(pfb_status_ctrl),
         .pfb_frame_count(pfb_frame_count_ctrl),
         .pfb_overflow_count(pfb_overflow_count_ctrl),
+        .pfb_data_halt_count(pfb_data_halt_count_ctrl),
+        .pfb_xfft_event_count(pfb_xfft_event_count_ctrl),
+        .pfb_tile_overflow_count(pfb_tile_overflow_count_ctrl),
+        .pfb_xfft_tlast_unexpected_count(pfb_xfft_tlast_unexpected_count_ctrl),
+        .pfb_xfft_tlast_missing_count(pfb_xfft_tlast_missing_count_ctrl),
+        .pfb_xfft_fft_overflow_count(pfb_xfft_fft_overflow_count_ctrl),
+        .pfb_xfft_data_out_halt_count(pfb_xfft_data_out_halt_count_ctrl),
+        .pfb_xfft_status_halt_count(pfb_xfft_status_halt_count_ctrl),
+        .pfb_capture_backpressure_count(pfb_capture_backpressure_count_ctrl),
+        .pfb_frame_sample0_overflow_count(pfb_frame_sample0_overflow_count_ctrl),
+        .pfb_input_fifo_level(pfb_input_fifo_level_ctrl),
         .pfb_peak_chan(pfb_peak_chan_ctrl),
         .pfb_peak_power(pfb_peak_power_ctrl),
         .debug_busy(debug_busy_ctrl),
@@ -1990,6 +3104,14 @@ module t510_fengine_top (
         .rfdc_axis_raw_witness_capture_beats(ctrl_rfdc_axis_raw_witness_capture_beats),
         .rfdc_axis_raw_witness_rd_word(ctrl_rfdc_axis_raw_witness_rd_word),
         .unix_seconds(ctrl_unix_seconds),
+        .time_live_interval_beats(ctrl_time_live_interval_beats),
+        .time_ddr_ring_enable(ctrl_time_ddr_ring_enable),
+        .time_ddr_ring_clear_pulse(ctrl_time_ddr_ring_clear_pulse),
+        .time_ddr_ring_base_addr(ctrl_time_ddr_ring_base_addr),
+        .time_ddr_ring_slots(ctrl_time_ddr_ring_slots),
+        .time_multiflow_enable(ctrl_time_multiflow_enable),
+        .time_multiflow_base_endpoint(ctrl_time_multiflow_base_endpoint),
+        .time_multiflow_count(ctrl_time_multiflow_count),
         .science_bandwidth_mode_cfg(ctrl_science_bandwidth_mode_cfg),
         .science_output_mode_cfg(ctrl_science_output_mode_cfg)
     );

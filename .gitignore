@@ -35,6 +35,7 @@ __pycache__/
 /overlay/
 
 # Build/runtime artifacts
+rust/**/target/
 *.bit
 *.dcp
 *.jou

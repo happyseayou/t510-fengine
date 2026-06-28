@@ -4,14 +4,25 @@
 
 ## 最新状态
 
-- 最新推进到：Stage 24c passive DAC / 100G CR4 AN-LT 变体 A' 已完成 RTL/IP 包装、顶层综合和实现，但当前状态为 `BLOCK_STAGE24C_CMAC_AN_LT_BITGEN_LICENSE`。不能声明 QSFP heartbeat pcap 通过，更不能声明 TIME/SPEC science 通过。
-- 最新 overlay：仓库内 `overlay/t510_fengine.bit` 仍是 Stage 24b 旧 `0x00010013` bit，SHA256 为 `c5027c4def02990c104b1e9a919297a277cea89bcb50d95d1723c190613dbc02`。不要把它当作 Stage 24c `0x00010014` AN/LT bit 上板。
-- Vivado 状态：Stage 24c `0x00010014` 变体 A' synthesis 为 `0 errors, 0 critical warnings`，implementation 已到 `route_design Complete`，route 后时序满足（`WNS=+0.426 ns`、`WHS=+0.011 ns`、failed endpoints `0/132073`），failed/unrouted/partially routed nets 均为 0。`write_bitstream` 失败于 `Common 17-69` encrypted cellview license gate。
-- License 状态：`t510_cmac_usplus_0` 当前 `USED_LICENSE_KEYS` 包含 `cmac_usplus@2020.05 design_linking` 和 `cmac_an_lt@2020.05 design_linking`；本机 license 文件只找到 `cmac_usplus` bought license，没有找到 `cmac_an_lt` bitstream-capable license。安装新 license 后必须 reset/regenerate CMAC IP output products，重跑 OOC、top synth/impl/bitstream，不能只重跑 `write_bitstream`。
-- 板端历史状态：Stage 24b `CORE_VERSION=0x00010013` 已确认；QSFP module present、GT refclk、GT lock、GT TX/RX reset done、CMAC reset done、CMAC TX ready 均为 1，但 `local_fault=1`、`qsfp_link_up=0`、accepted packet/byte counters 为 0。主机 `ens2f0np0` 在 Auto / RS / BaseR / forced 100G no-AN no-FEC 下均 `NO-CARRIER`；相邻口 `ens2f1np1` 只读检查为 `No cable`。线缆 EEPROM 显示为 Mellanox `MCP1600-E002` 2m passive copper DAC，声明支持 `100GBASE-CR4`。当前仍按“线缆可兼容，但 passive DAC 需要 AN/LT/FEC 策略匹配”处理，不先判线缆坏。
-- Jupyter 入口：打开 `http://192.168.100.117/lab` 或 `http://192.168.100.117:9090/lab`，进入 `t510_fengine/notebooks/13_astronomer_rf_observation_console.ipynb`。
-- 尚未完成：Stage 19b 的 `ADC0 50Ω 端接 + DAC0 on` 泄漏矩阵、`cmac_an_lt` bitgen license、Stage 24c `0x00010014` AN/LT bitstream、QSFP heartbeat pcap、TIME/SPEC live science、交换机/接收节点 pcap、DGX/X-engine 收包、ARP/VLAN/PTP、正式科学级 4096-channel 4-tap PFB 幅相标定、长时间 FIFO/backpressure 压力测试、`50-350 MHz` 全带 RF 频率/幅相/功率标定、浏览器端 long-run soak test。
-- PYNQ 目标：`xilinx@192.168.100.117`。
+- 最新开发状态：Stage 27h 正在把 Stage 27g `/32` cadence 基线推进到 `TIME_SPEC 100MHz` FFT-only full-rate SPEC。生产 contract 改为 `CORE_VERSION=0x00010026`、TIME ports `4300..4307`、SPEC ports `4308..4323`、host `24` flows；SPEC 为 `FENGINE_IQ16`、`4096` channels、`16` 个 `256-channel x 1 spectrum-time x 8 inputs x IQ16` blocks、`8192B` payload，`spec_taps=0` 且 `spec_status_flags[8]=1` 标识 FFT-only。PYNQ board gate 为 `STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE_BOARD_PASS/FAIL`，host gate 为 `HOST_STAGE27H_RUST_RX_PASS/FAIL`，硬门槛是 TIME/SPEC 各近 `480kpps`、合计 T510 UDP payload `63Gbps+`，不能用 decimation/thinning 通过。Jupyter 生产入口切到 notebook 15；notebook 14 保留为 27g reference。27h 详见 `27h_time_spec_100mhz_fft_fullrate.md`，27g 基线详见 `27g_time_spec_100mhz_convergence.md`。
+- Stage 27d 基线：`PACKET_FANOUT_HASH` 仅作为探索分支；最终验收路径已切到 `PACKET_FANOUT` + `ntuple` port steering。Host Rust receiver 在 `fanout=port`、`--pin-workers off`、`4300..4307 -> RX queue 0..7` 规则下，`20/100/200MHz TIME_ONLY` 三档均 PASS，`200MHz` 实测 `960.5 kpps`、`8` 个 active workers、`seq/frame/sample0` gap 与 `ring/kernel/NIC` drop/error delta 均为 `0`。对应报告见 `27d_packet_fanout_host_rx.md`。
+- Stage 27c 历史闭环：`CORE_VERSION=0x0001001E`，DDR ring 已从 Stage 27c 数据面 compile-out，Vivado `impl_1` route clean、timing met、bitstream/export 完成；PYNQ 8-flow TIME sender 在 `20/100/200MHz` 三档板端 counters gate 均 PASS；本机 Rust/RSS receiver 在 `20MHz`、`100MHz` PASS，`200MHz` BLOCK 于 host RX/NIC path（约 `867 kpps` < `912 kpps` 门限，`rx_out_of_buffer`/`rx_missed_errors` 增长）。详见 `27c_multiflow_hardware_closure.md`。
+- Stage 26b/27 历史事实：`0x0001001D` PL-only DDR TIME 缓冲与时序优化完成；DDR disabled direct path 已通过 `20/100/200MHz TIME_ONLY` 板端 counters/gates，Rust/HTML smoke 能动态显示 8 路 TIME waveform。DDR enabled path 触发 `BLOCK_STAGE26B27_DDR_ENABLE_BOARD_UNREACHABLE`，DDR ring 修复前不要再次启用。
+- 当前本地 overlay 文件已更新为 Stage 27e `0x0001001F` 产物：`overlay/t510_fengine.bit` SHA256 为 `97908310a04aa4a98bf790619a77fb2b20187a4e6d84ff24b2fee6966d6906f7`。
+- PYNQ 同步/板端状态：2026-06-24 当前 SHA `97908310a04aa4a98bf790619a77fb2b20187a4e6d84ff24b2fee6966d6906f7` 已 publish 到 `/home/xilinx/t510_fengine_bringup` 和 `/home/xilinx/jupyter_notebooks/t510_fengine`；远端 `overlay/t510_fengine.bit` 与 bring-up root `t510_fengine.bit` SHA 均匹配。board smoke/full matrix 均为 `STAGE27E_SCIENCE_LIVE_PASS`。sudo 通道已确认可用；板端密码约定为“与登录用户名相同”，命令仍通过 stdin 传入凭据，不写入脚本或 notebook。
+- Vivado 状态：Stage 27e `synth_1` 完成；`impl_1` route complete。初始 route 后 timing `WNS=-0.055 ns`，post-route `phys_opt_design -directive AggressiveExplore` 后 timing met：`WNS=+0.002 ns`、`TNS=0.000 ns`、`WHS=+0.005 ns`，失败端点 `0/153149`；route status `128776/128776` routable nets fully routed、routing errors `0`；bitstream/export 完成。
+- License 状态：Stage 27e `write_bitstream` 成功，但 bitgen run log 仍报 `Vivado 12-1790` evaluation license critical warning，源于 separately licensed CMAC feature use（交接记录里对应 `cmac_an_lt@2020.05 design_linking`）；`cmac_usplus@2020.05` 为 bought license。该 warning 未阻塞 bitstream，但生产验收前必须记录并确认 license 风险。
+- Stage 25 验收边界：只证明 `20MHz TIME_ONLY` 低速 live TIME pcap 闭环；不声明 20/100/200MHz full science、SPEC/PFB、交换机/DGX/X-engine、ARP/VLAN/PTP 或长稳通过。
+- Stage 26/26b/27 当前边界：只声明动态 `20/100/200MHz TIME_ONLY` full-rate direct path 板端 counters/gates、payload contract、本地回归、timing closure、bit/export 和 PYNQ 文件同步已落地；不声明 DDR enabled path、host pcap/Rust/HTML、SPEC/PFB、DGX/X-engine、交换机、PTP/VLAN/ARP 或长稳通过。
+- Stage 27a 当前边界：Rust receiver v2 本地实现、release build、API smoke、UI 布局改造和 200MHz 实流短测已完成。receiver v2 能正确解析 TIME、`selected=detected=200MHz`、`parse_errors=0`，但主机单队列 `TPACKET_V3` 仍只处理约 `262 kpps / 17.45 Gbps`，低于 `960 kpps / 63.9 Gbps payload` 目标，且 `nic_rx_missed_errors_delta` 增长；不声明 host/Rust/HTML 实流无损 PASS。当前 blocker：`BLOCK_STAGE27A_HOST_NIC_SINGLE_QUEUE_RX_LIMIT`。
+- Stage 27b 当前边界：只声明多 flow/RSS 接收方案、Rust/Web 60Hz binary waveform、本地 Rust/Python 回归、targeted XSim 和 host tuning 脚本已落地；尚未完成全量 XSim 回归、Vivado bitstream/export、PYNQ 同步或 20/100/200MHz 实流无损验收。当前下一步是重建 bitstream，然后用 `scripts/host_stage27b_rx_tune.sh` 记录 RSS/queue 证据并实测 8-flow 200MHz。
+- Stage 27c 当前边界：声明 `0x0001001E` 版本 bump、DDR ring compile-out、Vivado bitstream/export、PYNQ 同步和板端 8-flow counters gate 已完成；routed timing `WNS=+0.005 ns`、`TNS=0.000 ns`、`WHS=+0.003 ns`，route errors `0`。Host Rust/RSS `20/100MHz` PASS；`200MHz` 当前分类 `BLOCK_STAGE27C_HOST_RSS_RX_LIMIT`，需下一阶段优化 host receive path。
+- Stage 27e 当前边界：声明本地 RTL/Python/Rust 集成、验收脚本、Vivado route/timing、bitstream/export、PYNQ sync、板端 full matrix 和 host `TIME_SPEC 20MHz` Rust preview 已完成；不声明 host `TIME_SPEC 100MHz` no-loss、长稳、X-engine/DGX、交换机路径或科学级 PFB 标定通过。27e `TIME_SPEC 100MHz` 总流量约 32Gbps 的直接原因是 SPEC 仍为 reduced/windowed stream，非 full 4096-bin F-engine science stream。
+- Stage 27g 当前边界：声明 `TIME_SPEC 100MHz` 生产短窗口 board + host gate 已闭合；27g wrappers 和 notebook 14 作为 `/32` cadence 参考保留，不恢复 dry-run/raw witness/debug FFT/reduced SPEC 作为验收线。不声明长稳、科学级 PFB 幅相/功率标定、交换机/DGX/X-engine、ARP/VLAN/PTP 或全 RF 频段标定通过。
+- Stage 27h 当前边界：本地 RTL/Python/Rust/Jupyter/发布入口已切到 FFT-only full-rate SPEC contract；硬件 Vivado export、PYNQ board gate、host 24-flow no-drop/no-gap gate 待下一轮板级验证补入实际结果。
+- Jupyter 入口：打开 `http://192.168.100.117/lab` 或 `http://192.168.100.117:9090/lab`，进入 `t510_fengine/notebooks/15_stage27h_time_spec_fft_fullrate_control.ipynb`。该 notebook 只保留生产控制和生产预览，预览仅包括 RF-reconstructed waveform 与 FFT-only production spectrum。
+- 尚未完成：长时间 `TIME_SPEC 100MHz` soak、真实科学级 4096-channel 4-tap PFB 幅相/功率标定、交换机/接收节点 pcap、DGX/X-engine 收包、ARP/VLAN/PTP、长时间 FIFO/backpressure 压力测试、`50-350 MHz` 全带 RF 频率/幅相/功率标定、浏览器端 long-run soak test。
+- PYNQ 目标：`xilinx@192.168.100.117`；默认登录用户和 sudo 密码均为 `xilinx`。自动化命令通过 stdin 传入 sudo 密码，不要把密码硬编码进脚本或 notebook。
 - PYNQ 运行 Python 前必须 source XRT：`source /etc/profile.d/xrt_setup.sh`，否则 `pynq.Device.devices` 为空。
 
 ## 阶段索引
@@ -44,66 +55,65 @@
 26. `22_jupyter_real_waveform_rfdc_raw_witness.md`
 27. `23_cmac_100g_science_bandwidth_rf_equiv.md`
 28. `24_qsfp0_cmac_100g_link_pcap_bringup.md`
+29. `25_time_low_rate_live_cmac_pcap.md`
+30. `26_time_full_rate_rx_payload.md`
+31. `26b_27_pl_ddr_time_buffer_timing.md`
+32. `27a_rust_time_receiver_v2.md`
+33. `27b_multiflow_rss_web_waveform.md`
+34. `27c_multiflow_hardware_closure.md`
+35. `27d_packet_fanout_host_rx.md`
+36. `27e_time_spec_live_science_preview.md`
+37. `27f_fengine_science_stream.md`
+38. `27g_time_spec_100mhz_convergence.md`
+39. `27h_time_spec_100mhz_fft_fullrate.md`
 
 ## 推荐接续入口
 
-1. 先读本文件和最新阶段报告的“阶段衔接说明”。
-2. 本地先跑：
+Stage 27h 后续只按生产核心推进：`TIME/SPEC` 科学数据流，以及 Jupyter 端控制/预览。旧 dry-run、raw witness、debug FFT、历史 notebook、Stage 27g `/32` cadence 和 reduced/window SPEC 只作为必要时追根因的 archived/reference 工具，不再作为 27h 生产验收主线。当前接续重点是重建 bitstream、板端 `TIME_SPEC 100MHz` FFT-only full-rate gate、host 24-flow no-drop/no-gap gate。
+
+1. 本地生产检查：
    ```bash
-   python3 -m py_compile python/packet.py python/t510_fengine.py scripts/check_t510_packet_header.py scripts/pynq_spec_dry_run_check.py scripts/pynq_jupyter_instrument_smoke.py scripts/pynq_8lane_instrument_check.py scripts/pynq_dac_adc_coherent_check.py scripts/pynq_rf_instrument_v2_check.py
-   python3 -m py_compile scripts/pynq_pfb_channel_window_check.py scripts/check_t510_udp_frame.py scripts/pynq_qsfp_udp_preflight_check.py scripts/pynq_astronomer_rf_console_check.py scripts/pynq_phase_provenance_audit.py scripts/pynq_hardware_phase_audit.py scripts/pynq_rfdc_udp_coherence_audit.py scripts/pynq_rfdc_sysref_coherence_lock_check.py scripts/pynq_lmk_rfdc_mts_recovery_check.py scripts/pynq_external_adc_tone_decoupling_check.py scripts/pynq_stage20_sync_diagnostic.py scripts/pynq_stage20_8lane_external_sync_check.py scripts/pynq_stage21_qsfp_link_pcap_check.py scripts/pynq_stage23_qsfp_science_check.py
-   python3 -m json.tool notebooks/09_single_board_virtual_instrument.ipynb >/dev/null
-   python3 -m json.tool notebooks/10_8lane_realtime_virtual_instrument.ipynb >/dev/null
-   python3 -m json.tool notebooks/11_dac_adc_coherent_scope_spectrum.ipynb >/dev/null
-   python3 -m json.tool notebooks/12_rf_instrument_console_v2.ipynb >/dev/null
-   python3 -m json.tool notebooks/13_astronomer_rf_observation_console.ipynb >/dev/null
-   ./scripts/run_xsim_batch.sh tb_t510_dac_loopback_source tb_dac_tx_witness_capture tb_preview_event_capture tb_rfdc_fullrate_preview tb_science_rate_selector tb_rfdc_adc_axis_adapter tb_feng_ctrl_axi tb_axi4_to_axil_bridge tb_tx_payload_witness_capture tb_time_packetizer tb_spectral_packetizer tb_t510_fengine_board_top tb_t510_fengine_top_smoke
+   python3 -m py_compile python/packet.py python/t510_fengine.py scripts/pynq_stage27h_time_spec_fft_fullrate.py scripts/host_stage27h_rust_rx_validate.py
+   python3 -m json.tool notebooks/15_stage27h_time_spec_fft_fullrate_control.ipynb >/dev/null
+   cargo test --manifest-path rust/t510_time_rx/Cargo.toml
+   cargo build --release --manifest-path rust/t510_time_rx/Cargo.toml
+   bash -n scripts/pynq_publish_stage27h.sh scripts/pynq_publish_jupyter_instrument.sh scripts/host_stage27h_rx_fanout_tune.sh
+   ./scripts/run_xsim_batch.sh tb_pfb_channelizer tb_spec_udp_cmac512 tb_time_udp_cmac512 tb_t510_fengine_top_smoke tb_tx_route_selector tb_feng_ctrl_axi
    ```
-3. 板端复测先用现有 overlay：
+2. Vivado 生产 bitstream 复现：
+   - 运行 `scripts/stage27h_time_spec_100mhz_fft_fullrate_bit_export_batch.tcl`，重新跑 `synth_1 -> impl_1 -> write_bitstream/export`。
+   - 最终要求 route complete、timing met、0 errors；CMAC evaluation/license critical warning 按用户要求记录但不阻塞。
+
+3. 发布到 PYNQ：
    ```bash
+   PYNQ_TARGET=xilinx@192.168.100.117 scripts/pynq_publish_stage27h.sh
+   ```
+
+4. 板端生产矩阵复现：
+   ```bash
+   ssh xilinx@192.168.100.117
    cd /home/xilinx/t510_fengine_bringup
    source /etc/profile.d/xrt_setup.sh
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_adc0_dac0_loopback_check.py --mask 0x1 --seconds 0.5
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_fengine_debug_capture.py --mask 0x1 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_spec_dry_run_check.py --mask 0x1 --seconds 0.5 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_jupyter_instrument_smoke.py --mask 0x1 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_8lane_instrument_check.py --channels 8 --samples 512 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_pfb_channel_window_check.py --chan0 0 --chan-count 64 --time-count 4 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_qsfp_udp_preflight_check.py --force-dry-run --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_dac_adc_coherent_check.py --center-mhz 1500 --bw-mhz 100 --tone-mhz 20 --samples 1024 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_rf_instrument_v2_check.py --center-mhz 1500 --bw-mhz 100 --tone-start-mhz 10 --tone-stop-mhz 30 --phase-step-deg 45 --samples 512 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_astronomer_rf_console_check.py --signal-mhz 200 --center-mhz 180 --bw-mhz 100 --phase-step-deg 45 --time-window-us 0.25 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_astronomer_rf_console_check.py --stage11-scope-check --center-mhz 100 --signals-mhz 60,100,130 --bw-mhz 100 --time-window-us 0.25 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_astronomer_rf_console_check.py --stage12-stability-check --signal-mhz 100 --center-mhz 100 --bw-mhz 100 --frames 60 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_phase_provenance_audit.py --mode readback_consistency --frames 100 --samples 512 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_phase_provenance_audit.py --mode repeated_preview --seconds 180 --signal-mhz 100 --center-mhz 100 --bw-mhz 100 --samples 512 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_phase_provenance_audit.py --mode sample0_aligned_preview --signal-mhz 100 --center-mhz 100 --bw-mhz 100 --samples 512 --seconds 60 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_hardware_phase_audit.py --signal-mhz 100 --center-mhz 100 --bw-mhz 100 --samples 512 --seconds 60 --event-threshold 28000 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_rfdc_udp_coherence_audit.py --center-mhz 100 --signals-mhz 119.2,130.24,130,100 --modes spec,time --samples 512 --frames 120 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_lmk_rfdc_mts_recovery_check.py --dump-lmk --dump-rfdc-api --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_lmk_rfdc_mts_recovery_check.py --probe-mts --adc-tiles 0x1 --dac-tiles 0x1 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage19_phase_root_cause_check.py --signals-mhz 119.2,130.24,130.0 --dac-source-modes constant_phasor,single_tone --modes time,spec --frames 240 --mts-adc-tiles 0x1 --mts-dac-tiles 0x1 --strict-phase-pp-deg 3 --strict-amplitude-pp-percent 5 --dac-strict-phase-pp-deg 0.5 --dac-strict-amplitude-pp-percent 1.0 --timeout 2.0
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage20_sync_diagnostic.py --configure-external --timeout 3.0 --output reports/stage20_external_10mhz_pps_sync.json
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage20_8lane_external_sync_check.py --center-mhz 200 --signal-mhz 200 --bw-mhz 100 --phases-deg 0,45,90,135,180,-135,-90,-45 --frames 240 --samples 512 --timeout 3.0 --output reports/stage20_8lane_external_sync_200mhz.json
-   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage21_qsfp_link_pcap_check.py --seconds 2.0 --output reports/stage21_qsfp_preflight.json
+   printf "%s\n" "xilinx" | sudo -S -p "" -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27h_time_spec_fft_fullrate.py --matrix converge
    ```
-4. 重新发布 Jupyter instrument：
+
+5. 主机接收与 Web/Jupyter：
    ```bash
-   PYNQ_TARGET=xilinx@192.168.100.117 \
-   PYNQ_JUPYTER_DIR=/home/xilinx/jupyter_notebooks/t510_fengine \
-   scripts/pynq_publish_jupyter_instrument.sh
+   sudo scripts/host_stage27h_rx_fanout_tune.sh ens2f0np0
+   sudo rust/t510_time_rx/target/release/t510_time_rx --backend fanout --interface ens2f0np0 --dst-port-base 4300 --src-port-base 4000 --flow-count 24 --time-flow-count 8 --spec-flow-count 16 --spec-layout 27h --fanout-mode port --fanout-group 0x278 --web 0.0.0.0:8089 --initial-bandwidth-mhz 100
+   scripts/host_stage27h_rust_rx_validate.py --seconds 10
    ```
-5. 管理网 MAC 固定建议在板端执行一次，默认只写 ifupdown 配置、不打断当前 SSH/Jupyter：
-   ```bash
-   cd /home/xilinx/t510_fengine_bringup
-   sudo scripts/pynq_fix_management_mac.sh
-   ```
-   当前板端已应用该配置，`eth0` live MAC 为 `02:51:10:23:dc:28`，DHCP 地址为 `192.168.100.117`。
+   Jupyter 生产入口只推荐 `t510_fengine/notebooks/15_stage27h_time_spec_fft_fullrate_control.ipynb`，用于控制 TIME/SPEC、接收端 IP/端口/MAC、带宽/中心频率、8 路 DAC-ADC 环回、DAC 频率/相位，并查看 RF 还原波形和 FFT-only 生产频谱。
+
+6. 下一步建议：
+   - 先完成 27h Vivado export、PYNQ board gate 和 host 24-flow gate，并把 board/host JSON 以时间戳归档。
+   - 做 10 分钟、1 小时、过夜三档 `TIME_SPEC 100MHz` full-rate soak。
+   - 在 FFT-only 速率闭合后，再决定是否恢复科学级 PFB 幅相/功率标定和下游交换机/DGX/X-engine 接收验证。
 
 ## AI 接续提示
 
 - 不要从 `reports/arch/*.html` 推断执行进度；执行状态以 `reports/stages/*.md` 为准。
-- 不要把 SSH 密码写入报告、脚本或 notebook。
+- 板端 sudo 密码约定为与登录用户名相同；仍通过 stdin 传入，不要把实际密码硬编码进脚本或 notebook。
 - 板上 Stage 23 `core_version` 应为 `0x00010012`；如果仍读到 `0x00010011`，说明还在 Stage 22 overlay，不能跑 Stage 23 live science 验收。
 - 无 QSFP 时 `UDP_DRY_RUN=1` 且 `QSFP_LINK_UP=0` 是预期状态，不代表失败。
 - Stage 12 稳定 Jupyter 入口仍是 `13_astronomer_rf_observation_console.ipynb`；Stage 9 的 `12_rf_instrument_console_v2.ipynb` 和 Stage 8 的 `11_dac_adc_coherent_scope_spectrum.ipynb` 只作为验收记录保留。
@@ -141,6 +151,9 @@
 - Stage 23 后 RFDC science bus 截断问题已修：`RFDC_SCIENCE_BUS_TRUNCATED_TO_LOW16` 对新 bit 应为 0。仍不得声明 QSFP live science 通过；只要 `SPEC_SCIENCE_BLOCKED_PFB_SCAFFOLD`、`CMAC_LIVE_BLOCKED_NO_GT_DATAPATH` 或 `WIDE_512B_TX_PATH_NOT_IMPLEMENTED` 任一存在，live science 必须 BLOCK。
 - Stage 24b 结论：`0x00010013` bit 已上板，但 QSFP0/CMAC heartbeat 没通过。板端 `module/refclk/GT/reset/tx_ready` 都好，失败点是 `local_fault=1`、`link_up=0`、主机 `ens2f0np0 NO-CARRIER`、accepted counters 为 0。当前线缆为 Mellanox `MCP1600-E002` 2m passive copper DAC，声明支持 `100GBASE-CR4`；CMAC IP 配置无 RS-FEC、无 Auto-Neg/Link-Training。下一步优先做 CMAC AN/LT/FEC 匹配变体，不要跑 pcap 假装通过。
 - Stage 24c 结论：`0x00010014` AN/LT 变体 A' 已 route clean/timing pass，但 `write_bitstream` 被 `cmac_an_lt@2020.05 design_linking` 拦截。当前不要同步 `overlay/t510_fengine.bit` 到板上当作 24c，也不要继续跑 host pcap。拿到 bitstream-capable `cmac_an_lt` license 后，必须 reset/regenerate CMAC IP output products，重跑 OOC、top synth/impl/bitstream/export，再上板。
+- Stage 24d 结论：`0x0001001A` no-AN/no-LT + RS-FEC CMAC 配置已通过 QSFP0 heartbeat 和主机 `ens2f0np0` pcap。Stage 24d 只证明 CMAC/QSFP/heartbeat 数据面，不证明 TIME/SPEC science。
+- Stage 25 当前结论：`0x0001001B` 低速 `20MHz TIME_ONLY` live TIME CMAC/pcap 闭环已通过，板端为 `STAGE25_TIME_LOW_RATE_LIVE_PASS`，主机为 `HOST_PCAP_STAGE25_TIME_PASS`。这只证明低速 TIME live pcap，不证明 SPEC/PFB、20/100/200MHz full science、交换机/DGX/X-engine 或长稳。
+- Stage 26b/27 当前结论：`0x0001001D` 已完成 PL 侧 `time_udp_cmac512` 输出寄存化和 `time_axis512_ddr_ring` 缓冲雏形，本地 XSim/Python/Rust 回归通过；Vivado route clean、timing met、bitstream/export 完成，PYNQ 文件同步完成。`txoutclk_out[0]` 最薄 setup slack 为 `0.000 ns`，后续优化仍需关注 CMAC token checksum 和 DDR address 路径。DDR disabled direct path 的 `20/100/200MHz TIME_ONLY` 板端 counters/gates 为 `STAGE26_TIME_FULL_RATE_PASS`；重启后已修复 `rfdc_active_mask` 与 TIME route mask 不一致导致的 route miss，并增加 TX gate 短窗口采样避免高速切换瞬态误报。Rust/HTML smoke 已证明动态 selected/detected bandwidth 和 8 路 waveform 显示语义，但高档位无损接收仍未过。DDR enabled path 触发板端管理网失联，分类 `BLOCK_STAGE26B27_DDR_ENABLE_BOARD_UNREACHABLE`。下一步先优化 host receiver/pcap 无损验收；DDR 需先修 address map / AXI timeout / DDR carveout 并做隔离 smoke，再接回 TIME path。
 - Stage 10 已知未标定项：200 MHz 单音在 180/200/220 MHz 观测中心下 RF peak residual 约 `0.55-0.65 MHz`；后续应做 RF observation calibration，不要误判为 Jupyter 语义错误。
 - Stage 9 live loop 只做 fast preview capture、FFT、Plotly trace update 和轻量 status read；硬件重配必须通过 Apply RF/init 触发。
 - ADC BW 在 Stage 9 是显示/分析窗口，不是 RFDC decimation 动态切换。
