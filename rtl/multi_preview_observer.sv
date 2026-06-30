@@ -1,7 +1,8 @@
 module multi_preview_observer #(
     parameter integer NINPUT = 8,
     parameter integer NSAMP  = 1024,
-    parameter integer ADDR_W = 10
+    parameter integer ADDR_W = 10,
+    parameter bit     PRODUCTION_27H = 1'b0
 ) (
     input  wire                         clk,
     input  wire                         rst_n,
@@ -100,9 +101,10 @@ module multi_preview_observer #(
     logic [63:0] internal_sample0;
     logic [31:0] internal_phase;
 
-    wire [1:0] selected_source = (audit_source_data == SRC_RAMP) ? SRC_RAMP :
-                                  (audit_source_data == SRC_DDS)  ? SRC_DDS  : SRC_RFDC;
-    wire        synthetic_valid = streaming;
+    wire [1:0] selected_source = PRODUCTION_27H ? SRC_RFDC :
+                                  ((audit_source_data == SRC_RAMP) ? SRC_RAMP :
+                                   (audit_source_data == SRC_DDS)  ? SRC_DDS  : SRC_RFDC);
+    wire        synthetic_valid = !PRODUCTION_27H && streaming;
     wire [63:0] synthetic_sample0 = internal_sample0;
 
     wire [255:0] dds_tdata0;
@@ -285,23 +287,23 @@ module multi_preview_observer #(
         end
     endfunction
 
-    assign dds_tdata0 = make_dds_bus(internal_phase, 0);
-    assign dds_tdata1 = make_dds_bus(internal_phase, 1);
-    assign dds_tdata2 = make_dds_bus(internal_phase, 2);
-    assign dds_tdata3 = make_dds_bus(internal_phase, 3);
-    assign ramp_tdata0 = make_ramp_bus(synthetic_sample0, 0);
-    assign ramp_tdata1 = make_ramp_bus(synthetic_sample0, 1);
-    assign ramp_tdata2 = make_ramp_bus(synthetic_sample0, 2);
-    assign ramp_tdata3 = make_ramp_bus(synthetic_sample0, 3);
+    assign dds_tdata0 = PRODUCTION_27H ? 256'd0 : make_dds_bus(internal_phase, 0);
+    assign dds_tdata1 = PRODUCTION_27H ? 256'd0 : make_dds_bus(internal_phase, 1);
+    assign dds_tdata2 = PRODUCTION_27H ? 256'd0 : make_dds_bus(internal_phase, 2);
+    assign dds_tdata3 = PRODUCTION_27H ? 256'd0 : make_dds_bus(internal_phase, 3);
+    assign ramp_tdata0 = PRODUCTION_27H ? 256'd0 : make_ramp_bus(synthetic_sample0, 0);
+    assign ramp_tdata1 = PRODUCTION_27H ? 256'd0 : make_ramp_bus(synthetic_sample0, 1);
+    assign ramp_tdata2 = PRODUCTION_27H ? 256'd0 : make_ramp_bus(synthetic_sample0, 2);
+    assign ramp_tdata3 = PRODUCTION_27H ? 256'd0 : make_ramp_bus(synthetic_sample0, 3);
 
-    wire [31:0] event_word0 = complex_pair(source_tdata0, 0);
-    wire [31:0] event_word1 = complex_pair(source_tdata1, 0);
-    wire [31:0] event_word2 = complex_pair(source_tdata2, 0);
-    wire [31:0] event_word3 = complex_pair(source_tdata3, 0);
-    wire [16:0] event_abs0 = max_abs_word(event_word0);
-    wire [16:0] event_abs1 = max_abs_word(event_word1);
-    wire [16:0] event_abs2 = max_abs_word(event_word2);
-    wire [16:0] event_abs3 = max_abs_word(event_word3);
+    wire [31:0] event_word0 = PRODUCTION_27H ? 32'd0 : complex_pair(source_tdata0, 0);
+    wire [31:0] event_word1 = PRODUCTION_27H ? 32'd0 : complex_pair(source_tdata1, 0);
+    wire [31:0] event_word2 = PRODUCTION_27H ? 32'd0 : complex_pair(source_tdata2, 0);
+    wire [31:0] event_word3 = PRODUCTION_27H ? 32'd0 : complex_pair(source_tdata3, 0);
+    wire [16:0] event_abs0 = PRODUCTION_27H ? 17'd0 : max_abs_word(event_word0);
+    wire [16:0] event_abs1 = PRODUCTION_27H ? 17'd0 : max_abs_word(event_word1);
+    wire [16:0] event_abs2 = PRODUCTION_27H ? 17'd0 : max_abs_word(event_word2);
+    wire [16:0] event_abs3 = PRODUCTION_27H ? 17'd0 : max_abs_word(event_word3);
     wire [16:0] event_max01 = (event_abs0 >= event_abs1) ? event_abs0 : event_abs1;
     wire [16:0] event_max23 = (event_abs2 >= event_abs3) ? event_abs2 : event_abs3;
     wire [16:0] event_max_abs = (event_max01 >= event_max23) ? event_max01 : event_max23;
@@ -309,7 +311,7 @@ module multi_preview_observer #(
         (event_abs0 >= event_abs1 && event_abs0 >= event_abs2 && event_abs0 >= event_abs3) ? 2'd0 :
         (event_abs1 >= event_abs2 && event_abs1 >= event_abs3) ? 2'd1 :
         (event_abs2 >= event_abs3) ? 2'd2 : 2'd3;
-    wire audit_trigger_hit = audit_event_enable_data && streaming && source_tvalid &&
+    wire audit_trigger_hit = !PRODUCTION_27H && audit_event_enable_data && streaming && source_tvalid &&
                              (event_max_abs >= {1'b0, audit_threshold_data}) &&
                              (audit_threshold_data != 16'd0);
 
@@ -378,6 +380,7 @@ module multi_preview_observer #(
             ctrl_event_rfdc_flags <= 32'd0;
             event_dac_phase_epoch_meta <= 32'd0;
             ctrl_event_dac_phase_epoch <= 32'd0;
+            ctrl_event_rd_data <= 32'd0;
         end else begin
             if (ctrl_capture_start_pulse) begin
                 ctrl_start_toggle <= ~ctrl_start_toggle;
@@ -401,38 +404,75 @@ module multi_preview_observer #(
             sample0_ctrl_meta <= sample0_data;
             ctrl_sample0 <= sample0_ctrl_meta;
 
-            audit_status_meta <= audit_status_data;
-            ctrl_audit_status <= audit_status_meta;
-            audit_start_count_meta <= audit_start_count_data;
-            ctrl_audit_start_count <= audit_start_count_meta;
-            audit_first_count_meta <= audit_first_count_data;
-            ctrl_audit_first_count <= audit_first_count_meta;
-            audit_done_count_meta <= audit_done_count_data;
-            ctrl_audit_done_count <= audit_done_count_meta;
-            audit_start_sample0_meta <= audit_start_sample0_data;
-            ctrl_audit_start_sample0 <= audit_start_sample0_meta;
-            audit_first_sample0_meta <= audit_first_sample0_data;
-            ctrl_audit_first_sample0 <= audit_first_sample0_meta;
-            audit_done_sample0_meta <= audit_done_sample0_data;
-            ctrl_audit_done_sample0 <= audit_done_sample0_meta;
-            audit_start_to_first_latency_meta <= audit_start_to_first_latency_data;
-            ctrl_audit_start_to_first_latency <= audit_start_to_first_latency_meta;
-            audit_capture_beats_meta <= audit_capture_beats_data;
-            ctrl_audit_capture_beats <= audit_capture_beats_meta;
-            audit_valid_gap_count_meta <= audit_valid_gap_count_data;
-            ctrl_audit_valid_gap_count <= audit_valid_gap_count_meta;
-            audit_sample0_error_count_meta <= audit_sample0_error_count_data;
-            ctrl_audit_sample0_error_count <= audit_sample0_error_count_meta;
-            event_sample0_meta <= event_sample0_data;
-            ctrl_event_sample0 <= event_sample0_meta;
-            event_max_code_meta <= event_max_code_data;
-            ctrl_event_max_code <= event_max_code_meta;
-            event_info_meta <= event_info_data;
-            ctrl_event_info <= event_info_meta;
-            event_rfdc_flags_meta <= event_rfdc_flags_data;
-            ctrl_event_rfdc_flags <= event_rfdc_flags_meta;
-            event_dac_phase_epoch_meta <= event_dac_phase_epoch_data;
-            ctrl_event_dac_phase_epoch <= event_dac_phase_epoch_meta;
+            if (PRODUCTION_27H) begin
+                audit_status_meta <= 32'd0;
+                ctrl_audit_status <= 32'd0;
+                audit_start_count_meta <= 32'd0;
+                ctrl_audit_start_count <= 32'd0;
+                audit_first_count_meta <= 32'd0;
+                ctrl_audit_first_count <= 32'd0;
+                audit_done_count_meta <= 32'd0;
+                ctrl_audit_done_count <= 32'd0;
+                audit_start_sample0_meta <= 64'd0;
+                ctrl_audit_start_sample0 <= 64'd0;
+                audit_first_sample0_meta <= 64'd0;
+                ctrl_audit_first_sample0 <= 64'd0;
+                audit_done_sample0_meta <= 64'd0;
+                ctrl_audit_done_sample0 <= 64'd0;
+                audit_start_to_first_latency_meta <= 32'd0;
+                ctrl_audit_start_to_first_latency <= 32'd0;
+                audit_capture_beats_meta <= 32'd0;
+                ctrl_audit_capture_beats <= 32'd0;
+                audit_valid_gap_count_meta <= 32'd0;
+                ctrl_audit_valid_gap_count <= 32'd0;
+                audit_sample0_error_count_meta <= 32'd0;
+                ctrl_audit_sample0_error_count <= 32'd0;
+                event_sample0_meta <= 64'd0;
+                ctrl_event_sample0 <= 64'd0;
+                event_max_code_meta <= 32'd0;
+                ctrl_event_max_code <= 32'd0;
+                event_info_meta <= 32'd0;
+                ctrl_event_info <= 32'd0;
+                event_rfdc_flags_meta <= 32'd0;
+                ctrl_event_rfdc_flags <= 32'd0;
+                event_dac_phase_epoch_meta <= 32'd0;
+                ctrl_event_dac_phase_epoch <= 32'd0;
+                ctrl_event_rd_data <= 32'd0;
+            end else begin
+                audit_status_meta <= audit_status_data;
+                ctrl_audit_status <= audit_status_meta;
+                audit_start_count_meta <= audit_start_count_data;
+                ctrl_audit_start_count <= audit_start_count_meta;
+                audit_first_count_meta <= audit_first_count_data;
+                ctrl_audit_first_count <= audit_first_count_meta;
+                audit_done_count_meta <= audit_done_count_data;
+                ctrl_audit_done_count <= audit_done_count_meta;
+                audit_start_sample0_meta <= audit_start_sample0_data;
+                ctrl_audit_start_sample0 <= audit_start_sample0_meta;
+                audit_first_sample0_meta <= audit_first_sample0_data;
+                ctrl_audit_first_sample0 <= audit_first_sample0_meta;
+                audit_done_sample0_meta <= audit_done_sample0_data;
+                ctrl_audit_done_sample0 <= audit_done_sample0_meta;
+                audit_start_to_first_latency_meta <= audit_start_to_first_latency_data;
+                ctrl_audit_start_to_first_latency <= audit_start_to_first_latency_meta;
+                audit_capture_beats_meta <= audit_capture_beats_data;
+                ctrl_audit_capture_beats <= audit_capture_beats_meta;
+                audit_valid_gap_count_meta <= audit_valid_gap_count_data;
+                ctrl_audit_valid_gap_count <= audit_valid_gap_count_meta;
+                audit_sample0_error_count_meta <= audit_sample0_error_count_data;
+                ctrl_audit_sample0_error_count <= audit_sample0_error_count_meta;
+                event_sample0_meta <= event_sample0_data;
+                ctrl_event_sample0 <= event_sample0_meta;
+                event_max_code_meta <= event_max_code_data;
+                ctrl_event_max_code <= event_max_code_meta;
+                event_info_meta <= event_info_data;
+                ctrl_event_info <= event_info_meta;
+                event_rfdc_flags_meta <= event_rfdc_flags_data;
+                ctrl_event_rfdc_flags <= event_rfdc_flags_meta;
+                event_dac_phase_epoch_meta <= event_dac_phase_epoch_data;
+                ctrl_event_dac_phase_epoch <= event_dac_phase_epoch_meta;
+                ctrl_event_rd_data <= event_buffer[ctrl_event_rd_addr];
+            end
         end
     end
 
@@ -492,7 +532,6 @@ module multi_preview_observer #(
         if (ctrl_rd_input < NINPUT) begin
             ctrl_rd_data = preview_rd_data_bus[preview_rd_lane][ctrl_rd_input*32 +: 32];
         end
-        ctrl_event_rd_data = event_buffer[ctrl_event_rd_addr];
     end
 
     integer event_init_idx;
@@ -560,25 +599,38 @@ module multi_preview_observer #(
             start_toggle_seen <= start_toggle_sync[2];
             clear_toggle_seen <= clear_toggle_sync[2];
             audit_clear_toggle_seen <= audit_clear_toggle_sync[2];
-            audit_source_meta <= audit_source_select;
-            audit_source_data <= audit_source_meta;
-            audit_event_enable_meta <= audit_event_enable;
-            audit_event_enable_data <= audit_event_enable_meta;
-            audit_freeze_meta <= audit_freeze_on_event;
-            audit_freeze_data <= audit_freeze_meta;
-            audit_threshold_meta <= audit_event_threshold;
-            audit_threshold_data <= audit_threshold_meta;
-            dac_phase_epoch_meta <= dac_phase_epoch_ctrl;
-            dac_phase_epoch_data <= dac_phase_epoch_meta;
+            if (PRODUCTION_27H) begin
+                audit_source_meta <= SRC_RFDC;
+                audit_source_data <= SRC_RFDC;
+                audit_event_enable_meta <= 1'b0;
+                audit_event_enable_data <= 1'b0;
+                audit_freeze_meta <= 1'b1;
+                audit_freeze_data <= 1'b1;
+                audit_threshold_meta <= 16'd0;
+                audit_threshold_data <= 16'd0;
+                dac_phase_epoch_meta <= 32'd0;
+                dac_phase_epoch_data <= 32'd0;
+            end else begin
+                audit_source_meta <= audit_source_select;
+                audit_source_data <= audit_source_meta;
+                audit_event_enable_meta <= audit_event_enable;
+                audit_event_enable_data <= audit_event_enable_meta;
+                audit_freeze_meta <= audit_freeze_on_event;
+                audit_freeze_data <= audit_freeze_meta;
+                audit_threshold_meta <= audit_event_threshold;
+                audit_threshold_data <= audit_threshold_meta;
+                dac_phase_epoch_meta <= dac_phase_epoch_ctrl;
+                dac_phase_epoch_data <= dac_phase_epoch_meta;
+            end
 
-            if (streaming) begin
+            if (!PRODUCTION_27H && streaming) begin
                 internal_sample0 <= internal_sample0 + 64'd4;
                 // Four full-rate samples are packed into each AXIS beat, so
                 // the next beat must advance by four DDS sample steps.
                 internal_phase <= internal_phase + 32'h4000_0000;
             end
 
-            if (audit_clear_event) begin
+            if (!PRODUCTION_27H && audit_clear_event) begin
                 audit_event_valid_data <= 1'b0;
                 audit_event_active_data <= 1'b0;
                 audit_event_overflow_data <= 1'b0;
@@ -596,7 +648,7 @@ module multi_preview_observer #(
                 capture_count_data <= 32'd0;
             end
 
-            if (audit_event_active_data && streaming && source_tvalid) begin
+            if (!PRODUCTION_27H && audit_event_active_data && streaming && source_tvalid) begin
                 event_buffer[event_wr_index] <= event_word0;
                 event_buffer[event_wr_index + 8'd1] <= event_word1;
                 event_buffer[event_wr_index + 8'd2] <= event_word2;
@@ -607,7 +659,7 @@ module multi_preview_observer #(
                 end else begin
                     event_wr_index <= event_wr_index + 8'd4;
                 end
-            end else if (audit_trigger_hit) begin
+            end else if (!PRODUCTION_27H && audit_trigger_hit) begin
                 if (audit_event_valid_data && audit_freeze_data) begin
                     audit_event_overflow_data <= 1'b1;
                 end else begin
@@ -638,10 +690,12 @@ module multi_preview_observer #(
                         done_data <= 1'b0;
                         error_data <= 1'b0;
                         busy_data <= 1'b1;
-                        audit_start_count_data <= audit_start_count_data + 32'd1;
-                        audit_start_sample0_data <= source_sample0;
-                        audit_latency_counter <= 32'd0;
-                        audit_capture_beats_data <= 32'd0;
+                        if (!PRODUCTION_27H) begin
+                            audit_start_count_data <= audit_start_count_data + 32'd1;
+                            audit_start_sample0_data <= source_sample0;
+                            audit_latency_counter <= 32'd0;
+                            audit_capture_beats_data <= 32'd0;
+                        end
                         audit_have_last_sample0 <= 1'b0;
                         audit_first_seen <= 1'b0;
                         state <= ST_RUN;
@@ -649,20 +703,24 @@ module multi_preview_observer #(
                 end
 
                 ST_RUN: begin
-                    audit_latency_counter <= audit_latency_counter + 32'd1;
-                    if (streaming && !source_tvalid) begin
+                    if (!PRODUCTION_27H) begin
+                        audit_latency_counter <= audit_latency_counter + 32'd1;
+                    end
+                    if (!PRODUCTION_27H && streaming && !source_tvalid) begin
                         audit_valid_gap_seen_data <= 1'b1;
                         audit_valid_gap_count_data <= audit_valid_gap_count_data + 32'd1;
                     end
                     if (preview_write_fire) begin
                         if (!audit_first_seen) begin
                             audit_first_seen <= 1'b1;
-                            audit_first_count_data <= audit_first_count_data + 32'd1;
-                            audit_first_sample0_data <= source_sample0;
-                            audit_start_to_first_latency_data <= audit_latency_counter;
+                            if (!PRODUCTION_27H) begin
+                                audit_first_count_data <= audit_first_count_data + 32'd1;
+                                audit_first_sample0_data <= source_sample0;
+                                audit_start_to_first_latency_data <= audit_latency_counter;
+                            end
                             sample0_data <= source_sample0;
                         end
-                        if (audit_have_last_sample0) begin
+                        if (!PRODUCTION_27H && audit_have_last_sample0) begin
                             if (source_sample0 <= audit_last_sample0) begin
                                 audit_sample0_nonmonotonic_data <= 1'b1;
                             end
@@ -673,13 +731,17 @@ module multi_preview_observer #(
                         end
                         audit_last_sample0 <= source_sample0;
                         audit_have_last_sample0 <= 1'b1;
-                        audit_capture_beats_data <= audit_capture_beats_data + 32'd1;
+                        if (!PRODUCTION_27H) begin
+                            audit_capture_beats_data <= audit_capture_beats_data + 32'd1;
+                        end
                         capture_count_data <= {21'd0, sample_index} + 32'd4;
                         if (sample_index >= NSAMP-4) begin
                             busy_data <= 1'b0;
                             done_data <= 1'b1;
-                            audit_done_count_data <= audit_done_count_data + 32'd1;
-                            audit_done_sample0_data <= source_sample0;
+                            if (!PRODUCTION_27H) begin
+                                audit_done_count_data <= audit_done_count_data + 32'd1;
+                                audit_done_sample0_data <= source_sample0;
+                            end
                             sample_index <= {ADDR_W+1{1'b0}};
                             state <= ST_IDLE;
                         end else begin

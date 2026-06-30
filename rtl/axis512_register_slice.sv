@@ -41,7 +41,6 @@ module axis512_register_slice #(
 
             always_ff @(posedge clk) begin
                 if (!rst_n || clear) begin
-                    out_reg <= {FIFO_W{1'b0}};
                     out_valid <= 1'b0;
                 end else if (out_ready) begin
                     if (s_axis_tvalid) begin
@@ -97,11 +96,6 @@ module axis512_register_slice #(
                     wr_ptr <= {PTR_W{1'b0}};
                     rd_ptr <= {PTR_W{1'b0}};
                     count <= {COUNT_W{1'b0}};
-                    for (i = 0; i < DEPTH; i = i + 1) begin
-                        slot_data[i] <= {DATA_W{1'b0}};
-                        slot_keep[i] <= {KEEP_W{1'b0}};
-                        slot_last[i] <= 1'b0;
-                    end
                 end else begin
                     if (wr_fire) begin
                         wr_ptr <= ptr_next(wr_ptr);

@@ -51,7 +51,7 @@ const BPF_JEQ: u16 = 0x10;
 const BPF_JGT: u16 = 0x20;
 const BPF_JGE: u16 = 0x30;
 const BPF_SUB: u16 = 0x10;
-const BPF_AND: u16 = 0x50;
+const BPF_MOD: u16 = 0x90;
 const MIB: usize = 1024 * 1024;
 const DEFAULT_TIME_COUNT: u16 = 64;
 const DEFAULT_FRAME_SIZE: usize = 16 * 1024;
@@ -946,6 +946,7 @@ struct MmapPacketSocket {
 struct PacketFanoutConfig {
     group: u16,
     mode: FanoutMode,
+    worker_count: usize,
 }
 
 impl MmapPacketSocket {
@@ -1041,7 +1042,7 @@ impl MmapPacketSocket {
                 return Err(err);
             }
             if config.mode == FanoutMode::Port {
-                if let Err(err) = set_packet_fanout_port_bpf(fd, dst_port_base, flow_count) {
+                if let Err(err) = set_packet_fanout_port_bpf(fd, dst_port_base, config.worker_count) {
                     unsafe {
                         libc::munmap(mmap_ptr, options.ring_bytes);
                         libc::close(fd);
@@ -1357,25 +1358,19 @@ fn set_packet_fanout(fd: RawFd, config: PacketFanoutConfig) -> std::io::Result<(
 }
 
 fn bpf_fanout_by_dst_port(dst_port_base: u16, worker_count: usize) -> [libc::sock_filter; 4] {
-    let mask = worker_count.clamp(1, MAX_WORKER_COUNT_27H).next_power_of_two().saturating_sub(1);
+    let worker_count = worker_count.clamp(1, MAX_WORKER_COUNT_27H) as u32;
     [
         // PACKET_FANOUT_DATA CBPF runs with skb data at the network header.
         // For IPv4 without options, UDP dst port is IP header offset 20 + 2.
         bpf_stmt(BPF_LD | BPF_H | BPF_ABS, 22),
         bpf_stmt(BPF_ALU | BPF_SUB | BPF_K, dst_port_base as u32),
-        bpf_stmt(BPF_ALU | BPF_AND | BPF_K, mask as u32),
+        bpf_stmt(BPF_ALU | BPF_MOD | BPF_K, worker_count),
         bpf_stmt(BPF_RET | BPF_A, 0),
     ]
 }
 
 fn set_packet_fanout_port_bpf(fd: RawFd, dst_port_base: u16, worker_count: usize) -> std::io::Result<()> {
     let worker_count = worker_count.clamp(1, MAX_WORKER_COUNT_27H);
-    if !worker_count.is_power_of_two() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "fanout port mode requires worker_count to be a power of two",
-        ));
-    }
     let mut filter = bpf_fanout_by_dst_port(dst_port_base, worker_count);
     let mut prog = libc::sock_fprog {
         len: filter.len() as u16,
@@ -2567,7 +2562,7 @@ impl FanoutWorkerRuntime {
             self.stats.detected_bandwidth_mhz = per_flow_detected_consensus(&self.per_flow);
         }
 
-        let display_enabled = self.waveform_websocket_clients > 0 && !self.config.paused && self.is_display_owner();
+        let display_enabled = !self.config.paused && self.is_display_owner();
         if display_enabled && self.last_waveform.elapsed() >= self.waveform_interval && !self.display_capture.active {
             self.display_capture.arm();
         }
@@ -2622,7 +2617,7 @@ impl FanoutWorkerRuntime {
             false
         };
 
-        let display_enabled = self.spectrum_websocket_clients > 0 && !self.config.paused;
+        let display_enabled = !self.config.paused;
         if display_enabled && self.last_spectrum.elapsed() >= self.spectrum_interval {
             match t510_time_rx::decode_spectrum_snapshot(udp_payload, &header, src_port, dst_port, gap_before) {
                 Ok(block) => {
@@ -3093,6 +3088,7 @@ fn run_fanout_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::
     let fanout = PacketFanoutConfig {
         group: args.fanout_group,
         mode: args.fanout_mode,
+        worker_count,
     };
     for worker_id in 0..worker_count {
         let worker = FanoutWorkerConfig {
@@ -3690,26 +3686,28 @@ mod tests {
         let config = PacketFanoutConfig {
             group: 0x027d,
             mode: FanoutMode::Hash,
+            worker_count: DEFAULT_FLOW_COUNT_27H,
         };
         assert_eq!(packet_fanout_arg(config), 0x027d);
 
         let port_config = PacketFanoutConfig {
             group: 0x027d,
             mode: FanoutMode::Port,
+            worker_count: DEFAULT_FLOW_COUNT_27H,
         };
         assert_eq!(packet_fanout_arg(port_config), 0x0006_027d);
     }
 
     #[test]
     fn port_fanout_bpf_maps_udp_dst_port_to_worker_index() {
-        let filter = bpf_fanout_by_dst_port(4300, 8);
+        let filter = bpf_fanout_by_dst_port(4300, DEFAULT_FLOW_COUNT_27H);
         assert_eq!(filter.len(), 4);
         assert_eq!(filter[0].code, BPF_LD | BPF_H | BPF_ABS);
         assert_eq!(filter[0].k, 22);
         assert_eq!(filter[1].code, BPF_ALU | BPF_SUB | BPF_K);
         assert_eq!(filter[1].k, 4300);
-        assert_eq!(filter[2].code, BPF_ALU | BPF_AND | BPF_K);
-        assert_eq!(filter[2].k, 7);
+        assert_eq!(filter[2].code, BPF_ALU | BPF_MOD | BPF_K);
+        assert_eq!(filter[2].k, DEFAULT_FLOW_COUNT_27H as u32);
         assert_eq!(filter[3].code, BPF_RET | BPF_A);
     }
 

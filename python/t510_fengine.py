@@ -569,6 +569,7 @@ class T510FEngine:
     TX_SPEC_ROUTE_COUNT = 64
     TX_TIME_ROUTE_COUNT = 8
     FENGINE_DEFAULT_FFT_SHIFT: int = 0x5556
+    FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT: int = 0x0AAB
     STAGE27F_PRODUCTION_SCOPE = {
         "data_streams": "TIME native 512b + SPEC/F-engine FENGINE_IQ16 4096-channel science streams",
         "control_preview": "Jupyter notebook 13_astronomer_rf_observation_console.ipynb",
@@ -3524,7 +3525,7 @@ class T510FEngine:
         spec_time_count: int = 1,
         spec_chan0_stride: int = 256,
         pfb_taps: int = 0,
-        pfb_fft_shift: int = FENGINE_DEFAULT_FFT_SHIFT,
+        pfb_fft_shift: int = FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Configure Stage 27h FFT-only full-rate TIME/SPEC science routing."""
@@ -3567,6 +3568,9 @@ class T510FEngine:
         if start_requested:
             self.start()
             time.sleep(max(settle_s, 0.0))
+        result["science_status"] = self.read_science_output_status()
+        result["tx_status"] = self.read_tx_status()
+        result["channelizer_status"] = self.read_channelizer_status()
         result["stage"] = "27h"
         result["science_product"] = "FENGINE_IQ16_COMPLEX_VOLTAGE_FFT_ONLY"
         result["production_scope"] = dict(self.STAGE27H_PRODUCTION_SCOPE)
@@ -4721,6 +4725,12 @@ class T510FEngine:
         status["pfb_input_fifo_frame_ready"] = (raw >> 6) & 0x1
         status["pfb_data_halt_seen"] = (raw >> 7) & 0x1
         status["pfb_fft_only"] = (raw >> 8) & 0x1
+        status["pfb_xfft_configured"] = (raw >> 9) & 0x1
+        status["pfb_xfft_config_tvalid"] = (raw >> 10) & 0x1
+        status["pfb_xfft_config_tready"] = (raw >> 11) & 0x1
+        status["pfb_fft_shift_status"] = (raw >> 12) & 0xF
+        status["pfb_xfft_config_done_mask"] = (raw >> 16) & 0xFF
+        status["pfb_xfft_config_ready_mask"] = (raw >> 24) & 0xFF
         return status
 
     def start(self) -> None:
@@ -5092,7 +5102,15 @@ class T510FEngine:
         status["pfb_overflow"] = (pfb_status >> 3) & 0x1
         status["pfb_window_active"] = (pfb_status >> 4) & 0x1
         status["pfb_science_valid"] = (pfb_status >> 5) & 0x1
+        status["pfb_input_fifo_frame_ready"] = (pfb_status >> 6) & 0x1
+        status["pfb_data_halt_seen"] = (pfb_status >> 7) & 0x1
+        status["pfb_fft_only"] = (pfb_status >> 8) & 0x1
+        status["pfb_xfft_configured"] = (pfb_status >> 9) & 0x1
+        status["pfb_xfft_config_tvalid"] = (pfb_status >> 10) & 0x1
+        status["pfb_xfft_config_tready"] = (pfb_status >> 11) & 0x1
         status["pfb_fft_shift_status"] = (pfb_status >> 12) & 0xF
+        status["pfb_xfft_config_done_mask"] = (pfb_status >> 16) & 0xFF
+        status["pfb_xfft_config_ready_mask"] = (pfb_status >> 24) & 0xFF
         science_status = status["science_status"]
         science_bw = int(status["science_bandwidth_mode"]) & 0x3
         science_mode = int(status["science_output_mode"]) & 0x7

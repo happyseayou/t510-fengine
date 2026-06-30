@@ -31,6 +31,7 @@ set rtl_files [list \
     [file join $repo_root rtl spectral_packetizer.sv] \
     [file join $repo_root rtl udp_tx_arbiter.sv] \
     [file join $repo_root rtl axis_packet_fifo.sv] \
+    [file join $repo_root rtl axis_sideband_async_fifo.sv] \
     [file join $repo_root rtl tx_route_selector.sv] \
     [file join $repo_root rtl udp_frame_builder.sv] \
     [file join $repo_root rtl axis64_to_cmac512_async.sv] \
@@ -67,8 +68,10 @@ if {$t510_stage27h_production_only} {
         [file join $repo_root rtl tx_route_selector.sv] \
         [file join $repo_root rtl udp_frame_builder.sv] \
         [file join $repo_root rtl axis64_to_cmac512_async.sv] \
+        [file join $repo_root rtl t510_qsfp_test_frame_gen.sv] \
         [file join $repo_root rtl tx_header_capture.sv] \
         [file join $repo_root rtl tx_payload_witness_capture.sv] \
+        [file join $repo_root rtl dac_tx_witness_capture.sv] \
         [file join $repo_root rtl rfdc_axis_raw_witness_capture.sv] \
         [file join $repo_root rtl fft_debug_observer.sv] \
     ]
@@ -153,6 +156,10 @@ foreach fengine_xfft_xci $fengine_xfft_xci_candidates {
     if {[file exists $fengine_xfft_xci] && [llength [get_ips -quiet t510_fengine_xfft_4096]] == 0 && [llength [get_files -quiet $fengine_xfft_xci]] == 0} {
         add_files -norecurse -fileset sources_1 $fengine_xfft_xci
     }
+}
+set fengine_xfft_lane_xci [file join $repo_root demo-ant.srcs sources_1 ip t510_fengine_xfft_4096_lane t510_fengine_xfft_4096_lane.xci]
+if {$t510_stage27h_production_only && [file exists $fengine_xfft_lane_xci] && [llength [get_files -quiet $fengine_xfft_lane_xci]] == 0} {
+    add_files -norecurse -fileset sources_1 $fengine_xfft_lane_xci
 }
 set cmac_xci [file join $repo_root demo-ant.srcs sources_1 ip t510_cmac_usplus_0 t510_cmac_usplus_0.xci]
 if {[file exists $cmac_xci] && [llength [get_files -quiet $cmac_xci]] == 0} {

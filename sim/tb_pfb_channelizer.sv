@@ -12,7 +12,7 @@ module tb_pfb_channelizer;
 
     logic clk = 1'b0;
     logic rst_n = 1'b0;
-    logic enable = 1'b1;
+    logic enable = 1'b0;
     logic clear = 1'b0;
     logic [15:0] cfg_taps = 16'd0;
     logic [15:0] cfg_fft_shift = 16'h5556;
@@ -40,6 +40,7 @@ module tb_pfb_channelizer;
     integer out_count = 0;
     integer out_packet_idx = 0;
     integer out_packet_beat = 0;
+    integer accepted_input_beats = 0;
 
     always #5 clk = ~clk;
 
@@ -118,10 +119,12 @@ module tb_pfb_channelizer;
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             beat_idx <= 0;
+            accepted_input_beats <= 0;
             s_axis_tdata <= make_beat(0);
             s_axis_sample0 <= beat_sample0(0);
         end else if (s_axis_tvalid && s_axis_tready) begin
             beat_idx <= beat_idx + 1;
+            accepted_input_beats <= accepted_input_beats + 1;
             s_axis_tdata <= make_beat(beat_idx + 1);
             s_axis_sample0 <= beat_sample0(beat_idx + 1);
         end
@@ -173,21 +176,59 @@ module tb_pfb_channelizer;
         end
     endtask
 
+    task automatic wait_for_accepted_inputs(input integer expected);
+        integer timeout;
+        begin
+            timeout = 0;
+            while ((accepted_input_beats < expected) && (timeout < 90000)) begin
+                @(posedge clk);
+                timeout = timeout + 1;
+            end
+            `TB_CHECK_EQ(accepted_input_beats, expected, "FFT-only accepted input beat count")
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+            `TB_CHECK(timeout <= (expected * CELLS_PER_BEAT) + 32, "FFT-only production input path accepts one 1024b beat per 4 clocks")
+`endif
+        end
+    endtask
+
     initial begin
         reset_dut();
         repeat (4) @(posedge clk);
 
-        `TB_CHECK(status[0], "PFB enabled status bit")
+        `TB_CHECK(!status[0], "PFB enabled status bit stays low before streaming enable")
         `TB_CHECK(status[1], "PFB config valid status bit")
+        `TB_CHECK(status[8], "FFT-only status bit")
+        `TB_CHECK(status[9], "XFFT config completes while stream enable is low")
+        `TB_CHECK_EQ(status[23:16], 8'hff, "XFFT lane config done mask")
         `TB_CHECK(status[5], "FFT-only science-valid gate reflects configured XFFT backend")
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+`ifndef T510_SIM_FFT_MODEL
+        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.u_fengine_xfft_4096.gen_lane_xfft[0].lane_config_tdata[0], 1'b1, "lane0 XFFT forward config")
+        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.u_fengine_xfft_4096.gen_lane_xfft[0].lane_config_tdata[12:1], cfg_fft_shift[11:0], "lane0 XFFT scaling schedule")
+        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.u_fengine_xfft_4096.gen_lane_xfft[7].lane_config_tdata[0], 1'b1, "lane7 XFFT forward config")
+        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.u_fengine_xfft_4096.gen_lane_xfft[7].lane_config_tdata[12:1], cfg_fft_shift[11:0], "lane7 XFFT scaling schedule")
+`else
         `TB_CHECK_EQ(dut.u_feng_channelizer_4096.xfft_config_tdata[31:8], 24'h555556, "PFB XFFT channel 0 scaling schedule")
         `TB_CHECK_EQ(dut.u_feng_channelizer_4096.xfft_config_tdata[199:176], 24'h555556, "PFB XFFT channel 7 scaling schedule")
+`endif
+`else
+        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.xfft_config_tdata[31:8], 24'h555556, "PFB XFFT channel 0 scaling schedule")
+        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.xfft_config_tdata[199:176], 24'h555556, "PFB XFFT channel 7 scaling schedule")
+`endif
         `TB_CHECK_EQ(packet_chan0, 32'd0, "PFB packet chan0")
         `TB_CHECK_EQ(packet_chan_count, 16'd256, "FFT-only packet channel count")
         `TB_CHECK_EQ(packet_time_count, 16'd1, "FFT-only packet time count")
 
         @(negedge clk);
+        enable = 1'b1;
+        repeat (2) @(posedge clk);
+        `TB_CHECK(status[0], "PFB enabled status bit after streaming enable")
+
+        @(negedge clk);
         s_axis_tvalid = 1'b1;
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+        wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME * OUTPUT_TILES);
+`endif
         wait_for_outputs(OUTPUT_BEATS * OUTPUT_TILES);
         s_axis_tvalid = 1'b0;
         repeat (3) @(posedge clk);
@@ -195,7 +236,11 @@ module tb_pfb_channelizer;
         `TB_CHECK_EQ(frame_count, 32'd2, "FFT-only frame count after two full 4096-bin F-engine tiles")
         `TB_CHECK_EQ(overflow_count, 32'd0, "PFB overflow count")
         `TB_CHECK(peak_chan < 32'd4096, "PFB peak channel stays inside full F-engine band")
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+        `TB_CHECK_EQ(peak_power, 32'd0, "production FFT-only removes high-speed peak scan")
+`else
         `TB_CHECK(peak_power > 32'd0, "PFB peak power rises")
+`endif
 
         @(negedge clk);
         clear = 1'b1;

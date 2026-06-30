@@ -44,10 +44,10 @@ module time_udp_cmac512 #(
     input  wire                         m_clk,
     input  wire                         m_rst_n,
     input  wire                         m_clear,
-    output logic [511:0]                m_axis_tdata,
-    output logic [63:0]                 m_axis_tkeep,
-    output logic                        m_axis_tvalid,
-    output logic                        m_axis_tlast,
+    output wire [511:0]                 m_axis_tdata,
+    output wire [63:0]                  m_axis_tkeep,
+    output wire                         m_axis_tvalid,
+    output wire                         m_axis_tlast,
     input  wire                         m_axis_tready,
 
     output logic [31:0]                 packet_count,
@@ -161,13 +161,16 @@ module time_udp_cmac512 #(
     wire         should_drop_comb = !route_ok_comb && drop_on_route_miss;
 
     wire         fifo_rst = !s_rst_n || !m_rst_n || s_clear || m_clear;
+    (* ASYNC_REG = "TRUE" *) logic [2:0] m_rst_sync;
+    logic [1:0]  m_clear_sync;
+    (* max_fanout = 64 *) logic m_reset;
     wire         data_wr_rst_busy;
     wire         data_rd_rst_busy;
     wire [DATA_COUNT_W-1:0] data_wr_data_count;
     wire [DATA_COUNT_W-1:0] data_rd_data_count;
     wire [DATA_W-1:0] data_fifo_dout;
     logic        data_wr_en;
-    logic        data_rd_en;
+    (* keep = "true", DONT_TOUCH = "true" *) logic data_rd_en = 1'b0;
     wire         data_fifo_full;
     wire         data_fifo_empty;
 
@@ -206,13 +209,31 @@ module time_udp_cmac512 #(
     logic [511:0] hdr_beat1_reg;
     logic [511:0] hdr_beat2_prefix_reg;
     logic [511:0] next_out_tdata;
-    wire          m_fire = out_tvalid && m_axis_tready;
-    wire          out_ready = !out_tvalid || m_axis_tready;
+    wire          out_axis_tready;
+    wire          m_fire = out_tvalid && out_axis_tready;
+    wire          out_ready = !out_tvalid || out_axis_tready;
     wire          m_send_active = (m_state == M_SEND);
     wire          m_send_last = (m_out_beat == (FRAME_BEATS - 1));
     wire          m_shift_after = m_send_active && should_shift_after(m_out_beat);
     wire          m_shift_needs_prefetch = m_shift_after && (payload_base_idx < PAYLOAD_LAST_PREFETCH_BASE);
     wire          m_load_beat = m_send_active && out_ready && (!m_shift_needs_prefetch || data_prefetch_valid);
+    wire          data_rd_request =
+        !data_rd_en &&
+        (!data_prefetch_valid || data_prefetch_pop) &&
+        !data_fifo_empty &&
+        !data_rd_rst_busy;
+
+    always_ff @(posedge m_clk or negedge m_rst_n) begin
+        if (!m_rst_n) begin
+            m_rst_sync <= 3'b111;
+            m_clear_sync <= 2'b11;
+            m_reset <= 1'b1;
+        end else begin
+            m_rst_sync <= {m_rst_sync[1:0], 1'b0};
+            m_clear_sync <= {m_clear_sync[0], m_clear};
+            m_reset <= m_rst_sync[2] || m_clear_sync[1] || m_clear_sync[0];
+        end
+    end
 
     assign fifo_full = data_fifo_full || token_fifo_full;
     assign fifo_empty = (!data_prefetch_valid && data_fifo_empty) || token_fifo_empty;
@@ -754,76 +775,83 @@ module time_udp_cmac512 #(
         endcase
     end
 
-    always_ff @(posedge m_clk or negedge m_rst_n) begin
-        if (!m_rst_n) begin
-            hdr_beat0_reg <= 512'd0;
-            hdr_beat1_reg <= 512'd0;
-            hdr_beat2_prefix_reg <= 512'd0;
-        end else if (m_clear) begin
-            hdr_beat0_reg <= 512'd0;
-            hdr_beat1_reg <= 512'd0;
-            hdr_beat2_prefix_reg <= 512'd0;
-        end else if ((m_state == M_LOAD1) && data_prefetch_valid) begin
+    always_ff @(posedge m_clk) begin
+        if (!m_reset && (m_state == M_LOAD1) && data_prefetch_valid) begin
             hdr_beat0_reg <= build_header_beat(token_reg, token_ip_checksum, 0);
             hdr_beat1_reg <= build_header_beat(token_reg, token_ip_checksum, 1);
             hdr_beat2_prefix_reg <= build_header_beat(token_reg, token_ip_checksum, 2);
         end
     end
 
-    always_ff @(posedge m_clk or negedge m_rst_n) begin
-        if (!m_rst_n) begin
-            data_prefetch <= {DATA_W{1'b0}};
-            data_prefetch_valid <= 1'b0;
-        end else if (m_clear) begin
-            data_prefetch <= {DATA_W{1'b0}};
+    always_ff @(posedge m_clk) begin
+        if (m_reset) begin
             data_prefetch_valid <= 1'b0;
         end else begin
             if (data_prefetch_pop) begin
                 data_prefetch_valid <= 1'b0;
             end
             if (data_rd_en) begin
-                data_prefetch <= data_fifo_dout;
                 data_prefetch_valid <= 1'b1;
             end
         end
     end
 
-    always_ff @(posedge m_clk or negedge m_rst_n) begin
-        if (!m_rst_n) begin
+    always_ff @(posedge m_clk) begin
+        if (data_rd_en) begin
+            data_prefetch <= data_fifo_dout;
+        end
+    end
+
+    always_ff @(posedge m_clk) begin
+        if (m_reset) begin
+            payload_base_idx <= 8'd0;
+            payload_sel <= 1'b0;
+        end else begin
+            case (m_state)
+                M_IDLE: begin
+                    payload_base_idx <= 8'd0;
+                    if (!token_fifo_empty && data_prefetch_valid && !token_rd_rst_busy) begin
+                        payload_a0 <= payload_seg_a(data_prefetch);
+                        payload_b0 <= payload_seg_b(data_prefetch);
+                        payload_c0 <= payload_seg_c(data_prefetch);
+                        payload_sel <= 1'b0;
+                    end
+                end
+                M_LOAD1: begin
+                    if (data_prefetch_valid) begin
+                        payload_a1 <= payload_seg_a(data_prefetch);
+                        payload_b1 <= payload_seg_b(data_prefetch);
+                        payload_c1 <= payload_seg_c(data_prefetch);
+                    end
+                end
+                M_SEND: begin
+                    if (m_load_beat && !m_send_last && should_shift_after(m_out_beat)) begin
+                        payload_base_idx <= payload_base_idx + 8'd1;
+                        if (payload_sel) begin
+                            payload_a1 <= m_shift_needs_prefetch ? payload_seg_a(data_prefetch) : 176'd0;
+                            payload_b1 <= m_shift_needs_prefetch ? payload_seg_b(data_prefetch) : 512'd0;
+                            payload_c1 <= m_shift_needs_prefetch ? payload_seg_c(data_prefetch) : 336'd0;
+                            payload_sel <= 1'b0;
+                        end else begin
+                            payload_a0 <= m_shift_needs_prefetch ? payload_seg_a(data_prefetch) : 176'd0;
+                            payload_b0 <= m_shift_needs_prefetch ? payload_seg_b(data_prefetch) : 512'd0;
+                            payload_c0 <= m_shift_needs_prefetch ? payload_seg_c(data_prefetch) : 336'd0;
+                            payload_sel <= 1'b1;
+                        end
+                    end
+                end
+                default: begin
+                end
+            endcase
+        end
+    end
+
+    always_ff @(posedge m_clk) begin
+        if (m_reset) begin
             m_state <= M_IDLE;
-            token_reg <= {TOKEN_W{1'b0}};
             token_ip_sum <= 32'd0;
             token_ip_checksum <= 16'd0;
-            payload_sel <= 1'b0;
-            payload_a0 <= 176'd0;
-            payload_a1 <= 176'd0;
-            payload_b0 <= 512'd0;
-            payload_b1 <= 512'd0;
-            payload_c0 <= 336'd0;
-            payload_c1 <= 336'd0;
-            payload_base_idx <= 8'd0;
             m_out_beat <= 8'd0;
-            out_tdata <= 512'd0;
-            out_tkeep <= 64'd0;
-            out_tvalid <= 1'b0;
-            out_tlast <= 1'b0;
-            output_frame_count <= 32'd0;
-        end else if (m_clear) begin
-            m_state <= M_IDLE;
-            token_reg <= {TOKEN_W{1'b0}};
-            token_ip_sum <= 32'd0;
-            token_ip_checksum <= 16'd0;
-            payload_sel <= 1'b0;
-            payload_a0 <= 176'd0;
-            payload_a1 <= 176'd0;
-            payload_b0 <= 512'd0;
-            payload_b1 <= 512'd0;
-            payload_c0 <= 336'd0;
-            payload_c1 <= 336'd0;
-            payload_base_idx <= 8'd0;
-            m_out_beat <= 8'd0;
-            out_tdata <= 512'd0;
-            out_tkeep <= 64'd0;
             out_tvalid <= 1'b0;
             out_tlast <= 1'b0;
             output_frame_count <= 32'd0;
@@ -839,13 +867,8 @@ module time_udp_cmac512 #(
             case (m_state)
                 M_IDLE: begin
                     m_out_beat <= 8'd0;
-                    payload_base_idx <= 8'd0;
                     if (!token_fifo_empty && data_prefetch_valid && !token_rd_rst_busy) begin
                         token_reg <= token_fifo_dout;
-                        payload_a0 <= payload_seg_a(data_prefetch);
-                        payload_b0 <= payload_seg_b(data_prefetch);
-                        payload_c0 <= payload_seg_c(data_prefetch);
-                        payload_sel <= 1'b0;
                         m_state <= M_SUM;
                     end
                 end
@@ -864,9 +887,6 @@ module time_udp_cmac512 #(
                 end
                 M_LOAD1: begin
                     if (data_prefetch_valid) begin
-                        payload_a1 <= payload_seg_a(data_prefetch);
-                        payload_b1 <= payload_seg_b(data_prefetch);
-                        payload_c1 <= payload_seg_c(data_prefetch);
                         m_state <= M_SEND;
                     end
                 end
@@ -879,57 +899,56 @@ module time_udp_cmac512 #(
                         if (m_send_last) begin
                             m_state <= M_IDLE;
                         end else begin
-                            if (should_shift_after(m_out_beat)) begin
-                                if (payload_sel) begin
-                                    payload_a1 <= m_shift_needs_prefetch ? payload_seg_a(data_prefetch) : 176'd0;
-                                    payload_b1 <= m_shift_needs_prefetch ? payload_seg_b(data_prefetch) : 512'd0;
-                                    payload_c1 <= m_shift_needs_prefetch ? payload_seg_c(data_prefetch) : 336'd0;
-                                    payload_sel <= 1'b0;
-                                end else begin
-                                    payload_a0 <= m_shift_needs_prefetch ? payload_seg_a(data_prefetch) : 176'd0;
-                                    payload_b0 <= m_shift_needs_prefetch ? payload_seg_b(data_prefetch) : 512'd0;
-                                    payload_c0 <= m_shift_needs_prefetch ? payload_seg_c(data_prefetch) : 336'd0;
-                                    payload_sel <= 1'b1;
-                                end
-                                payload_base_idx <= payload_base_idx + 8'd1;
-                            end
                             m_out_beat <= m_out_beat + 8'd1;
                         end
                     end
                 end
                 default: begin
                     m_state <= M_IDLE;
+                    out_tvalid <= 1'b0;
                 end
             endcase
         end
     end
 
+    always_ff @(posedge m_clk) begin
+        data_rd_en <= !m_reset && data_rd_request;
+    end
+
     always_comb begin
         token_rd_en = 1'b0;
         data_prefetch_pop = 1'b0;
-        if (m_state == M_IDLE && !token_fifo_empty && data_prefetch_valid && !token_rd_rst_busy) begin
-            token_rd_en = 1'b1;
-            data_prefetch_pop = 1'b1;
-        end else if (m_state == M_LOAD1 && data_prefetch_valid) begin
-            data_prefetch_pop = 1'b1;
-        end else if (m_load_beat && !m_send_last && should_shift_after(m_out_beat) && m_shift_needs_prefetch) begin
-            data_prefetch_pop = 1'b1;
+        if (!m_reset) begin
+            if (m_state == M_IDLE && !token_fifo_empty && data_prefetch_valid && !token_rd_rst_busy) begin
+                token_rd_en = 1'b1;
+                data_prefetch_pop = 1'b1;
+            end else if (m_state == M_LOAD1 && data_prefetch_valid) begin
+                data_prefetch_pop = 1'b1;
+            end else if (m_load_beat && !m_send_last && should_shift_after(m_out_beat) && m_shift_needs_prefetch) begin
+                data_prefetch_pop = 1'b1;
+            end
         end
     end
 
-    always_comb begin
-        data_rd_en = 1'b0;
-        if (!data_prefetch_valid && !data_fifo_empty && !data_rd_rst_busy) begin
-            data_rd_en = 1'b1;
-        end
-    end
-
-    always_comb begin
-        m_axis_tdata = out_tdata;
-        m_axis_tkeep = out_tkeep;
-        m_axis_tlast = out_tlast;
-        m_axis_tvalid = out_tvalid;
-    end
+    axis512_register_slice #(
+        .DATA_W(512),
+        .KEEP_W(64),
+        .DEPTH(2)
+    ) u_output_slice (
+        .clk(m_clk),
+        .rst_n(m_rst_n),
+        .clear(m_reset),
+        .s_axis_tdata(out_tdata),
+        .s_axis_tkeep(out_tkeep),
+        .s_axis_tvalid(out_tvalid),
+        .s_axis_tlast(out_tlast),
+        .s_axis_tready(out_axis_tready),
+        .m_axis_tdata(m_axis_tdata),
+        .m_axis_tkeep(m_axis_tkeep),
+        .m_axis_tvalid(m_axis_tvalid),
+        .m_axis_tlast(m_axis_tlast),
+        .m_axis_tready(m_axis_tready)
+    );
 
     xpm_fifo_async #(
         .CASCADE_HEIGHT(0),

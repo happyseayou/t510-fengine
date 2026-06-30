@@ -10,13 +10,9 @@ set worst_paths_rpt [file join $report_dir ${stage_name}_worst_paths.rpt]
 set route_status_rpt [file join $report_dir ${stage_name}_route_status.rpt]
 set utilization_rpt [file join $report_dir ${stage_name}_impl_utilization.rpt]
 
-proc stage27h_require_file {path label} {
-    if {![file exists $path]} {
-        error "Stage 27h fast timing requires $label at $path. Run the clean export script once to build OOC IP."
-    }
-}
-
 open_project [file join $repo_root demo-ant.xpr]
+set ::T510_STAGE27H_STREAMING_XFFT 1
+source [file join $repo_root scripts stage27f_create_fengine_xfft_ip.tcl]
 set ::T510_STAGE27H_PRODUCTION_ONLY 1
 source [file join $repo_root scripts setup_project.tcl]
 
@@ -25,14 +21,41 @@ set sources_1_defines [get_property verilog_define $sources_1]
 lappend sources_1_defines T510_STAGE27H_PRODUCTION_ONLY
 set_property verilog_define $sources_1_defines $sources_1
 
-stage27h_require_file \
-    [file join $repo_root demo-ant.runs t510_cmac_usplus_0_synth_1 t510_cmac_usplus_0.dcp] \
-    "CMAC OOC DCP"
-stage27h_require_file \
-    [file join $repo_root demo-ant.runs t510_fengine_xfft_4096_synth_1 t510_fengine_xfft_4096.dcp] \
-    "F-engine XFFT OOC DCP"
-
-puts "STAGE27H_FAST_TIMING: reusing existing CMAC and XFFT OOC DCPs"
+if {![file exists [file join $repo_root demo-ant.runs t510_cmac_usplus_0_synth_1 t510_cmac_usplus_0.dcp]]} {
+    error "Stage 27h fast timing requires CMAC OOC DCP. Run clean export once to build CMAC OOC IP."
+}
+set xfft_run [get_runs -quiet t510_fengine_xfft_4096_lane_synth_1]
+set xfft_ip [get_ips -quiet t510_fengine_xfft_4096_lane]
+set xfft_disk_run_dir [file join $repo_root demo-ant.runs t510_fengine_xfft_4096_lane_synth_1]
+set xfft_disk_dcp [file join $xfft_disk_run_dir t510_fengine_xfft_4096_lane.dcp]
+set xfft_xci [get_property IP_FILE [get_ips t510_fengine_xfft_4096_lane]]
+if {[llength $xfft_run] == 0 && [llength $xfft_ip] != 0} {
+    puts "STAGE27H_FAST_TIMING: create nonrealtime streaming F-engine lane XFFT OOC run"
+    create_ip_run $xfft_ip -force
+    set xfft_run [get_runs -quiet t510_fengine_xfft_4096_lane_synth_1]
+}
+if {[llength $xfft_run] == 0} {
+    error "Stage 27h fast timing could not find/create F-engine lane XFFT OOC run."
+}
+set xfft_status [get_property STATUS [get_runs t510_fengine_xfft_4096_lane_synth_1]]
+if {
+    $::T510_STAGE27H_XFFT_LANE_CONFIG_CHANGED ||
+    ![file exists $xfft_disk_dcp] ||
+    ([file exists $xfft_xci] && [file exists $xfft_disk_dcp] && ([file mtime $xfft_disk_dcp] < [file mtime $xfft_xci])) ||
+    ![string match "*Complete*" $xfft_status]
+} {
+    puts "STAGE27H_FAST_TIMING: rebuild nonrealtime streaming F-engine lane XFFT OOC"
+    reset_run t510_fengine_xfft_4096_lane_synth_1
+    launch_runs t510_fengine_xfft_4096_lane_synth_1 -jobs 8
+    wait_on_run t510_fengine_xfft_4096_lane_synth_1
+    set xfft_status [get_property STATUS [get_runs t510_fengine_xfft_4096_lane_synth_1]]
+} else {
+    puts "STAGE27H_FAST_TIMING: reuse nonrealtime streaming F-engine lane XFFT OOC DCP $xfft_disk_dcp"
+}
+puts "STAGE27H_FAST_TIMING: XFFT_LANE_OOC_STATUS=$xfft_status"
+if {![string match "*Complete*" $xfft_status]} {
+    error "Stage 27h nonrealtime streaming F-engine lane XFFT OOC synthesis did not complete."
+}
 
 set synth_run [get_runs synth_1]
 set impl_run [get_runs impl_1]
@@ -61,11 +84,16 @@ report_timing_summary -delay_type max -file $synth_timing_rpt
 close_design
 
 reset_run $impl_run
-if {[file exists $latest_routed_dcp]} {
+set use_incremental [expr {[info exists ::env(STAGE27H_USE_INCREMENTAL)] && $::env(STAGE27H_USE_INCREMENTAL) eq "1"}]
+if {$use_incremental && [file exists $latest_routed_dcp]} {
     puts "STAGE27H_FAST_TIMING: using incremental checkpoint $latest_routed_dcp"
     set_property INCREMENTAL_CHECKPOINT $latest_routed_dcp $impl_run
 } else {
-    puts "STAGE27H_FAST_TIMING: no incremental checkpoint yet; this first route will seed one"
+    if {$use_incremental} {
+        puts "STAGE27H_FAST_TIMING: incremental requested but no checkpoint exists; this route will seed one"
+    } else {
+        puts "STAGE27H_FAST_TIMING: incremental disabled by default to avoid stale pre-fix checkpoints"
+    }
     catch {reset_property INCREMENTAL_CHECKPOINT $impl_run}
 }
 

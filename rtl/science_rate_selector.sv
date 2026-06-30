@@ -55,12 +55,9 @@ module science_rate_selector #(
     logic candidate_tlast;
     logic candidate_valid;
 
-    // Live science preview must never backpressure the RFDC adapter.  If the
-    // selected-rate output is still pending, accept the new RFDC beat and count
-    // the newly formed output beat as dropped instead of pulling tready low.
-    wire input_fire = s_axis_tvalid;
+    wire input_fire = s_axis_tvalid && s_axis_tready;
 
-    assign s_axis_tready = 1'b1;
+    assign s_axis_tready = !pending_valid || m_axis_tready;
     assign m_axis_tdata = pending_tdata;
     assign m_axis_tuser = pending_tuser;
     assign m_axis_sample0 = pending_sample0;
@@ -198,17 +195,17 @@ module science_rate_selector #(
                 endcase
             end
 
+            if (s_axis_tvalid && !s_axis_tready) begin
+                dropped_beat_count <= dropped_beat_count + 32'd1;
+            end
+
             if (candidate_valid) begin
-                if (pending_valid && !m_axis_tready) begin
-                    dropped_beat_count <= dropped_beat_count + 32'd1;
-                end else begin
-                    pending_tdata <= candidate_tdata;
-                    pending_tuser <= candidate_tuser;
-                    pending_sample0 <= candidate_sample0;
-                    pending_tlast <= candidate_tlast;
-                    pending_valid <= 1'b1;
-                    output_beat_count <= output_beat_count + 32'd1;
-                end
+                pending_tdata <= candidate_tdata;
+                pending_tuser <= candidate_tuser;
+                pending_sample0 <= candidate_sample0;
+                pending_tlast <= candidate_tlast;
+                pending_valid <= 1'b1;
+                output_beat_count <= output_beat_count + 32'd1;
             end
         end
     end

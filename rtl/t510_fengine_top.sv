@@ -138,14 +138,17 @@ module t510_fengine_top (
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
     localparam integer TX_ENDPOINTS = 24;
     localparam integer TX_SPEC_ROUTES = 16;
+    localparam bit CTRL_PRODUCTION_27H = 1'b1;
 `else
     localparam integer TX_ENDPOINTS = 72;
     localparam integer TX_SPEC_ROUTES = 64;
+    localparam bit CTRL_PRODUCTION_27H = 1'b0;
 `endif
     localparam integer TX_TIME_ROUTES = 8;
     localparam [2:0] SCIENCE_MODE_TIME_ONLY = 3'd1;
     localparam [2:0] SCIENCE_MODE_SPEC_ONLY = 3'd2;
     localparam [2:0] SCIENCE_MODE_TIME_SPEC = 3'd3;
+    localparam [15:0] FFT_ONLY_DEFAULT_SHIFT = 16'h0aab;
     integer tx_reset_idx;
 
     wire [15:0] ctrl_board_id;
@@ -327,6 +330,7 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_cmac_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  time_ddr_ring_clear_toggle_cmac_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  packet_stream_reset_toggle_cmac_sync;
     logic        soft_epoch_toggle_seen;
     logic        stop_toggle_seen;
     logic        soft_reset_toggle_seen;
@@ -334,6 +338,8 @@ module t510_fengine_top (
     logic        tx_clear_toggle_seen;
     logic        tx_clear_toggle_cmac_seen;
     logic        time_ddr_ring_clear_toggle_cmac_seen;
+    logic        packet_stream_reset_toggle_cmac_seen;
+    logic        packet_stream_reset_toggle_cmac_src;
     wire         arm_latched;
     wire         soft_epoch_pulse;
     wire         stop_pulse;
@@ -342,6 +348,7 @@ module t510_fengine_top (
     wire         tx_clear_pulse;
     wire         tx_clear_pulse_cmac;
     wire         time_ddr_ring_clear_pulse_cmac;
+    wire         packet_stream_reset_pulse_cmac;
     logic [1:0]  mode_prev;
     logic [31:0] mode_switch_reset_count;
     wire         mode_change_pulse;
@@ -452,6 +459,25 @@ module t510_fengine_top (
 
     wire [SCIENCE_DATA_W-1:0] quant_spec_tdata;
     wire         quant_clip_any;
+    wire [SCIENCE_DATA_W-1:0] spec_feng_cmac_tdata;
+    wire [63:0]  spec_feng_cmac_sample0;
+    wire         spec_feng_cmac_tvalid;
+    wire         spec_feng_cmac_tready;
+    wire         spec_feng_input_cdc_ready;
+    wire         spec_feng_cmac_fifo_full;
+    wire         spec_feng_cmac_fifo_empty;
+    wire [31:0]  spec_feng_cmac_wr_level_words;
+    wire [31:0]  spec_feng_cmac_rd_level_words;
+    wire [SCIENCE_DATA_W-1:0] pfb_spec_cmac_tdata;
+    wire [63:0]  pfb_spec_cmac_sample0;
+    wire         pfb_spec_cmac_tvalid;
+    wire         pfb_spec_cmac_tready;
+    wire         pfb_spec_cmac_to_data_fifo_full;
+    wire         pfb_spec_cmac_to_data_fifo_empty;
+    wire [31:0]  pfb_spec_cmac_to_data_wr_level_words;
+    wire [31:0]  pfb_spec_cmac_to_data_rd_level_words;
+    wire [191:0] pfb_spec_cmac_sideband;
+    wire [191:0] pfb_spec_sideband;
     wire [SCIENCE_DATA_W-1:0] pfb_spec_tdata;
     wire [63:0]  pfb_spec_sample0;
     wire         pfb_spec_tvalid;
@@ -477,6 +503,12 @@ module t510_fengine_top (
     wire [31:0] pfb_packet_chan0;
     wire [15:0] pfb_packet_chan_count;
     wire [15:0] pfb_packet_time_count;
+    wire [31:0] pfb_packet_chan0_data;
+    wire [15:0] pfb_packet_chan_count_data;
+    wire [15:0] pfb_packet_time_count_data;
+    wire [15:0] pfb_taps_data;
+    wire [15:0] pfb_fft_shift_data;
+    wire [31:0] pfb_status_data;
     wire [1:0] ctrl_science_bandwidth_mode_cfg;
     wire [2:0] ctrl_science_output_mode_cfg;
     wire [31:0] ctrl_time_live_interval_beats;
@@ -706,6 +738,12 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [31:0] tx_control_cmac;
     (* ASYNC_REG = "TRUE" *) logic [2:0] science_output_mode_cmac_meta;
     (* ASYNC_REG = "TRUE" *) logic [2:0] science_output_mode_cmac;
+    (* ASYNC_REG = "TRUE" *) logic spec_enable_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic spec_enable_cmac;
+    (* ASYNC_REG = "TRUE" *) logic pfb_enable_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic pfb_enable_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] pfb_fft_shift_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] pfb_fft_shift_cmac;
     (* ASYNC_REG = "TRUE" *) logic [47:0] src_mac_cmac_meta;
     (* ASYNC_REG = "TRUE" *) logic [47:0] src_mac_cmac;
     (* ASYNC_REG = "TRUE" *) logic [31:0] src_ip_cmac_meta;
@@ -1187,6 +1225,9 @@ module t510_fengine_top (
             legacy_bridge_requested_cmac <= legacy_bridge_requested_cmac_comb;
         end
     end
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign tx_qsfp_test_enable = 1'b0;
+`else
     assign tx_qsfp_test_enable =
         tx_control_cmac[1] &&
         tx_control_cmac[2] &&
@@ -1203,6 +1244,7 @@ module t510_fengine_top (
             )
         ) &&
         cmac_tx_rst_n;
+`endif
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
     assign frame_tx_tready = 1'b0;
     assign m_axis_tx_tdata = 64'd0;
@@ -1254,6 +1296,8 @@ module t510_fengine_top (
     assign tx_clear_pulse_cmac = tx_clear_toggle_cmac_sync[2] ^ tx_clear_toggle_cmac_seen;
     assign time_ddr_ring_clear_pulse_cmac =
         time_ddr_ring_clear_toggle_cmac_sync[2] ^ time_ddr_ring_clear_toggle_cmac_seen;
+    assign packet_stream_reset_pulse_cmac =
+        packet_stream_reset_toggle_cmac_sync[2] ^ packet_stream_reset_toggle_cmac_seen;
     assign mode_change_pulse = (mode != mode_prev);
     assign packet_stream_reset_pulse = epoch_reset_pulse || stop_pulse || soft_reset_pulse || tx_clear_pulse || mode_change_pulse;
     assign rfdc_active_port_mask = rfdc_active_mask;
@@ -1270,7 +1314,11 @@ module t510_fengine_top (
     assign spec_input_sample0 = spec_sample0;
     assign time_input_sample0 = time_sample0_sideband;
     assign time_tready = time_live_full_rate_data ? wide_time_tready : legacy_time_tready;
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign pfb_spec_tready = spec_live_requested_data ? wide_pfb_spec_tready : 1'b0;
+`else
     assign pfb_spec_tready = spec_live_requested_data ? wide_pfb_spec_tready : legacy_pfb_spec_tready;
+`endif
     assign spec_decimator_selected_count = spec_tvalid && spec_tready ? 32'd1 : 32'd0;
     assign spec_decimator_discarded_count = 32'd0;
     assign spec_decimator_dropped_count = 32'd0;
@@ -1328,8 +1376,8 @@ module t510_fengine_top (
             pfb_enable_sync        <= 2'b00;
             pfb_taps_meta          <= 16'd0;
             pfb_taps               <= 16'd0;
-            pfb_fft_shift_meta     <= 16'd0;
-            pfb_fft_shift          <= 16'd0;
+            pfb_fft_shift_meta     <= FFT_ONLY_DEFAULT_SHIFT;
+            pfb_fft_shift          <= FFT_ONLY_DEFAULT_SHIFT;
             pfb_chan0_meta         <= 32'd0;
             pfb_chan0              <= 32'd0;
             pfb_chan_count_meta    <= 16'd256;
@@ -1419,6 +1467,7 @@ module t510_fengine_top (
             soft_reset_toggle_seen <= 1'b0;
             pfb_clear_toggle_seen  <= 1'b0;
             tx_clear_toggle_seen   <= 1'b0;
+            packet_stream_reset_toggle_cmac_src <= 1'b0;
             mode_prev              <= MODE_SPEC;
             mode_switch_reset_count <= 32'd0;
             pps_sync               <= 2'b00;
@@ -1528,6 +1577,9 @@ module t510_fengine_top (
             soft_reset_toggle_seen  <= soft_reset_toggle_sync[2];
             pfb_clear_toggle_seen   <= pfb_clear_toggle_sync[2];
             tx_clear_toggle_seen    <= tx_clear_toggle_sync[2];
+            if (packet_stream_reset_pulse || pfb_clear_pulse) begin
+                packet_stream_reset_toggle_cmac_src <= ~packet_stream_reset_toggle_cmac_src;
+            end
             dac_phase_epoch_data_meta <= ctrl_dac_phase_epoch;
             dac_phase_epoch_data      <= dac_phase_epoch_data_meta;
         end
@@ -1561,6 +1613,12 @@ module t510_fengine_top (
             tx_control_cmac <= 32'h0000_000d;
             science_output_mode_cmac_meta <= 3'd0;
             science_output_mode_cmac <= 3'd0;
+            spec_enable_cmac_meta <= 1'b0;
+            spec_enable_cmac <= 1'b0;
+            pfb_enable_cmac_meta <= 1'b0;
+            pfb_enable_cmac <= 1'b0;
+            pfb_fft_shift_cmac_meta <= FFT_ONLY_DEFAULT_SHIFT;
+            pfb_fft_shift_cmac <= FFT_ONLY_DEFAULT_SHIFT;
             rfdc_sample_count_cmac_meta <= 64'd0;
             rfdc_sample_count_cmac <= 64'd0;
             ctrl_board_id_cmac_meta <= 16'd0;
@@ -1569,6 +1627,8 @@ module t510_fengine_top (
             tx_clear_toggle_cmac_seen <= 1'b0;
             time_ddr_ring_clear_toggle_cmac_sync <= 3'b000;
             time_ddr_ring_clear_toggle_cmac_seen <= 1'b0;
+            packet_stream_reset_toggle_cmac_sync <= 3'b000;
+            packet_stream_reset_toggle_cmac_seen <= 1'b0;
         end else begin
             src_mac_cmac_meta <= src_mac;
             src_mac_cmac <= src_mac_cmac_meta;
@@ -1596,6 +1656,12 @@ module t510_fengine_top (
             tx_control_cmac <= tx_control_cmac_meta;
             science_output_mode_cmac_meta <= science_output_mode;
             science_output_mode_cmac <= science_output_mode_cmac_meta;
+            spec_enable_cmac_meta <= spec_enable;
+            spec_enable_cmac <= spec_enable_cmac_meta;
+            pfb_enable_cmac_meta <= pfb_enable_sync[1];
+            pfb_enable_cmac <= pfb_enable_cmac_meta;
+            pfb_fft_shift_cmac_meta <= pfb_fft_shift;
+            pfb_fft_shift_cmac <= pfb_fft_shift_cmac_meta;
             rfdc_sample_count_cmac_meta <= rfdc_sample_count;
             rfdc_sample_count_cmac <= rfdc_sample_count_cmac_meta;
             ctrl_board_id_cmac_meta <= ctrl_board_id;
@@ -1607,6 +1673,11 @@ module t510_fengine_top (
                 ctrl_time_ddr_ring_clear_toggle
             };
             time_ddr_ring_clear_toggle_cmac_seen <= time_ddr_ring_clear_toggle_cmac_sync[2];
+            packet_stream_reset_toggle_cmac_sync <= {
+                packet_stream_reset_toggle_cmac_sync[1:0],
+                packet_stream_reset_toggle_cmac_src
+            };
+            packet_stream_reset_toggle_cmac_seen <= packet_stream_reset_toggle_cmac_sync[2];
         end
     end
 
@@ -1954,7 +2025,9 @@ module t510_fengine_top (
     );
 `endif
 
-    multi_preview_observer u_multi_preview_observer (
+    multi_preview_observer #(
+        .PRODUCTION_27H(CTRL_PRODUCTION_27H)
+    ) u_multi_preview_observer (
         .clk(clk),
         .rst_n(rst_n),
         .ctrl_clk(ctrl_clk),
@@ -2113,6 +2186,145 @@ module t510_fengine_top (
         .clip_any(quant_clip_any)
     );
 
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign pfb_spec_cmac_sideband = {
+        pfb_status,
+        pfb_fft_shift_cmac,
+        16'd0,
+        pfb_packet_time_count,
+        pfb_packet_chan_count,
+        pfb_packet_chan0,
+        pfb_spec_cmac_sample0
+    };
+    assign pfb_spec_sample0 = pfb_spec_sideband[0 +: 64];
+    assign pfb_packet_chan0_data = pfb_spec_sideband[64 +: 32];
+    assign pfb_packet_chan_count_data = pfb_spec_sideband[96 +: 16];
+    assign pfb_packet_time_count_data = pfb_spec_sideband[112 +: 16];
+    assign pfb_taps_data = pfb_spec_sideband[128 +: 16];
+    assign pfb_fft_shift_data = pfb_spec_sideband[144 +: 16];
+    assign pfb_status_data = pfb_spec_sideband[160 +: 32];
+
+    axis_sideband_async_fifo #(
+        .DATA_W(SCIENCE_DATA_W),
+        .SIDE_W(64),
+        .DEPTH(4096),
+        .COUNT_W(13)
+    ) u_spec_feng_input_cdc (
+        .s_clk(clk),
+        .s_rst_n(rst_n),
+        .s_clear(packet_stream_reset_pulse || pfb_clear_pulse),
+        .s_axis_tdata(quant_spec_tdata),
+        .s_axis_tside(spec_input_sample0),
+        .s_axis_tvalid(spec_tvalid && spec_live_requested_data),
+        .s_axis_tready(spec_feng_input_cdc_ready),
+        .m_clk(cmac_tx_clk),
+        .m_rst_n(cmac_tx_rst_n),
+        .m_clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
+        .m_axis_tdata(spec_feng_cmac_tdata),
+        .m_axis_tside(spec_feng_cmac_sample0),
+        .m_axis_tvalid(spec_feng_cmac_tvalid),
+        .m_axis_tready(spec_feng_cmac_tready),
+        .wr_level_words(spec_feng_cmac_wr_level_words),
+        .rd_level_words(spec_feng_cmac_rd_level_words),
+        .fifo_full(spec_feng_cmac_fifo_full),
+        .fifo_empty(spec_feng_cmac_fifo_empty)
+    );
+    assign spec_tready = spec_live_requested_data ? spec_feng_input_cdc_ready : 1'b1;
+
+    pfb_channelizer #(
+        .DATA_W(SCIENCE_DATA_W),
+        .NINPUT(8),
+        .NCHAN(4096)
+    ) u_pfb_channelizer (
+        .clk(cmac_tx_clk),
+        .rst_n(cmac_tx_rst_n),
+        .enable(spec_enable_cmac && pfb_enable_cmac),
+        .clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
+        .cfg_taps(16'd0),
+        .cfg_fft_shift(pfb_fft_shift_cmac),
+        .cfg_chan0(32'd0),
+        .cfg_chan_count(16'd256),
+        .cfg_time_count(16'd1),
+        .s_axis_tdata(spec_feng_cmac_tdata),
+        .s_axis_sample0(spec_feng_cmac_sample0),
+        .s_axis_tvalid(spec_feng_cmac_tvalid),
+        .s_axis_tready(spec_feng_cmac_tready),
+        .m_axis_tdata(pfb_spec_cmac_tdata),
+        .m_axis_sample0(pfb_spec_cmac_sample0),
+        .m_axis_tvalid(pfb_spec_cmac_tvalid),
+        .m_axis_tready(pfb_spec_cmac_tready),
+        .status(pfb_status),
+        .frame_count(pfb_frame_count),
+        .overflow_count(pfb_overflow_count),
+        .data_halt_count(pfb_data_halt_count),
+        .xfft_event_count(pfb_xfft_event_count),
+        .tile_overflow_count(pfb_tile_overflow_count),
+        .xfft_tlast_unexpected_count(pfb_xfft_tlast_unexpected_count),
+        .xfft_tlast_missing_count(pfb_xfft_tlast_missing_count),
+        .xfft_fft_overflow_count(pfb_xfft_fft_overflow_count),
+        .xfft_data_out_halt_count(pfb_xfft_data_out_halt_count),
+        .xfft_status_halt_count(pfb_xfft_status_halt_count),
+        .capture_backpressure_count(pfb_capture_backpressure_count),
+        .frame_sample0_overflow_count(pfb_frame_sample0_overflow_count),
+        .input_fifo_level(pfb_input_fifo_level),
+        .peak_chan(pfb_peak_chan),
+        .peak_power(pfb_peak_power),
+        .packet_chan0(pfb_packet_chan0),
+        .packet_chan_count(pfb_packet_chan_count),
+        .packet_time_count(pfb_packet_time_count)
+    );
+
+    axis_sideband_async_fifo #(
+        .DATA_W(SCIENCE_DATA_W),
+        .SIDE_W(192),
+        .DEPTH(4096),
+        .COUNT_W(13)
+    ) u_spec_feng_output_cdc (
+        .s_clk(cmac_tx_clk),
+        .s_rst_n(cmac_tx_rst_n),
+        .s_clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
+        .s_axis_tdata(pfb_spec_cmac_tdata),
+        .s_axis_tside(pfb_spec_cmac_sideband),
+        .s_axis_tvalid(pfb_spec_cmac_tvalid),
+        .s_axis_tready(pfb_spec_cmac_tready),
+        .m_clk(clk),
+        .m_rst_n(rst_n),
+        .m_clear(packet_stream_reset_pulse || pfb_clear_pulse),
+        .m_axis_tdata(pfb_spec_tdata),
+        .m_axis_tside(pfb_spec_sideband),
+        .m_axis_tvalid(pfb_spec_tvalid),
+        .m_axis_tready(pfb_spec_tready),
+        .wr_level_words(pfb_spec_cmac_to_data_wr_level_words),
+        .rd_level_words(pfb_spec_cmac_to_data_rd_level_words),
+        .fifo_full(pfb_spec_cmac_to_data_fifo_full),
+        .fifo_empty(pfb_spec_cmac_to_data_fifo_empty)
+    );
+`else
+    assign spec_feng_cmac_tdata = {SCIENCE_DATA_W{1'b0}};
+    assign spec_feng_cmac_sample0 = 64'd0;
+    assign spec_feng_cmac_tvalid = 1'b0;
+    assign spec_feng_cmac_tready = 1'b0;
+    assign spec_feng_cmac_fifo_full = 1'b0;
+    assign spec_feng_cmac_fifo_empty = 1'b1;
+    assign spec_feng_cmac_wr_level_words = 32'd0;
+    assign spec_feng_cmac_rd_level_words = 32'd0;
+    assign pfb_spec_cmac_tdata = {SCIENCE_DATA_W{1'b0}};
+    assign pfb_spec_cmac_sample0 = 64'd0;
+    assign pfb_spec_cmac_tvalid = 1'b0;
+    assign pfb_spec_cmac_tready = 1'b0;
+    assign pfb_spec_cmac_to_data_fifo_full = 1'b0;
+    assign pfb_spec_cmac_to_data_fifo_empty = 1'b1;
+    assign pfb_spec_cmac_to_data_wr_level_words = 32'd0;
+    assign pfb_spec_cmac_to_data_rd_level_words = 32'd0;
+    assign pfb_spec_cmac_sideband = 192'd0;
+    assign pfb_spec_sideband = 192'd0;
+    assign pfb_packet_chan0_data = pfb_packet_chan0;
+    assign pfb_packet_chan_count_data = pfb_packet_chan_count;
+    assign pfb_packet_time_count_data = pfb_packet_time_count;
+    assign pfb_taps_data = pfb_taps;
+    assign pfb_fft_shift_data = pfb_fft_shift;
+    assign pfb_status_data = pfb_status;
+
     pfb_channelizer #(
         .DATA_W(SCIENCE_DATA_W),
         .NINPUT(8),
@@ -2155,6 +2367,7 @@ module t510_fengine_top (
         .packet_chan_count(pfb_packet_chan_count),
         .packet_time_count(pfb_packet_time_count)
     );
+`endif
 
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
     assign legacy_pfb_spec_tready = 1'b0;
@@ -2190,10 +2403,10 @@ module t510_fengine_top (
         .spec_time_count(pfb_packet_time_count),
         .spec_chan_count(pfb_packet_chan_count),
         .spec_nchan(16'd4096),
-        .spec_taps(pfb_taps),
-        .spec_fft_shift(pfb_fft_shift),
+        .spec_taps(pfb_taps_data),
+        .spec_fft_shift(pfb_fft_shift_data),
         .spec_sample_rate_hz(sample_rate_hz),
-        .spec_status_flags(pfb_status),
+        .spec_status_flags(pfb_status_data),
         .chan_split(chan_split),
         .s_axis_tdata(pfb_spec_tdata),
         .s_axis_sample0(pfb_spec_sample0),
@@ -2216,10 +2429,11 @@ module t510_fengine_top (
         .DATA_W(SCIENCE_DATA_W),
         .N_ENDPOINTS(TX_ENDPOINTS),
         .N_SPEC_ROUTES(TX_SPEC_ROUTES),
-        .DATA_FIFO_DEPTH(4096),
-        .DATA_COUNT_W(13),
+        .DATA_FIFO_DEPTH(1024),
+        .DATA_COUNT_W(11),
         .TOKEN_FIFO_DEPTH(64),
-        .TOKEN_COUNT_W(7)
+        .TOKEN_COUNT_W(7),
+        .PRODUCTION_27H(CTRL_PRODUCTION_27H)
     ) u_spec_udp_cmac512 (
         .s_clk(clk),
         .s_rst_n(rst_n),
@@ -2235,14 +2449,14 @@ module t510_fengine_top (
         .quant_mode(quant_mode),
         .scale_mode(scale_mode),
         .scale_id(scale_id),
-        .spec_chan0(pfb_packet_chan0),
-        .spec_chan_count(pfb_packet_chan_count),
-        .spec_time_count(pfb_packet_time_count),
+        .spec_chan0(pfb_packet_chan0_data),
+        .spec_chan_count(pfb_packet_chan_count_data),
+        .spec_time_count(pfb_packet_time_count_data),
         .spec_nchan(16'd4096),
-        .spec_taps(pfb_taps),
-        .spec_fft_shift(pfb_fft_shift),
+        .spec_taps(pfb_taps_data),
+        .spec_fft_shift(pfb_fft_shift_data),
         .spec_sample_rate_hz(sample_rate_hz),
-        .spec_status_flags(pfb_status),
+        .spec_status_flags(pfb_status_data),
         .chan_split(chan_split),
         .src_mac(src_mac),
         .src_ip(src_ip),
@@ -2730,6 +2944,14 @@ module t510_fengine_top (
     );
 `endif
 
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign heartbeat_cmac_tdata = 512'd0;
+    assign heartbeat_cmac_tkeep = 64'd0;
+    assign heartbeat_cmac_tvalid = 1'b0;
+    assign heartbeat_cmac_tlast = 1'b0;
+    assign tx_cmac_test_packet_count = 32'd0;
+    assign tx_cmac_test_byte_count = 32'd0;
+`else
     t510_qsfp_test_frame_gen u_qsfp_test_frame_gen (
         .clk(cmac_tx_clk),
         .rst_n(cmac_tx_rst_n),
@@ -2754,6 +2976,7 @@ module t510_fengine_top (
         .packet_count(tx_cmac_test_packet_count),
         .byte_count(tx_cmac_test_byte_count)
     );
+`endif
 
     cmac_tx_source_mux u_cmac_tx_source_mux (
         .clk(cmac_tx_clk),
@@ -2830,7 +3053,8 @@ module t510_fengine_top (
         .NINPUT(8),
         .N_TX_ENDPOINTS(TX_ENDPOINTS),
         .N_SPEC_ROUTES(TX_SPEC_ROUTES),
-        .N_TIME_ROUTES(TX_TIME_ROUTES)
+        .N_TIME_ROUTES(TX_TIME_ROUTES),
+        .PRODUCTION_27H(CTRL_PRODUCTION_27H)
     ) u_feng_ctrl_axi (
         .s_axi_aclk(ctrl_clk),
         .s_axi_aresetn(ctrl_rst_n),

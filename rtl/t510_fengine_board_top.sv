@@ -770,6 +770,23 @@ module t510_fengine_board_top (
         .audit_ch0_mode(dac_audit_ch0_mode_raw)
     );
 
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign dac_tx_witness_rd_data_ctrl = 32'd0;
+    assign dac_tx_witness_armed_ctrl = 1'b0;
+    assign dac_tx_witness_valid_ctrl = 1'b0;
+    assign dac_tx_witness_capturing_ctrl = 1'b0;
+    assign dac_tx_witness_overflow_ctrl = 1'b0;
+    assign dac_tx_witness_tvalid_seen_ctrl = 1'b0;
+    assign dac_tx_witness_tready_seen_ctrl = 1'b0;
+    assign dac_tx_witness_ready_gap_seen_ctrl = 1'b0;
+    assign dac_tx_witness_word_count_ctrl = 9'd0;
+    assign dac_tx_witness_phase_epoch_ctrl = 32'd0;
+    assign dac_tx_witness_phase_acc_ctrl = 32'd0;
+    assign dac_tx_witness_phase_step_ctrl = 32'd0;
+    assign dac_tx_witness_phase0_ctrl = 32'd0;
+    assign dac_tx_witness_mode_ctrl = 32'd0;
+    assign dac_tx_witness_ready_gap_count_ctrl = 32'd0;
+`else
     dac_tx_witness_capture #(
         .DATA_W(128),
         .CAPTURE_WORDS(256)
@@ -806,6 +823,7 @@ module t510_fengine_board_top (
         .ctrl_mode(dac_tx_witness_mode_ctrl),
         .ctrl_ready_gap_count(dac_tx_witness_ready_gap_count_ctrl)
     );
+`endif
 
     rfdc_adc_axis_adapter u_rfdc_adc_axis_adapter (
         .clk(adc_m_axis_clk),

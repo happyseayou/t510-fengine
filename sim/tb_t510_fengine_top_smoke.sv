@@ -478,16 +478,38 @@ module tb_t510_fengine_top_smoke;
         reg [511:0] beat0;
         reg [511:0] beat1;
         reg [511:0] beat2;
+        reg [31:0] rd_science;
+        reg [31:0] rd_pfb_status;
+        reg [31:0] rd_pfb_frames;
+        reg [31:0] rd_spec_packets;
+        reg [31:0] rd_spec_frames;
+        reg [31:0] rd_cmac_source;
+        reg [7:0]  spec_status_byte1;
+        integer spec_udp_seen;
+        integer mux_seen;
+        integer slice_seen;
         integer seen;
         integer timeout;
         begin
             beat0 = 512'd0;
             beat1 = 512'd0;
             beat2 = 512'd0;
+            spec_udp_seen = 0;
+            mux_seen = 0;
+            slice_seen = 0;
             seen = 0;
             timeout = 0;
             while ((seen < 3) && (timeout < 560000)) begin
                 @(posedge clk);
+                if (dut.wide_spec_live_cmac_tvalid && dut.wide_spec_live_cmac_tready) begin
+                    spec_udp_seen = spec_udp_seen + 1;
+                end
+                if (dut.cmac_mux_axis_tvalid && dut.cmac_mux_axis_tready) begin
+                    mux_seen = mux_seen + 1;
+                end
+                if (cmac_tx_axis_tvalid && dut.cmac_tx_axis_tready) begin
+                    slice_seen = slice_seen + 1;
+                end
                 if (cmac_tx_axis_tvalid) begin
                     if (seen == 0) begin
                         beat0 = cmac_tx_axis_tdata;
@@ -501,6 +523,20 @@ module tb_t510_fengine_top_smoke;
                 timeout = timeout + 1;
             end
 
+            if (seen != 3) begin
+                axi_read(16'hd004, rd_science);
+                axi_read(16'h0904, rd_pfb_status);
+                axi_read(16'h0920, rd_pfb_frames);
+                axi_read(16'h0304, rd_spec_packets);
+                axi_read(16'hb008, rd_spec_frames);
+                axi_read(16'hb704, rd_cmac_source);
+                $display("top production SPEC timeout debug: science=0x%08x pfb_status=0x%08x pfb_frames=%0d spec_packets=%0d spec_frames=%0d cmac_source=0x%08x spec_udp_seen=%0d mux_seen=%0d slice_seen=%0d adc_beat_idx=%0d spec_valid=%b spec_ready=%b mux_valid=%b mux_ready=%b slice_valid=%b slice_ready=%b",
+                         rd_science, rd_pfb_status, rd_pfb_frames, rd_spec_packets, rd_spec_frames, rd_cmac_source,
+                         spec_udp_seen, mux_seen, slice_seen, adc_beat_idx,
+                         dut.wide_spec_live_cmac_tvalid, dut.wide_spec_live_cmac_tready,
+                         dut.cmac_mux_axis_tvalid, dut.cmac_mux_axis_tready,
+                         cmac_tx_axis_tvalid, dut.cmac_tx_axis_tready);
+            end
             `TB_CHECK_EQ(seen, 3, "top production SPEC CMAC header beats observed")
             `TB_CHECK_EQ(beat0[0*8 +: 8], 8'h08, "top production SPEC dst mac byte0")
             `TB_CHECK_EQ(beat0[5*8 +: 8], 8'hb2, "top production SPEC dst mac byte5")
@@ -527,7 +563,9 @@ module tb_t510_fengine_top_smoke;
             `TB_CHECK_EQ(beat1[(119-64)*8 +: 8], 8'h10, "top production SPEC nchan byte1")
             `TB_CHECK_EQ(beat1[(120-64)*8 +: 8], 8'h01, "top production SPEC product byte0")
             `TB_CHECK_EQ(beat1[(121-64)*8 +: 8], 8'hf1, "top production SPEC product byte1")
-            `TB_CHECK_EQ(beat1[(123-64)*8 +: 8], 8'h01, "top production SPEC FFT-only status byte1")
+            spec_status_byte1 = beat1[(123-64)*8 +: 8];
+            `TB_CHECK((spec_status_byte1 & 8'h01) != 8'd0, "top production SPEC FFT-only status bit")
+            `TB_CHECK((spec_status_byte1 & 8'h02) != 8'd0, "top production SPEC XFFT configured status bit")
             `TB_CHECK_EQ(beat2[0*8 +: 8], 8'h00, "top production SPEC taps low")
             `TB_CHECK_EQ(beat2[1*8 +: 8], 8'h00, "top production SPEC taps high")
         end

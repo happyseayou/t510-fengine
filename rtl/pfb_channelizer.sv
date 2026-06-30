@@ -119,6 +119,155 @@ module t510_fengine_xfft_4096_sim_model (
 endmodule
 `endif
 
+`ifndef T510_SIM_FFT_MODEL
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+module t510_fengine_xfft_4096_8lane_streaming (
+    input  wire         aclk,
+    input  wire [255:0] s_axis_config_tdata,
+    input  wire         s_axis_config_tvalid,
+    output wire         s_axis_config_tready,
+    input  wire [255:0] s_axis_data_tdata,
+    input  wire         s_axis_data_tvalid,
+    output wire         s_axis_data_tready,
+    input  wire         s_axis_data_tlast,
+    output wire [255:0] m_axis_data_tdata,
+    output wire [23:0]  m_axis_data_tuser,
+    output wire         m_axis_data_tvalid,
+    input  wire         m_axis_data_tready,
+    output wire         m_axis_data_tlast,
+    output wire [7:0]   m_axis_status_tdata,
+    output wire         m_axis_status_tvalid,
+    input  wire         m_axis_status_tready,
+    output wire         event_frame_started,
+    output wire         event_tlast_unexpected,
+    output wire         event_tlast_missing,
+    output wire         event_fft_overflow,
+    output wire         event_status_channel_halt,
+    output wire         event_data_in_channel_halt,
+    output wire         event_data_out_channel_halt,
+    output wire [7:0]   config_done_debug,
+    output wire [7:0]   config_ready_debug
+);
+
+    wire [7:0]  lane_cfg_tready;
+    wire [7:0]  lane_data_tready;
+    wire [7:0]  lane_data_tvalid;
+    wire [7:0]  lane_data_tlast;
+    wire [7:0]  lane_status_tvalid;
+    wire [63:0] lane_status_tdata;
+    wire [7:0]  lane_status_halt;
+    wire [7:0]  lane_data_out_halt;
+    wire [7:0]  lane_frame_started;
+    wire [7:0]  lane_tlast_unexpected;
+    wire [7:0]  lane_tlast_missing;
+    wire [7:0]  lane_fft_overflow;
+    wire [7:0]  lane_data_in_halt;
+    wire [7:0]  lane_m_axis_tvalid;
+    wire [7:0]  lane_m_axis_tready;
+    wire [7:0]  lane_m_axis_tlast;
+    wire [7:0]  lane_m_axis_status_tready;
+    wire [191:0] lane_m_axis_tuser;
+    wire [7:0]  lane_m_axis_ovflo;
+    logic [7:0] lane_cfg_done = 8'd0;
+    wire [7:0] lane_cfg_tvalid;
+    wire [7:0] lane_cfg_fire;
+    wire [7:0] lane_cfg_done_next;
+    wire all_lane_data_valid = &lane_m_axis_tvalid;
+    wire all_lane_status_valid = &lane_status_tvalid;
+
+    assign lane_cfg_tvalid = {8{s_axis_config_tvalid}} & ~lane_cfg_done;
+    assign lane_cfg_fire = lane_cfg_tvalid & lane_cfg_tready;
+    assign lane_cfg_done_next = lane_cfg_done | lane_cfg_fire;
+    assign s_axis_config_tready = s_axis_config_tvalid && (&lane_cfg_done_next);
+    assign config_done_debug = lane_cfg_done_next;
+    assign config_ready_debug = lane_cfg_tready;
+    assign s_axis_data_tready = &lane_data_tready;
+    assign lane_data_tvalid = {8{s_axis_data_tvalid && s_axis_data_tready}};
+    assign lane_data_tlast = {8{s_axis_data_tlast}};
+    assign lane_m_axis_tready = {8{all_lane_data_valid && m_axis_data_tready}};
+    assign lane_m_axis_status_tready = {8{all_lane_status_valid && m_axis_status_tready}};
+
+    always_ff @(posedge aclk) begin
+        if (!s_axis_config_tvalid) begin
+            lane_cfg_done <= 8'd0;
+        end else begin
+            lane_cfg_done <= lane_cfg_done_next;
+        end
+    end
+
+    genvar lane;
+    generate
+        for (lane = 0; lane < 8; lane = lane + 1) begin : gen_lane_xfft
+            wire [23:0] lane_scale_schedule =
+                s_axis_config_tdata[(8 + lane*24) +: 24];
+            wire [15:0] lane_config_tdata = {
+                3'd0,
+                lane_scale_schedule[11:0],
+                s_axis_config_tdata[lane]
+            };
+            wire [23:0] lane_tuser;
+
+            t510_fengine_xfft_4096_lane u_lane_xfft (
+                .aclk(aclk),
+                .s_axis_config_tdata(lane_config_tdata),
+                .s_axis_config_tvalid(lane_cfg_tvalid[lane]),
+                .s_axis_config_tready(lane_cfg_tready[lane]),
+                .s_axis_data_tdata(s_axis_data_tdata[lane*32 +: 32]),
+                .s_axis_data_tvalid(lane_data_tvalid[lane]),
+                .s_axis_data_tready(lane_data_tready[lane]),
+                .s_axis_data_tlast(lane_data_tlast[lane]),
+                .m_axis_data_tdata(m_axis_data_tdata[lane*32 +: 32]),
+                .m_axis_data_tuser(lane_tuser),
+                .m_axis_data_tvalid(lane_m_axis_tvalid[lane]),
+                .m_axis_data_tready(lane_m_axis_tready[lane]),
+                .m_axis_data_tlast(lane_m_axis_tlast[lane]),
+                .m_axis_status_tdata(lane_status_tdata[lane*8 +: 8]),
+                .m_axis_status_tvalid(lane_status_tvalid[lane]),
+                .m_axis_status_tready(lane_m_axis_status_tready[lane]),
+                .event_frame_started(lane_frame_started[lane]),
+                .event_tlast_unexpected(lane_tlast_unexpected[lane]),
+                .event_tlast_missing(lane_tlast_missing[lane]),
+                .event_fft_overflow(lane_fft_overflow[lane]),
+                .event_status_channel_halt(lane_status_halt[lane]),
+                .event_data_in_channel_halt(lane_data_in_halt[lane]),
+                .event_data_out_channel_halt(lane_data_out_halt[lane])
+            );
+
+            assign lane_m_axis_tuser[lane*24 +: 24] = lane_tuser;
+            assign lane_m_axis_ovflo[lane] = lane_tuser[16];
+        end
+    endgenerate
+
+    assign m_axis_data_tvalid = all_lane_data_valid;
+    assign m_axis_data_tlast = lane_m_axis_tlast[0] && (&lane_m_axis_tlast);
+    assign m_axis_data_tuser = {
+        lane_m_axis_ovflo,
+        4'd0,
+        lane_m_axis_tuser[11:0]
+    };
+    assign m_axis_status_tvalid = all_lane_status_valid;
+    assign m_axis_status_tdata = {
+        lane_status_tdata[7*8],
+        lane_status_tdata[6*8],
+        lane_status_tdata[5*8],
+        lane_status_tdata[4*8],
+        lane_status_tdata[3*8],
+        lane_status_tdata[2*8],
+        lane_status_tdata[1*8],
+        lane_status_tdata[0]
+    };
+    assign event_frame_started = lane_frame_started[0];
+    assign event_tlast_unexpected = |lane_tlast_unexpected;
+    assign event_tlast_missing = |lane_tlast_missing;
+    assign event_fft_overflow = |lane_fft_overflow;
+    assign event_status_channel_halt = |lane_status_halt;
+    assign event_data_in_channel_halt = |lane_data_in_halt;
+    assign event_data_out_channel_halt = |lane_data_out_halt;
+
+endmodule
+`endif
+`endif
+
 module feng_channelizer_4096 #(
     parameter integer DATA_W = 1024,
     parameter integer NINPUT = 8,
@@ -202,6 +351,19 @@ module feng_channelizer_4096 #(
     logic              input_valid;
     logic [11:0]       input_bin_idx;
 
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    wire config_valid =
+        (DATA_W >= CELL_W) &&
+        ((DATA_W % CELL_W) == 0) &&
+        (CELLS_PER_BEAT == 4) &&
+        (NINPUT == 8) &&
+        (NCHAN == 4096) &&
+        (cfg_taps == 16'd0) &&
+        (cfg_chan0 == 32'd0) &&
+        (cfg_chan_count == 16'd256) &&
+        (cfg_time_count == 16'd1);
+    wire science_valid = config_valid;
+`else
     wire [31:0] window_cells = cfg_chan_count * cfg_time_count;
     wire [31:0] chan_end = cfg_chan0 + {16'd0, cfg_chan_count};
     wire config_valid =
@@ -222,6 +384,7 @@ module feng_channelizer_4096 #(
         (cfg_chan_count == 16'd256) &&
         (cfg_time_count == 16'd1) &&
         (LOCAL_NCHAN == 32'd4096);
+`endif
 
     logic [255:0] xfft_config_tdata;
     logic         xfft_config_tvalid;
@@ -258,6 +421,8 @@ module feng_channelizer_4096 #(
     wire input_fifo_rst = !rst_n || clear || !enable || !config_valid;
     wire input_fifo_full;
     wire input_fifo_empty;
+    wire input_fifo_wr_rst_busy;
+    wire input_fifo_rd_rst_busy;
     wire [INPUT_FIFO_COUNT_W-1:0] input_fifo_data_count;
     wire [INPUT_FIFO_W-1:0] input_fifo_dout;
     wire input_fifo_wr_en;
@@ -266,11 +431,15 @@ module feng_channelizer_4096 #(
     wire can_load_input = enable && config_valid && xfft_configured &&
                           input_tile_open &&
                           !input_tile_closing &&
+                          !input_fifo_rd_rst_busy &&
                           !input_fifo_empty &&
                           (input_frame_active || input_frame_can_start) &&
                           (!input_valid || input_last_cell_fire);
     wire load_input = input_fifo_rd_en;
-    assign s_axis_tready = enable && config_valid && xfft_configured && !input_fifo_full;
+    assign s_axis_tready = enable && config_valid && xfft_configured &&
+                           !input_fifo_wr_rst_busy &&
+                           !input_fifo_rd_rst_busy &&
+                           !input_fifo_full;
     assign input_fifo_wr_en = s_axis_tvalid && s_axis_tready;
     assign input_fifo_rd_en = can_load_input;
     assign input_fifo_level = {{(32-INPUT_FIFO_COUNT_W){1'b0}}, input_fifo_data_count};
@@ -290,6 +459,8 @@ module feng_channelizer_4096 #(
     wire         xfft_event_status_channel_halt;
     wire         xfft_event_data_in_channel_halt;
     wire         xfft_event_data_out_channel_halt;
+    wire [7:0]   xfft_config_done_debug;
+    wire [7:0]   xfft_config_ready_debug;
 
     wire [11:0] xfft_bin = xfft_m_axis_tuser[11:0];
     wire [31:0] xfft_bin_ext = {20'd0, xfft_bin};
@@ -337,10 +508,17 @@ module feng_channelizer_4096 #(
     assign m_axis_tdata = output_word;
     assign m_axis_sample0 = output_sample0;
     assign m_axis_tvalid = output_valid;
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    assign packet_chan0 = packet_chan0_reg;
+    assign packet_chan_count = 16'd256;
+    assign packet_time_count = 16'd1;
+`else
     assign packet_chan0 = (packet_chan_count_reg != 16'd0) ? packet_chan0_reg : cfg_chan0;
     assign packet_chan_count = (packet_chan_count_reg != 16'd0) ? packet_chan_count_reg : cfg_chan_count;
     assign packet_time_count = (packet_time_count_reg != 16'd0) ? packet_time_count_reg : cfg_time_count;
+`endif
 
+`ifndef T510_STAGE27H_PRODUCTION_ONLY
     function automatic [15:0] abs16(input logic signed [15:0] value);
         begin
             if (value == -16'sd32768) begin
@@ -368,6 +546,7 @@ module feng_channelizer_4096 #(
             cell_metric = sum;
         end
     endfunction
+`endif
 
     always_comb begin
         xfft_config_tdata = 256'd0;
@@ -408,6 +587,36 @@ module feng_channelizer_4096 #(
         .event_data_in_channel_halt(xfft_event_data_in_channel_halt),
         .event_data_out_channel_halt(xfft_event_data_out_channel_halt)
     );
+    assign xfft_config_done_debug = xfft_configured ? 8'hff : 8'h00;
+    assign xfft_config_ready_debug = {8{xfft_config_tready}};
+`elsif T510_STAGE27H_PRODUCTION_ONLY
+    t510_fengine_xfft_4096_8lane_streaming u_fengine_xfft_4096 (
+        .aclk(clk),
+        .s_axis_config_tdata(xfft_config_tdata),
+        .s_axis_config_tvalid(xfft_config_tvalid),
+        .s_axis_config_tready(xfft_config_tready),
+        .s_axis_data_tdata(selected_input_cell),
+        .s_axis_data_tvalid(xfft_s_axis_tvalid),
+        .s_axis_data_tready(xfft_s_axis_tready),
+        .s_axis_data_tlast(xfft_s_axis_tlast),
+        .m_axis_data_tdata(xfft_m_axis_tdata),
+        .m_axis_data_tuser(xfft_m_axis_tuser),
+        .m_axis_data_tvalid(xfft_m_axis_tvalid),
+        .m_axis_data_tready(xfft_m_axis_tready),
+        .m_axis_data_tlast(xfft_m_axis_tlast),
+        .m_axis_status_tdata(xfft_m_axis_status_tdata),
+        .m_axis_status_tvalid(xfft_m_axis_status_tvalid),
+        .m_axis_status_tready(xfft_m_axis_status_tready),
+        .event_frame_started(xfft_event_frame_started),
+        .event_tlast_unexpected(xfft_event_tlast_unexpected),
+        .event_tlast_missing(xfft_event_tlast_missing),
+        .event_fft_overflow(xfft_event_fft_overflow),
+        .event_status_channel_halt(xfft_event_status_channel_halt),
+        .event_data_in_channel_halt(xfft_event_data_in_channel_halt),
+        .event_data_out_channel_halt(xfft_event_data_out_channel_halt),
+        .config_done_debug(xfft_config_done_debug),
+        .config_ready_debug(xfft_config_ready_debug)
+    );
 `else
     t510_fengine_xfft_4096 u_fengine_xfft_4096 (
         .aclk(clk),
@@ -434,6 +643,8 @@ module feng_channelizer_4096 #(
         .event_data_in_channel_halt(xfft_event_data_in_channel_halt),
         .event_data_out_channel_halt(xfft_event_data_out_channel_halt)
     );
+    assign xfft_config_done_debug = xfft_configured ? 8'hff : 8'h00;
+    assign xfft_config_ready_debug = {8{xfft_config_tready}};
 `endif
 
     xpm_memory_sdpram #(
@@ -509,12 +720,12 @@ module feng_channelizer_4096 #(
         .prog_empty(),
         .prog_full(),
         .rd_data_count(input_fifo_data_count),
-        .rd_rst_busy(),
+        .rd_rst_busy(input_fifo_rd_rst_busy),
         .sbiterr(),
         .underflow(),
         .wr_ack(),
         .wr_data_count(),
-        .wr_rst_busy(),
+        .wr_rst_busy(input_fifo_wr_rst_busy),
         .din({s_axis_sample0, s_axis_tdata}),
         .injectdbiterr(1'b0),
         .injectsbiterr(1'b0),
@@ -606,12 +817,12 @@ module feng_channelizer_4096 #(
                 end
             end
         end else begin
-            if (clear || !enable || !config_valid) begin
+            if (!config_valid) begin
                 input_valid <= 1'b0;
                 input_subidx <= {PACK_IDX_W{1'b0}};
                 input_bin_idx <= 12'd0;
                 input_frame_count <= 3'd0;
-                xfft_config_tvalid <= enable && config_valid;
+                xfft_config_tvalid <= 1'b0;
                 xfft_configured <= 1'b0;
                 tile_capture_time_idx <= 2'd0;
                 tile_capture_armed <= 1'b0;
@@ -659,6 +870,49 @@ module feng_channelizer_4096 #(
                     xfft_configured <= 1'b1;
                 end
 
+                if (clear || !enable) begin
+                    input_valid <= 1'b0;
+                    input_subidx <= {PACK_IDX_W{1'b0}};
+                    input_bin_idx <= 12'd0;
+                    input_frame_count <= 3'd0;
+                    tile_capture_time_idx <= 2'd0;
+                    tile_capture_armed <= 1'b0;
+                    tile_valid <= {TILE_BUFFERS{1'b0}};
+                    capture_buf_sel <= 1'b0;
+                    emit_buf_sel <= 1'b0;
+                    tile_rd_addr <= {TILE_TOTAL_BEAT_AW{1'b0}};
+                    emit_block_idx <= 6'd0;
+                    emit_beat_idx <= 6'd0;
+                    emit_read_wait <= 1'b0;
+                    emit_read_load <= 1'b0;
+                    output_valid <= 1'b0;
+                    packet_chan_count_reg <= 16'd0;
+                    packet_time_count_reg <= 16'd0;
+                    frame_fifo_wr_ptr <= {FRAME_FIFO_AW{1'b0}};
+                    frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
+                    frame_fifo_count <= FRAME_FIFO_ZERO_COUNT;
+                    if (clear) begin
+                        frame_count <= 32'd0;
+                        overflow_count <= 32'd0;
+                        data_halt_count <= 32'd0;
+                        xfft_event_count <= 32'd0;
+                        tile_overflow_count <= 32'd0;
+                        xfft_tlast_unexpected_count <= 32'd0;
+                        xfft_tlast_missing_count <= 32'd0;
+                        xfft_fft_overflow_count <= 32'd0;
+                        xfft_data_out_halt_count <= 32'd0;
+                        xfft_status_halt_count <= 32'd0;
+                        capture_backpressure_count <= 32'd0;
+                        frame_sample0_overflow_count <= 32'd0;
+                        peak_chan <= 32'd0;
+                        peak_power <= 32'd0;
+                        for (reset_buf = 0; reset_buf < TILE_BUFFERS; reset_buf = reset_buf + 1) begin
+                            for (reset_frame = 0; reset_frame < TILE_FRAMES; reset_frame = reset_frame + 1) begin
+                                tile_sample0[reset_buf][reset_frame] <= 64'd0;
+                            end
+                        end
+                    end
+                end else begin
                 if (output_fire) begin
                     output_valid <= 1'b0;
                     if (emit_tile_last_beat) begin
@@ -732,10 +986,12 @@ module feng_channelizer_4096 #(
                     if (xfft_bin == 12'd0) begin
                         tile_sample0[capture_buf_sel][tile_capture_time_idx] <= current_output_frame_sample0;
                     end
+`ifndef T510_STAGE27H_PRODUCTION_ONLY
                     if (cell_metric(xfft_m_axis_tdata) >= peak_power) begin
                         peak_power <= cell_metric(xfft_m_axis_tdata);
                         peak_chan <= xfft_bin_ext;
                     end
+`endif
                     if (xfft_m_axis_tlast && capture_buffer_free) begin
                         if (tile_capture_time_idx == TILE_FRAME_LAST_U2) begin
                             tile_valid[capture_buf_sel] <= 1'b1;
@@ -809,14 +1065,19 @@ module feng_channelizer_4096 #(
                 if (frame_sample0_enqueue && !frame_sample0_push) begin
                     frame_sample0_overflow_count <= frame_sample0_overflow_count + 32'd1;
                 end
+                end
             end
         end
     end
 
     assign status = {
-        16'd0,
+        xfft_config_ready_debug,
+        xfft_config_done_debug,
         cfg_fft_shift[3:0],
-        4'b0001,
+        xfft_config_tready,
+        xfft_config_tvalid,
+        xfft_configured,
+        1'b1,
         (data_halt_count != 32'd0),
         (input_fifo_level >= INPUT_BEATS_PER_FRAME),
         science_valid && xfft_configured,
@@ -828,6 +1089,453 @@ module feng_channelizer_4096 #(
     };
 
 endmodule
+
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+module feng_channelizer_4096_streaming_27h #(
+    parameter integer DATA_W = 1024,
+    parameter integer NINPUT = 8,
+    parameter integer NCHAN  = 4096
+) (
+    input  wire                 clk,
+    input  wire                 rst_n,
+    input  wire                 enable,
+    input  wire                 clear,
+    input  wire [15:0]          cfg_taps,
+    input  wire [15:0]          cfg_fft_shift,
+    input  wire [31:0]          cfg_chan0,
+    input  wire [15:0]          cfg_chan_count,
+    input  wire [15:0]          cfg_time_count,
+    input  wire [DATA_W-1:0]    s_axis_tdata,
+    input  wire [63:0]          s_axis_sample0,
+    input  wire                 s_axis_tvalid,
+    output wire                 s_axis_tready,
+    output wire [DATA_W-1:0]    m_axis_tdata,
+    output wire [63:0]          m_axis_sample0,
+    output wire                 m_axis_tvalid,
+    input  wire                 m_axis_tready,
+    output wire [31:0]          status,
+    output logic [31:0]         frame_count,
+    output logic [31:0]         overflow_count,
+    output logic [31:0]         data_halt_count,
+    output logic [31:0]         xfft_event_count,
+    output logic [31:0]         tile_overflow_count,
+    output logic [31:0]         xfft_tlast_unexpected_count,
+    output logic [31:0]         xfft_tlast_missing_count,
+    output logic [31:0]         xfft_fft_overflow_count,
+    output logic [31:0]         xfft_data_out_halt_count,
+    output logic [31:0]         xfft_status_halt_count,
+    output logic [31:0]         capture_backpressure_count,
+    output logic [31:0]         frame_sample0_overflow_count,
+    output wire [31:0]          input_fifo_level,
+    output logic [31:0]         peak_chan,
+    output logic [31:0]         peak_power,
+    output wire [31:0]          packet_chan0,
+    output wire [15:0]          packet_chan_count,
+    output wire [15:0]          packet_time_count
+);
+
+    localparam integer CELL_W = NINPUT * 32;
+    localparam integer CELLS_PER_BEAT = DATA_W / CELL_W;
+    localparam integer PACK_IDX_W = (CELLS_PER_BEAT <= 1) ? 1 : $clog2(CELLS_PER_BEAT);
+    localparam integer FRAME_FIFO_DEPTH = 16;
+    localparam integer FRAME_FIFO_AW = 4;
+    localparam [FRAME_FIFO_AW:0] FRAME_FIFO_DEPTH_COUNT = FRAME_FIFO_DEPTH;
+    localparam [FRAME_FIFO_AW:0] FRAME_FIFO_ZERO_COUNT = {(FRAME_FIFO_AW+1){1'b0}};
+
+    logic [DATA_W-1:0] input_word;
+    logic [63:0]       input_sample0;
+    logic [PACK_IDX_W-1:0] input_subidx;
+    logic              input_valid;
+    logic [11:0]       input_bin_idx;
+
+    wire [CELL_W-1:0] selected_input_cell =
+        input_word[input_subidx*CELL_W +: CELL_W];
+    wire [63:0] selected_input_sample0 =
+        input_sample0 + {{(64-PACK_IDX_W){1'b0}}, input_subidx};
+    wire [23:0] xfft_scale_schedule = (cfg_fft_shift == 16'd0) ? 24'd0 : {8'h55, cfg_fft_shift};
+
+    logic [255:0] xfft_config_tdata;
+    logic         xfft_config_tvalid;
+    wire          xfft_config_tready;
+    logic         xfft_configured;
+
+    wire config_valid =
+        (DATA_W >= CELL_W) &&
+        ((DATA_W % CELL_W) == 0) &&
+        (CELLS_PER_BEAT == 4) &&
+        (NINPUT == 8) &&
+        (NCHAN == 4096) &&
+        (cfg_taps == 16'd0) &&
+        (cfg_chan0 == 32'd0) &&
+        (cfg_chan_count == 16'd256) &&
+        (cfg_time_count == 16'd1);
+    wire science_valid = config_valid && xfft_configured;
+
+    wire xfft_s_axis_tvalid = enable && config_valid && xfft_configured && input_valid;
+    wire xfft_s_axis_tready;
+    wire xfft_s_axis_tlast = (input_bin_idx == 12'd4095);
+    wire xfft_input_fire = xfft_s_axis_tvalid && xfft_s_axis_tready;
+    wire input_last_cell_fire = xfft_input_fire && (input_subidx == (CELLS_PER_BEAT - 1));
+    wire input_word_fire = s_axis_tvalid && s_axis_tready;
+
+    assign s_axis_tready = enable && config_valid && xfft_configured &&
+                           (!input_valid || input_last_cell_fire);
+
+    wire [255:0] xfft_m_axis_tdata;
+    wire [23:0]  xfft_m_axis_tuser;
+    wire         xfft_m_axis_tvalid;
+    wire         xfft_m_axis_tready;
+    wire         xfft_m_axis_tlast;
+    wire [7:0]   xfft_m_axis_status_tdata;
+    wire         xfft_m_axis_status_tvalid;
+    wire         xfft_m_axis_status_tready;
+    wire         xfft_event_frame_started;
+    wire         xfft_event_tlast_unexpected;
+    wire         xfft_event_tlast_missing;
+    wire         xfft_event_fft_overflow;
+    wire         xfft_event_status_channel_halt;
+    wire         xfft_event_data_in_channel_halt;
+    wire         xfft_event_data_out_channel_halt;
+    wire [7:0]   xfft_config_done_debug;
+    wire [7:0]   xfft_config_ready_debug;
+
+    logic [DATA_W-1:0] pack_word;
+    logic [DATA_W-1:0] pack_word_next;
+    logic [PACK_IDX_W-1:0] pack_subidx;
+    logic [DATA_W-1:0] output_word;
+    logic [63:0]       output_sample0;
+    logic              output_valid;
+    logic [31:0]       packet_chan0_reg;
+
+    wire [11:0] xfft_bin = xfft_m_axis_tuser[11:0];
+    wire output_fire = output_valid && m_axis_tready;
+    wire output_slot_ready = !output_valid || m_axis_tready;
+    assign xfft_m_axis_tready = output_slot_ready;
+    assign xfft_m_axis_status_tready = 1'b1;
+    wire xfft_output_fire = xfft_m_axis_tvalid && xfft_m_axis_tready;
+    wire pack_last_cell = (xfft_bin[1:0] == 2'd3);
+
+    (* ram_style = "distributed" *) logic [63:0] frame_sample0_fifo [0:FRAME_FIFO_DEPTH-1];
+    logic [FRAME_FIFO_AW-1:0] frame_fifo_wr_ptr;
+    logic [FRAME_FIFO_AW-1:0] frame_fifo_rd_ptr;
+    logic [FRAME_FIFO_AW:0]   frame_fifo_count;
+    wire frame_fifo_empty = (frame_fifo_count == FRAME_FIFO_ZERO_COUNT);
+    wire frame_fifo_full = (frame_fifo_count == FRAME_FIFO_DEPTH_COUNT);
+    wire frame_sample0_enqueue = xfft_input_fire && (input_bin_idx == 12'd0);
+    wire frame_sample0_dequeue = xfft_output_fire && xfft_m_axis_tlast;
+    wire frame_sample0_push = frame_sample0_enqueue && (!frame_fifo_full || frame_sample0_dequeue);
+    wire frame_sample0_pop = frame_sample0_dequeue && !frame_fifo_empty;
+    wire [63:0] current_output_frame_sample0 =
+        !frame_fifo_empty ? frame_sample0_fifo[frame_fifo_rd_ptr] : selected_input_sample0;
+
+    wire feng_busy =
+        input_valid ||
+        (input_bin_idx != 12'd0) ||
+        output_valid ||
+        (pack_subidx != {PACK_IDX_W{1'b0}}) ||
+        xfft_config_tvalid;
+
+    assign m_axis_tdata = output_word;
+    assign m_axis_sample0 = output_sample0;
+    assign m_axis_tvalid = output_valid;
+    assign packet_chan0 = packet_chan0_reg;
+    assign packet_chan_count = 16'd256;
+    assign packet_time_count = 16'd1;
+    assign input_fifo_level = 32'd0;
+
+    always_comb begin
+        xfft_config_tdata = 256'd0;
+        xfft_config_tdata[7:0] = 8'hff;
+        xfft_config_tdata[31:8] = xfft_scale_schedule;
+        xfft_config_tdata[55:32] = xfft_scale_schedule;
+        xfft_config_tdata[79:56] = xfft_scale_schedule;
+        xfft_config_tdata[103:80] = xfft_scale_schedule;
+        xfft_config_tdata[127:104] = xfft_scale_schedule;
+        xfft_config_tdata[151:128] = xfft_scale_schedule;
+        xfft_config_tdata[175:152] = xfft_scale_schedule;
+        xfft_config_tdata[199:176] = xfft_scale_schedule;
+    end
+
+    always_comb begin
+        pack_word_next = pack_word;
+        pack_word_next[pack_subidx*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+    end
+
+`ifdef T510_SIM_FFT_MODEL
+    t510_fengine_xfft_4096_sim_model u_fengine_xfft_4096 (
+        .aclk(clk),
+        .s_axis_config_tdata(xfft_config_tdata),
+        .s_axis_config_tvalid(xfft_config_tvalid),
+        .s_axis_config_tready(xfft_config_tready),
+        .s_axis_data_tdata(selected_input_cell),
+        .s_axis_data_tvalid(xfft_s_axis_tvalid),
+        .s_axis_data_tready(xfft_s_axis_tready),
+        .s_axis_data_tlast(xfft_s_axis_tlast),
+        .m_axis_data_tdata(xfft_m_axis_tdata),
+        .m_axis_data_tuser(xfft_m_axis_tuser),
+        .m_axis_data_tvalid(xfft_m_axis_tvalid),
+        .m_axis_data_tready(xfft_m_axis_tready),
+        .m_axis_data_tlast(xfft_m_axis_tlast),
+        .m_axis_status_tdata(xfft_m_axis_status_tdata),
+        .m_axis_status_tvalid(xfft_m_axis_status_tvalid),
+        .m_axis_status_tready(xfft_m_axis_status_tready),
+        .event_frame_started(xfft_event_frame_started),
+        .event_tlast_unexpected(xfft_event_tlast_unexpected),
+        .event_tlast_missing(xfft_event_tlast_missing),
+        .event_fft_overflow(xfft_event_fft_overflow),
+        .event_status_channel_halt(xfft_event_status_channel_halt),
+        .event_data_in_channel_halt(xfft_event_data_in_channel_halt),
+        .event_data_out_channel_halt(xfft_event_data_out_channel_halt)
+    );
+    assign xfft_config_done_debug = xfft_configured ? 8'hff : 8'h00;
+    assign xfft_config_ready_debug = {8{xfft_config_tready}};
+`else
+    t510_fengine_xfft_4096_8lane_streaming u_fengine_xfft_4096 (
+        .aclk(clk),
+        .s_axis_config_tdata(xfft_config_tdata),
+        .s_axis_config_tvalid(xfft_config_tvalid),
+        .s_axis_config_tready(xfft_config_tready),
+        .s_axis_data_tdata(selected_input_cell),
+        .s_axis_data_tvalid(xfft_s_axis_tvalid),
+        .s_axis_data_tready(xfft_s_axis_tready),
+        .s_axis_data_tlast(xfft_s_axis_tlast),
+        .m_axis_data_tdata(xfft_m_axis_tdata),
+        .m_axis_data_tuser(xfft_m_axis_tuser),
+        .m_axis_data_tvalid(xfft_m_axis_tvalid),
+        .m_axis_data_tready(xfft_m_axis_tready),
+        .m_axis_data_tlast(xfft_m_axis_tlast),
+        .m_axis_status_tdata(xfft_m_axis_status_tdata),
+        .m_axis_status_tvalid(xfft_m_axis_status_tvalid),
+        .m_axis_status_tready(xfft_m_axis_status_tready),
+        .event_frame_started(xfft_event_frame_started),
+        .event_tlast_unexpected(xfft_event_tlast_unexpected),
+        .event_tlast_missing(xfft_event_tlast_missing),
+        .event_fft_overflow(xfft_event_fft_overflow),
+        .event_status_channel_halt(xfft_event_status_channel_halt),
+        .event_data_in_channel_halt(xfft_event_data_in_channel_halt),
+        .event_data_out_channel_halt(xfft_event_data_out_channel_halt),
+        .config_done_debug(xfft_config_done_debug),
+        .config_ready_debug(xfft_config_ready_debug)
+    );
+`endif
+
+    always_ff @(posedge clk) begin
+        if (frame_sample0_push) begin
+            frame_sample0_fifo[frame_fifo_wr_ptr] <= selected_input_sample0;
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            input_word <= {DATA_W{1'b0}};
+            input_sample0 <= 64'd0;
+            input_subidx <= {PACK_IDX_W{1'b0}};
+            input_valid <= 1'b0;
+            input_bin_idx <= 12'd0;
+            xfft_config_tvalid <= 1'b0;
+            xfft_configured <= 1'b0;
+            pack_word <= {DATA_W{1'b0}};
+            pack_subidx <= {PACK_IDX_W{1'b0}};
+            output_word <= {DATA_W{1'b0}};
+            output_sample0 <= 64'd0;
+            output_valid <= 1'b0;
+            packet_chan0_reg <= 32'd0;
+            frame_fifo_wr_ptr <= {FRAME_FIFO_AW{1'b0}};
+            frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
+            frame_fifo_count <= FRAME_FIFO_ZERO_COUNT;
+            frame_count <= 32'd0;
+            overflow_count <= 32'd0;
+            data_halt_count <= 32'd0;
+            xfft_event_count <= 32'd0;
+            tile_overflow_count <= 32'd0;
+            xfft_tlast_unexpected_count <= 32'd0;
+            xfft_tlast_missing_count <= 32'd0;
+            xfft_fft_overflow_count <= 32'd0;
+            xfft_data_out_halt_count <= 32'd0;
+            xfft_status_halt_count <= 32'd0;
+            capture_backpressure_count <= 32'd0;
+            frame_sample0_overflow_count <= 32'd0;
+            peak_chan <= 32'd0;
+            peak_power <= 32'd0;
+        end else begin
+            if (!config_valid) begin
+                input_valid <= 1'b0;
+                input_subidx <= {PACK_IDX_W{1'b0}};
+                input_bin_idx <= 12'd0;
+                xfft_config_tvalid <= 1'b0;
+                xfft_configured <= 1'b0;
+                pack_subidx <= {PACK_IDX_W{1'b0}};
+                output_valid <= 1'b0;
+                frame_fifo_wr_ptr <= {FRAME_FIFO_AW{1'b0}};
+                frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
+                frame_fifo_count <= FRAME_FIFO_ZERO_COUNT;
+                if (clear) begin
+                    frame_count <= 32'd0;
+                    overflow_count <= 32'd0;
+                    data_halt_count <= 32'd0;
+                    xfft_event_count <= 32'd0;
+                    tile_overflow_count <= 32'd0;
+                    xfft_tlast_unexpected_count <= 32'd0;
+                    xfft_tlast_missing_count <= 32'd0;
+                    xfft_fft_overflow_count <= 32'd0;
+                    xfft_data_out_halt_count <= 32'd0;
+                    xfft_status_halt_count <= 32'd0;
+                    capture_backpressure_count <= 32'd0;
+                    frame_sample0_overflow_count <= 32'd0;
+                    peak_chan <= 32'd0;
+                    peak_power <= 32'd0;
+                end
+            end else begin
+                if (!xfft_configured && !xfft_config_tvalid) begin
+                    xfft_config_tvalid <= 1'b1;
+                end
+                if (xfft_config_tvalid && xfft_config_tready) begin
+                    xfft_config_tvalid <= 1'b0;
+                    xfft_configured <= 1'b1;
+                end
+
+                if (clear || !enable) begin
+                    input_valid <= 1'b0;
+                    input_subidx <= {PACK_IDX_W{1'b0}};
+                    input_bin_idx <= 12'd0;
+                    pack_subidx <= {PACK_IDX_W{1'b0}};
+                    output_valid <= 1'b0;
+                    frame_fifo_wr_ptr <= {FRAME_FIFO_AW{1'b0}};
+                    frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
+                    frame_fifo_count <= FRAME_FIFO_ZERO_COUNT;
+                    if (clear) begin
+                        frame_count <= 32'd0;
+                        overflow_count <= 32'd0;
+                        data_halt_count <= 32'd0;
+                        xfft_event_count <= 32'd0;
+                        tile_overflow_count <= 32'd0;
+                        xfft_tlast_unexpected_count <= 32'd0;
+                        xfft_tlast_missing_count <= 32'd0;
+                        xfft_fft_overflow_count <= 32'd0;
+                        xfft_data_out_halt_count <= 32'd0;
+                        xfft_status_halt_count <= 32'd0;
+                        capture_backpressure_count <= 32'd0;
+                        frame_sample0_overflow_count <= 32'd0;
+                        peak_chan <= 32'd0;
+                        peak_power <= 32'd0;
+                    end
+                end else begin
+                    if (output_fire && !(xfft_output_fire && pack_last_cell)) begin
+                        output_valid <= 1'b0;
+                    end
+
+                    if (input_word_fire) begin
+                        input_word <= s_axis_tdata;
+                        input_sample0 <= s_axis_sample0;
+                        input_valid <= 1'b1;
+                        input_subidx <= {PACK_IDX_W{1'b0}};
+                    end else if (input_last_cell_fire) begin
+                        input_valid <= 1'b0;
+                        input_subidx <= {PACK_IDX_W{1'b0}};
+                    end else if (xfft_input_fire) begin
+                        input_subidx <= input_subidx + {{(PACK_IDX_W-1){1'b0}}, 1'b1};
+                    end
+
+                    if (xfft_input_fire) begin
+                        if (input_bin_idx == 12'd4095) begin
+                            input_bin_idx <= 12'd0;
+                        end else begin
+                            input_bin_idx <= input_bin_idx + 12'd1;
+                        end
+                    end
+
+                    if (xfft_output_fire) begin
+                        pack_word <= pack_word_next;
+                        if (pack_last_cell) begin
+                            output_word <= pack_word_next;
+                            output_sample0 <= current_output_frame_sample0;
+                            output_valid <= 1'b1;
+                            packet_chan0_reg <= {20'd0, xfft_bin[11:8], 8'd0};
+                            pack_subidx <= {PACK_IDX_W{1'b0}};
+                        end else begin
+                            pack_subidx <= pack_subidx + {{(PACK_IDX_W-1){1'b0}}, 1'b1};
+                        end
+                        if (xfft_m_axis_tlast) begin
+                            frame_count <= frame_count + 32'd1;
+                        end
+                    end
+
+                    if (frame_sample0_push) begin
+                        frame_fifo_wr_ptr <= frame_fifo_wr_ptr + {{(FRAME_FIFO_AW-1){1'b0}}, 1'b1};
+                    end
+                    if (frame_sample0_pop) begin
+                        frame_fifo_rd_ptr <= frame_fifo_rd_ptr + {{(FRAME_FIFO_AW-1){1'b0}}, 1'b1};
+                    end
+                    case ({frame_sample0_push, frame_sample0_pop})
+                        2'b10: if (frame_fifo_count != FRAME_FIFO_DEPTH_COUNT) begin
+                            frame_fifo_count <= frame_fifo_count + {{FRAME_FIFO_AW{1'b0}}, 1'b1};
+                        end
+                        2'b01: if (frame_fifo_count != FRAME_FIFO_ZERO_COUNT) begin
+                            frame_fifo_count <= frame_fifo_count - {{FRAME_FIFO_AW{1'b0}}, 1'b1};
+                        end
+                        default: frame_fifo_count <= frame_fifo_count;
+                    endcase
+
+                    if (xfft_event_tlast_unexpected ||
+                        xfft_event_tlast_missing ||
+                        xfft_event_fft_overflow ||
+                        (frame_sample0_enqueue && !frame_sample0_push)) begin
+                        overflow_count <= overflow_count + 32'd1;
+                    end
+                    if (xfft_event_tlast_unexpected ||
+                        xfft_event_tlast_missing ||
+                        xfft_event_fft_overflow) begin
+                        xfft_event_count <= xfft_event_count + 32'd1;
+                    end
+                    if (xfft_event_data_in_channel_halt) begin
+                        data_halt_count <= data_halt_count + 32'd1;
+                    end
+                    if (xfft_event_tlast_unexpected) begin
+                        xfft_tlast_unexpected_count <= xfft_tlast_unexpected_count + 32'd1;
+                    end
+                    if (xfft_event_tlast_missing) begin
+                        xfft_tlast_missing_count <= xfft_tlast_missing_count + 32'd1;
+                    end
+                    if (xfft_event_fft_overflow) begin
+                        xfft_fft_overflow_count <= xfft_fft_overflow_count + 32'd1;
+                    end
+                    if (xfft_event_data_out_channel_halt) begin
+                        xfft_data_out_halt_count <= xfft_data_out_halt_count + 32'd1;
+                    end
+                    if (xfft_event_status_channel_halt) begin
+                        xfft_status_halt_count <= xfft_status_halt_count + 32'd1;
+                    end
+                    if (output_valid && !m_axis_tready) begin
+                        capture_backpressure_count <= capture_backpressure_count + 32'd1;
+                    end
+                    if (frame_sample0_enqueue && !frame_sample0_push) begin
+                        frame_sample0_overflow_count <= frame_sample0_overflow_count + 32'd1;
+                    end
+                end
+            end
+        end
+    end
+
+    assign status = {
+        xfft_config_ready_debug,
+        xfft_config_done_debug,
+        cfg_fft_shift[3:0],
+        xfft_config_tready,
+        xfft_config_tvalid,
+        xfft_configured,
+        1'b1,
+        (data_halt_count != 32'd0),
+        s_axis_tready,
+        science_valid,
+        feng_busy,
+        (overflow_count != 32'd0),
+        output_valid,
+        config_valid,
+        enable
+    };
+
+endmodule
+`endif
 
 module pfb_channelizer #(
     parameter integer DATA_W = 1024,
@@ -872,6 +1580,50 @@ module pfb_channelizer #(
     output wire [15:0]          packet_time_count
 );
 
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+    feng_channelizer_4096_streaming_27h #(
+        .DATA_W(DATA_W),
+        .NINPUT(NINPUT),
+        .NCHAN(NCHAN)
+    ) u_feng_channelizer_4096 (
+        .clk(clk),
+        .rst_n(rst_n),
+        .enable(enable),
+        .clear(clear),
+        .cfg_taps(cfg_taps),
+        .cfg_fft_shift(cfg_fft_shift),
+        .cfg_chan0(cfg_chan0),
+        .cfg_chan_count(cfg_chan_count),
+        .cfg_time_count(cfg_time_count),
+        .s_axis_tdata(s_axis_tdata),
+        .s_axis_sample0(s_axis_sample0),
+        .s_axis_tvalid(s_axis_tvalid),
+        .s_axis_tready(s_axis_tready),
+        .m_axis_tdata(m_axis_tdata),
+        .m_axis_sample0(m_axis_sample0),
+        .m_axis_tvalid(m_axis_tvalid),
+        .m_axis_tready(m_axis_tready),
+        .status(status),
+        .frame_count(frame_count),
+        .overflow_count(overflow_count),
+        .data_halt_count(data_halt_count),
+        .xfft_event_count(xfft_event_count),
+        .tile_overflow_count(tile_overflow_count),
+        .xfft_tlast_unexpected_count(xfft_tlast_unexpected_count),
+        .xfft_tlast_missing_count(xfft_tlast_missing_count),
+        .xfft_fft_overflow_count(xfft_fft_overflow_count),
+        .xfft_data_out_halt_count(xfft_data_out_halt_count),
+        .xfft_status_halt_count(xfft_status_halt_count),
+        .capture_backpressure_count(capture_backpressure_count),
+        .frame_sample0_overflow_count(frame_sample0_overflow_count),
+        .input_fifo_level(input_fifo_level),
+        .peak_chan(peak_chan),
+        .peak_power(peak_power),
+        .packet_chan0(packet_chan0),
+        .packet_chan_count(packet_chan_count),
+        .packet_time_count(packet_time_count)
+    );
+`else
     feng_channelizer_4096 #(
         .DATA_W(DATA_W),
         .NINPUT(NINPUT),
@@ -914,5 +1666,6 @@ module pfb_channelizer #(
         .packet_chan_count(packet_chan_count),
         .packet_time_count(packet_time_count)
     );
+`endif
 
 endmodule

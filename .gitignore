@@ -13,6 +13,7 @@ __pycache__/
 # Vivado/XSim generated state
 /.Xil/
 /.xsim_batch/
+/.xsim_xfft_wrapper/
 /.vmcp/
 /demo-ant.cache/
 /demo-ant.gen/
@@ -46,6 +47,8 @@ rust/**/target/
 *.wdb
 *.wcfg
 hs_err_pid*.log
+/tight_setup_hold_pins.txt
+/xvlog.pb
 
 # Top-level hardware run captures
 /stage*.json

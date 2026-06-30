@@ -7,6 +7,7 @@ open_project [file join $repo_root demo-ant.xpr]
 # Stage 27h keeps the Stage 27f production wire contract and rebuilds the
 # overlay for TIME_SPEC 100MHz board + host convergence.
 source [file join $repo_root scripts stage24d_recreate_cmac_ip.tcl]
+set ::T510_STAGE27H_STREAMING_XFFT 1
 source [file join $repo_root scripts stage27f_create_fengine_xfft_ip.tcl]
 set ::T510_STAGE27H_PRODUCTION_ONLY 1
 source [file join $repo_root scripts setup_project.tcl]
@@ -41,45 +42,39 @@ if {[llength $cmac_run] != 0} {
     puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: no CMAC OOC run found"
 }
 
-set xfft_run [get_runs -quiet t510_fengine_xfft_4096_synth_1]
-set xfft_ip [get_ips -quiet t510_fengine_xfft_4096]
-set xfft_disk_run_dir [file join $repo_root demo-ant.runs t510_fengine_xfft_4096_synth_1]
-set xfft_disk_dcp [file join $xfft_disk_run_dir t510_fengine_xfft_4096.dcp]
+set xfft_run [get_runs -quiet t510_fengine_xfft_4096_lane_synth_1]
+set xfft_ip [get_ips -quiet t510_fengine_xfft_4096_lane]
+set xfft_disk_run_dir [file join $repo_root demo-ant.runs t510_fengine_xfft_4096_lane_synth_1]
+set xfft_disk_dcp [file join $xfft_disk_run_dir t510_fengine_xfft_4096_lane.dcp]
 set xfft_disk_done [file join $xfft_disk_run_dir __synthesis_is_complete__]
 if {[llength $xfft_run] == 0 && [llength $xfft_ip] != 0} {
-    if {[file exists $xfft_disk_dcp] && [file exists $xfft_disk_done]} {
-        puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: reuse disk F-engine XFFT OOC DCP=$xfft_disk_dcp"
-    } else {
-        puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: create missing F-engine XFFT OOC run"
-        create_ip_run $xfft_ip -force
-        set xfft_run [get_runs -quiet t510_fengine_xfft_4096_synth_1]
-    }
+    puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: create missing nonrealtime streaming F-engine lane XFFT OOC run"
+    create_ip_run $xfft_ip -force
+    set xfft_run [get_runs -quiet t510_fengine_xfft_4096_lane_synth_1]
 }
 if {[llength $xfft_run] != 0} {
-    set xfft_run_dir [get_property DIRECTORY [get_runs t510_fengine_xfft_4096_synth_1]]
-    set xfft_dcp [file join $xfft_run_dir t510_fengine_xfft_4096.dcp]
+    set xfft_run_dir [get_property DIRECTORY [get_runs t510_fengine_xfft_4096_lane_synth_1]]
+    set xfft_dcp [file join $xfft_run_dir t510_fengine_xfft_4096_lane.dcp]
     set xfft_done [file join $xfft_run_dir __synthesis_is_complete__]
-    puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: rebuild F-engine XFFT OOC for nonrealtime throttle"
-    reset_run t510_fengine_xfft_4096_synth_1
-    launch_runs t510_fengine_xfft_4096_synth_1 -jobs 8
+    puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: rebuild F-engine lane XFFT OOC for pipelined streaming nonrealtime full-rate"
+    reset_run t510_fengine_xfft_4096_lane_synth_1
+    launch_runs t510_fengine_xfft_4096_lane_synth_1 -jobs 8
     set xfft_deadline [expr {[clock seconds] + 1800}]
     while {![file exists $xfft_dcp] || ![file exists $xfft_done]} {
         if {[clock seconds] > $xfft_deadline} {
-            error "F-engine XFFT OOC synthesis timeout; DCP not generated."
+            error "F-engine lane XFFT OOC synthesis timeout; DCP not generated."
         }
         after 30000
     }
-    set xfft_status [get_property STATUS [get_runs t510_fengine_xfft_4096_synth_1]]
-    puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: XFFT_OOC_STATUS=$xfft_status"
+    set xfft_status [get_property STATUS [get_runs t510_fengine_xfft_4096_lane_synth_1]]
+    puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: XFFT_LANE_OOC_STATUS=$xfft_status"
     if {![file exists $xfft_dcp]} {
-        error "F-engine XFFT OOC DCP missing after synthesis."
+        error "F-engine lane XFFT OOC DCP missing after synthesis."
     }
-} elseif {[file exists $xfft_disk_dcp] && [file exists $xfft_disk_done]} {
-    puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: XFFT_OOC_STATUS=disk DCP reused"
 } elseif {[llength $xfft_ip] != 0} {
-    error "F-engine XFFT OOC run not found; refusing black-box/global-synth fallback."
+    error "F-engine lane XFFT OOC run not found; refusing black-box/global-synth fallback."
 } else {
-    error "F-engine XFFT IP not found."
+    error "F-engine lane XFFT IP not found."
 }
 
 puts "STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE: rebuild top synthesis"

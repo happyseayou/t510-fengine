@@ -20,6 +20,9 @@ extra_xvlog_args=()
 for define in ${EXTRA_XVLOG_DEFINES:-}; do
   extra_xvlog_args+=("-d" "${define}")
 done
+if [[ "${T510_USE_SIM_FFT_MODEL:-1}" == "1" ]]; then
+  extra_xvlog_args=("-d" "T510_SIM_FFT_MODEL" "${extra_xvlog_args[@]}")
+fi
 
 rtl_files=(
   rtl/sync_fsm.sv
@@ -33,6 +36,7 @@ rtl_files=(
   rtl/spectral_packetizer.sv
   rtl/udp_tx_arbiter.sv
   rtl/axis_packet_fifo.sv
+  rtl/axis_sideband_async_fifo.sv
   rtl/tx_route_selector.sv
   rtl/udp_frame_builder.sv
   rtl/axis64_to_cmac512_async.sv
@@ -87,6 +91,7 @@ tb_files=(
   sim/tb_preview_event_capture.sv
   sim/tb_t510_fengine_top_smoke.sv
   sim/tb_t510_fengine_board_top.sv
+  sim/tb_xfft_8lane_config_wrapper.sv
 )
 
 tb_tops=("$@")
@@ -149,7 +154,7 @@ done
 "${VIVADO_ROOT}/bin/xvlog" --incr --relax --work xil_defaultlib \
   "${VIVADO_ROOT}/data/verilog/src/glbl.v" | tee xvlog_glbl.log
 "${VIVADO_ROOT}/bin/xvlog" --incr --relax --sv --work xil_defaultlib \
-  -d T510_SIM_FFT_MODEL "${extra_xvlog_args[@]}" \
+  "${extra_xvlog_args[@]}" \
   -i "${REPO_ROOT}/sim" "${sv_abs_files[@]}" | tee xvlog.log
 
 failed=0

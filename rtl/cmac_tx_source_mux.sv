@@ -39,8 +39,20 @@ module cmac_tx_source_mux (
     logic [1:0] candidate_src;
     logic       candidate_valid;
     logic selected_last;
+    (* ASYNC_REG = "TRUE" *) logic [2:0] rst_sync;
+    wire reset;
     wire live_time_valid = select_time_live && time_tvalid;
     wire live_spec_valid = select_spec_live && spec_tvalid;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rst_sync <= 3'b111;
+        end else begin
+            rst_sync <= {rst_sync[1:0], 1'b0};
+        end
+    end
+
+    assign reset = rst_sync[2] || clear;
 
     function automatic [1:0] src_after(input [1:0] src);
         begin
@@ -96,12 +108,8 @@ module cmac_tx_source_mux (
         candidate_valid = src_valid(candidate_src);
     end
 
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            locked <= 1'b0;
-            active_src <= SRC_HEARTBEAT;
-            rr_next_src <= SRC_HEARTBEAT;
-        end else if (clear) begin
+    always_ff @(posedge clk) begin
+        if (reset) begin
             locked <= 1'b0;
             active_src <= SRC_HEARTBEAT;
             rr_next_src <= SRC_HEARTBEAT;
