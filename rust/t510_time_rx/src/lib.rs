@@ -67,6 +67,7 @@ pub struct DisplayConfig {
     pub center_mhz: f64,
     pub expected_mhz: f64,
     pub dac_mhz: f64,
+    pub waveform_view_mode: String,
     pub phase_deg_by_channel: [f64; TIME_NINPUT],
     pub channel_mask: u16,
     pub time_window_us: f64,
@@ -78,10 +79,11 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            bandwidth_mhz: 200,
+            bandwidth_mhz: 100,
             center_mhz: 200.0,
             expected_mhz: 200.0,
             dac_mhz: 200.0,
+            waveform_view_mode: "dual".to_string(),
             phase_deg_by_channel: [0.0; TIME_NINPUT],
             channel_mask: 0x00ff,
             time_window_us: 0.25,
@@ -94,7 +96,29 @@ impl Default for DisplayConfig {
 
 impl DisplayConfig {
     pub fn bandwidth_mode(&self) -> BandwidthMode {
-        BandwidthMode::from_mhz(self.bandwidth_mhz).unwrap_or(BandwidthMode::Mhz200)
+        BandwidthMode::from_mhz(self.bandwidth_mhz).unwrap_or(BandwidthMode::Mhz100)
+    }
+}
+
+fn waveform_carrier_hz(config: &DisplayConfig) -> f64 {
+    config.center_mhz * 1_000_000.0
+}
+
+fn expected_signal_hz(config: &DisplayConfig) -> f64 {
+    if config.expected_mhz.is_finite() && config.expected_mhz > 0.0 {
+        config.expected_mhz * 1_000_000.0
+    } else if config.dac_mhz.is_finite() && config.dac_mhz > 0.0 {
+        config.dac_mhz * 1_000_000.0
+    } else {
+        config.center_mhz * 1_000_000.0
+    }
+}
+
+fn samples_per_cycle(sample_rate_hz: f64, frequency_hz: f64) -> f64 {
+    if !frequency_hz.is_finite() || frequency_hz.abs() < 1.0 {
+        f64::INFINITY
+    } else {
+        sample_rate_hz / frequency_hz.abs()
     }
 }
 
@@ -168,6 +192,12 @@ pub struct DecodedSample {
 pub struct ChannelWaveform {
     pub channel: usize,
     pub x_us: Vec<f32>,
+    pub i: Vec<f32>,
+    pub q: Vec<f32>,
+    pub mag: Vec<f32>,
+    pub sample_rf: Vec<f32>,
+    pub rf_x_us: Vec<f32>,
+    pub rf: Vec<f32>,
     pub y: Vec<f32>,
     pub rms_code: f32,
     pub max_abs_code: i16,
@@ -183,7 +213,15 @@ pub struct WaveformSnapshot {
     pub detected_bandwidth_mhz: Option<u32>,
     pub decimation: u64,
     pub sample_rate_hz: f64,
+    pub requested_window_us: f64,
+    pub captured_window_us: f64,
     pub center_mhz: f64,
+    pub expected_mhz: f64,
+    pub dac_mhz: f64,
+    pub expected_baseband_mhz: f64,
+    pub rf_samples_per_cycle: f64,
+    pub baseband_samples_per_cycle: f64,
+    pub rf_window_cycles: f64,
     pub gap_before: bool,
     pub channels: Vec<ChannelWaveform>,
 }
@@ -767,18 +805,26 @@ pub fn build_waveform(
     detected_bandwidth: Option<BandwidthMode>,
     gap_before: bool,
 ) -> Result<WaveformSnapshot, String> {
-    let bandwidth = config.bandwidth_mode();
+    let selected_bandwidth = config.bandwidth_mode();
+    let waveform_bandwidth = detected_bandwidth.unwrap_or(selected_bandwidth);
+        let projection_hz = waveform_carrier_hz(config);
+        let expected_hz = expected_signal_hz(config);
     let center_hz = config.center_mhz * 1_000_000.0;
+    let expected_baseband_hz = expected_hz - center_hz;
     let display_points = config.display_points.clamp(64, 16384);
     let mut channels = Vec::new();
     for channel in 0..TIME_NINPUT {
         if (config.channel_mask & (1u16 << channel)) == 0 {
             continue;
         }
-        let samples = decode_channel_samples(udp_payload, header, bandwidth, channel)?;
+        let samples = decode_channel_samples(udp_payload, header, waveform_bandwidth, channel)?;
         let stride = (samples.len().max(1) + display_points - 1) / display_points;
-        let phase_rad = config.phase_deg_by_channel[channel].to_radians();
         let mut x_us = Vec::new();
+        let mut i_values = Vec::new();
+        let mut q_values = Vec::new();
+        let mut mag_values = Vec::new();
+        let mut sample_rf_values = Vec::new();
+        let mut rf_values = Vec::new();
         let mut y = Vec::new();
         let mut sum_sq = 0.0f64;
         let mut max_abs: i16 = 0;
@@ -788,11 +834,17 @@ pub fn build_waveform(
             max_abs = max_abs.max(abs_i).max(abs_q);
             sum_sq += sample.i as f64 * sample.i as f64 + sample.q as f64 * sample.q as f64;
             if idx % stride == 0 {
-                let theta = 2.0 * std::f64::consts::PI * center_hz * sample.sample_index as f64 / RAW_SAMPLE_RATE_HZ + phase_rad;
+                let theta = 2.0 * std::f64::consts::PI * projection_hz * sample.sample_index as f64 / RAW_SAMPLE_RATE_HZ;
                 let rf = sample.i as f64 * theta.cos() - sample.q as f64 * theta.sin();
                 let t_us = (sample.sample_index.saturating_sub(header.sample0)) as f64 / RAW_SAMPLE_RATE_HZ * 1_000_000.0;
+                let scale = config.vertical_scale.max(1.0);
                 x_us.push(t_us as f32);
-                y.push((rf / config.vertical_scale.max(1.0)) as f32);
+                i_values.push((sample.i as f64 / scale) as f32);
+                q_values.push((sample.q as f64 / scale) as f32);
+                mag_values.push(((sample.i as f64).hypot(sample.q as f64) / scale) as f32);
+                sample_rf_values.push((rf / scale) as f32);
+                rf_values.push((rf / scale) as f32);
+                y.push((rf / scale) as f32);
             }
         }
         let rms = if samples.is_empty() {
@@ -802,7 +854,13 @@ pub fn build_waveform(
         };
         channels.push(ChannelWaveform {
             channel,
-            x_us,
+            x_us: x_us.clone(),
+            i: i_values,
+            q: q_values,
+            mag: mag_values,
+            sample_rf: sample_rf_values,
+            rf_x_us: x_us,
+            rf: rf_values,
             y,
             rms_code: rms,
             max_abs_code: max_abs,
@@ -813,11 +871,23 @@ pub fn build_waveform(
         sample0: header.sample0,
         seq_no: header.seq_no,
         frame_id: header.frame_id,
-        selected_bandwidth_mhz: bandwidth.mhz(),
+        selected_bandwidth_mhz: selected_bandwidth.mhz(),
         detected_bandwidth_mhz: detected_bandwidth.map(|mode| mode.mhz()),
-        decimation: bandwidth.decimation(),
-        sample_rate_hz: bandwidth.sample_rate_hz(),
+        decimation: waveform_bandwidth.decimation(),
+        sample_rate_hz: waveform_bandwidth.sample_rate_hz(),
+        requested_window_us: config.time_window_us.max(0.0),
+        captured_window_us: channels
+            .first()
+            .and_then(|channel| channel.x_us.last())
+            .copied()
+            .unwrap_or(0.0) as f64,
         center_mhz: config.center_mhz,
+        expected_mhz: expected_hz / 1_000_000.0,
+        dac_mhz: config.dac_mhz,
+        expected_baseband_mhz: expected_baseband_hz / 1_000_000.0,
+        rf_samples_per_cycle: samples_per_cycle(waveform_bandwidth.sample_rate_hz(), expected_hz),
+        baseband_samples_per_cycle: samples_per_cycle(waveform_bandwidth.sample_rate_hz(), expected_baseband_hz),
+        rf_window_cycles: expected_hz.abs() * config.time_window_us.max(0.0) * 1.0e-6,
         gap_before,
         channels,
     })
@@ -924,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_bandwidth_changes_decode_time_axis_without_reparse() {
+    fn detected_bandwidth_drives_preview_time_axis_when_available() {
         let payload = synthetic_payload(64, 12, 1000);
         let header = parse_t510_header(&payload).unwrap();
         let ch0_200 = decode_channel_samples(&payload, &header, BandwidthMode::Mhz200, 0).unwrap();
@@ -937,7 +1007,7 @@ mod tests {
         let snapshot = build_waveform(&payload, &header, &config, Some(BandwidthMode::Mhz200), true).unwrap();
         assert_eq!(snapshot.selected_bandwidth_mhz, 20);
         assert_eq!(snapshot.detected_bandwidth_mhz, Some(200));
-        assert_eq!(snapshot.decimation, 8);
+        assert_eq!(snapshot.decimation, 1);
         assert!(snapshot.gap_before);
     }
 

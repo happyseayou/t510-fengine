@@ -1,28 +1,25 @@
-# T510 Jupyter Entry Points
+# T510 Jupyter 入口
 
-## Stage 27h Production
+## Stage 27h 生产入口
 
-Use one notebook for the current production workflow:
+当前生产流程只推荐一个 notebook：
 
 1. `15_stage27h_time_spec_fft_fullrate_control.ipynb`
 
-This is the Stage 27h Jupyter control and preview surface for:
+该 notebook 是 Stage 27h 的生产控制与生产预览界面，覆盖：
 
-- TIME/SPEC science stream configuration and status.
-- Receiver IP/port/MAC, mode, bandwidth, center frequency, and 8-lane DAC-ADC loopback control.
-- DAC tone frequency, amplitude, and per-lane phase control.
-- RF-reconstructed waveform preview from real RFDC preview IQ.
-- FFT-only production spectrum preview.
+- TIME/SPEC 科学数据流配置和状态。
+- 接收端 IP/端口/MAC、模式、带宽、中心频率和 8 路 DAC-ADC 环回控制。
+- DAC tone 频率、幅度和逐通道相位控制。
+- 基于真实 RFDC preview IQ 的 RF 等效波形预览。
+- FFT-only 生产频谱预览。
 
-Stage 27h production uses TIME ports `4300..4307`, SPEC ports `4308..4323`,
-and the `FENGINE_IQ16` FFT-only SPEC contract: `4096` channels, `16` blocks,
-`256` channels/block, `1` spectrum-time, `8` inputs, `8192B` payload.
+Stage 27h 生产合约使用 TIME 端口 `4300..4307`、SPEC 端口 `4308..4323`，SPEC 产品为 `FENGINE_IQ16` FFT-only：`4096` 个 channel、`16` 个 block、`256` 个 channel/block、`1` 个 spectrum-time、`8` 路输入、`8192B` 载荷。
 
-## Archived Bring-Up Notebooks
+Rust Web `:8089` 是主机监控端，显示 TIME RF 等效波形、完整 `16/16` block FFT-only 频谱/瀑布、target-bin 相对相位滚动图、24 流速率和 drop/gap 状态。相位滚动图默认参考 `CH1`，用于观察当前 CH0 长线相对其它近等长通道的稳定相位偏移。
 
-Older notebooks remain in the repository only as bring-up references for clock,
-RFDC, UDP dry-run, DAC/ADC loopback, and historical debug checks. They are not
-Stage 27h production pass criteria. `14_stage27g_time_spec_fengine_control.ipynb`
-is retained as the Stage 27g `/32` cadence reference, and
-`13_astronomer_rf_observation_console.ipynb` remains an archived rich
-observation/debug console.
+## 归档 Bring-Up Notebooks
+
+旧 notebook 只作为时钟、RFDC、UDP dry-run、DAC/ADC 环回和历史 debug 检查的 bring-up 参考，不作为 Stage 27h 生产验收条件。
+
+`14_stage27g_time_spec_fengine_control.ipynb` 保留为 Stage 27g `/32` 节拍参考入口；`13_astronomer_rf_observation_console.ipynb` 保留为历史 rich observation/debug console。

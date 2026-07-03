@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from ipaddress import IPv4Address
+import os
+from pathlib import Path
+import subprocess
 import time
 from typing import Any, Iterable, Mapping, Optional
 
@@ -613,6 +616,71 @@ class T510FEngine:
         ),
     }
 
+    @staticmethod
+    def ensure_xrt_dri_ready() -> dict[str, Any]:
+        """Restore the PYNQ zocl DRM links needed by XRT bitstream downloads."""
+
+        def run(cmd: list[str], *, timeout: float = 5.0) -> dict[str, Any]:
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+                return {
+                    "cmd": " ".join(cmd),
+                    "returncode": int(proc.returncode),
+                    "stdout": proc.stdout.strip(),
+                    "stderr": proc.stderr.strip(),
+                }
+            except Exception as exc:  # pragma: no cover - board recovery path
+                return {"cmd": " ".join(cmd), "returncode": -1, "stderr": f"{type(exc).__name__}: {exc}"}
+
+        def safe_symlink(target: Path, link: Path) -> None:
+            try:
+                if link.exists() or link.is_symlink():
+                    link.unlink()
+                link.symlink_to(target)
+            except OSError:
+                pass
+
+        status: dict[str, Any] = {
+            "euid": int(os.geteuid()) if hasattr(os, "geteuid") else None,
+            "xilinx_xrt": os.environ.get("XILINX_XRT", ""),
+            "attempted_repair": False,
+            "repair_commands": [],
+        }
+
+        if not status["xilinx_xrt"]:
+            os.environ.setdefault("XILINX_XRT", "/usr")
+            status["xilinx_xrt"] = os.environ.get("XILINX_XRT", "")
+
+        if status["euid"] == 0:
+            status["attempted_repair"] = True
+            helper = Path("/usr/local/sbin/pynq-fix-zocl-dri.sh")
+            if helper.exists():
+                status["repair_commands"].append(run([str(helper)], timeout=8.0))
+            else:
+                status["repair_commands"].append(run(["modprobe", "zocl"], timeout=5.0))
+                if Path("/dev/dri/card0").exists() or Path("/dev/dri/renderD128").exists():
+                    by_path = Path("/dev/dri/by-path")
+                    try:
+                        by_path.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        pass
+                    if Path("/dev/dri/card0").exists():
+                        safe_symlink(Path("../card0"), by_path / "platform-axi-zyxclmm_drm-card")
+                    if Path("/dev/dri/renderD128").exists():
+                        safe_symlink(Path("../renderD128"), by_path / "platform-axi-zyxclmm_drm-render")
+
+        by_path = Path("/dev/dri/by-path")
+        status.update(
+            {
+                "zocl_loaded": Path("/sys/module/zocl").exists(),
+                "dri_card0": Path("/dev/dri/card0").exists(),
+                "dri_renderD128": Path("/dev/dri/renderD128").exists(),
+                "dri_by_path": by_path.exists(),
+                "dri_by_path_entries": sorted(p.name for p in by_path.iterdir()) if by_path.exists() else [],
+            }
+        )
+        return status
+
     def __init__(
         self,
         bitfile: str,
@@ -624,6 +692,8 @@ class T510FEngine:
     ) -> None:
         if Overlay is None:
             raise RuntimeError("PYNQ is required to use T510FEngine") from _PYNQ_IMPORT_ERROR
+        if download:
+            self.ensure_xrt_dri_ready()
         self.overlay = Overlay(bitfile, download=download)
         self.ctrl = getattr(self.overlay, ctrl_ip, None)
         if self.ctrl is None and ctrl_ip == "core_s_axi":
@@ -6722,6 +6792,7 @@ class T510FEngine:
         sample0: int,
         sample_rate_hz: float,
         center_hz: float,
+        mixer_sign: float = 1.0,
     ) -> Any:
         import math
         import numpy as np
@@ -6735,10 +6806,78 @@ class T510FEngine:
         if sample_rate_hz <= 0.0:
             raise ValueError("sample_rate_hz must be positive")
         center_hz = float(center_hz)
+        mixer_sign = 1.0 if float(mixer_sign) >= 0.0 else -1.0
         start_cycles = math.fmod(float(sample0) * center_hz / sample_rate_hz, 1.0)
         cycles = start_cycles + (center_hz / sample_rate_hz) * np.arange(count, dtype=np.float64)
         phase = 2.0 * np.pi * np.mod(cycles, 1.0)
-        return i_arr[:count] * np.cos(phase) - q_arr[:count] * np.sin(phase)
+        return i_arr[:count] * np.cos(phase) - mixer_sign * q_arr[:count] * np.sin(phase)
+
+    @staticmethod
+    def _derive_rf_equivalent_waveform_at_times(
+        i_data: Any,
+        q_data: Any,
+        time_us: Any,
+        *,
+        sample0: int,
+        sample_rate_hz: float,
+        center_hz: float,
+        mixer_sign: float = 1.0,
+    ) -> Any:
+        import numpy as np
+
+        i_arr = np.asarray(i_data, dtype=np.float64)
+        q_arr = np.asarray(q_data, dtype=np.float64)
+        t_arr = np.asarray(time_us, dtype=np.float64)
+        count = min(i_arr.size, q_arr.size, t_arr.size)
+        if count == 0:
+            return np.asarray([], dtype=np.float64)
+        sample_rate_hz = float(sample_rate_hz)
+        if sample_rate_hz <= 0.0:
+            raise ValueError("sample_rate_hz must be positive")
+        mixer_sign = 1.0 if float(mixer_sign) >= 0.0 else -1.0
+        sample_index = float(sample0) + t_arr[:count] * 1.0e-6 * sample_rate_hz
+        phase = 2.0 * np.pi * np.mod(sample_index * float(center_hz) / sample_rate_hz, 1.0)
+        return i_arr[:count] * np.cos(phase) - mixer_sign * q_arr[:count] * np.sin(phase)
+
+    @staticmethod
+    def _bandlimited_iq_interpolate_at_times(
+        i_data: Any,
+        q_data: Any,
+        time_us: Any,
+        *,
+        sample_rate_hz: float,
+        kernel_radius: int = 12,
+    ) -> tuple[Any, Any]:
+        import numpy as np
+
+        i_arr = np.asarray(i_data, dtype=np.float64)
+        q_arr = np.asarray(q_data, dtype=np.float64)
+        t_arr = np.asarray(time_us, dtype=np.float64)
+        count = min(i_arr.size, q_arr.size)
+        if count == 0 or t_arr.size == 0:
+            empty = np.asarray([], dtype=np.float64)
+            return empty, empty
+        if count < 4:
+            nearest = np.clip(np.rint(t_arr * 1.0e-6 * float(sample_rate_hz)).astype(np.int64), 0, count - 1)
+            return i_arr[nearest], q_arr[nearest]
+        sample_rate_hz = float(sample_rate_hz)
+        if sample_rate_hz <= 0.0:
+            raise ValueError("sample_rate_hz must be positive")
+        radius = max(2, int(kernel_radius))
+        source = np.arange(count, dtype=np.float64)
+        target = t_arr * 1.0e-6 * sample_rate_hz
+        x = target[:, None] - source[None, :]
+        weights = np.sinc(x) * np.sinc(x / float(radius))
+        weights[np.abs(x) >= float(radius)] = 0.0
+        norm = np.sum(weights, axis=1)
+        valid = np.abs(norm) > 1.0e-12
+        nearest = np.clip(np.rint(target).astype(np.int64), 0, count - 1)
+        out_i = i_arr[nearest].astype(np.float64, copy=True)
+        out_q = q_arr[nearest].astype(np.float64, copy=True)
+        if np.any(valid):
+            out_i[valid] = (weights[valid] @ i_arr[:count]) / norm[valid]
+            out_q[valid] = (weights[valid] @ q_arr[:count]) / norm[valid]
+        return out_i, out_q
 
     def compute_scope_spectrum(
         self,
@@ -6882,6 +7021,7 @@ class T510FEngine:
         dac_signal_hz: Optional[float] = None,
         expected_signal_hz: Optional[float] = None,
         time_window_us: float = 0.25,
+        curve_points: int = 1024,
         oversample: float = 2.5,
         phase_ref_input: int = 0,
         stabilize_phase: bool = True,
@@ -6904,6 +7044,20 @@ class T510FEngine:
         expected_offset_hz = (
             None if expected_signal_value is None else float(expected_signal_value - observe_center_hz)
         )
+        expected_rf_hz = 0.0 if expected_signal_value is None else float(expected_signal_value)
+        expected_baseband_hz = 0.0 if expected_offset_hz is None else float(expected_offset_hz)
+
+        def _samples_per_cycle(freq_hz: float) -> float:
+            freq_hz = float(freq_hz)
+            if not math.isfinite(freq_hz) or abs(freq_hz) < 1.0:
+                return math.inf
+            return float(sample_rate / abs(freq_hz))
+
+        rf_samples_per_cycle = _samples_per_cycle(expected_rf_hz)
+        baseband_samples_per_cycle = _samples_per_cycle(expected_baseband_hz)
+        expected_cycles_in_window = abs(expected_rf_hz) * float(time_window_us) * 1.0e-6
+        expected_baseband_cycles_in_window = abs(expected_baseband_hz) * float(time_window_us) * 1.0e-6
+        rf_near_nyquist = bool(math.isfinite(rf_samples_per_cycle) and rf_samples_per_cycle < 4.0)
         input_source_mode = self._normalize_input_source_mode(input_source_mode)
         cfg = getattr(self, "observation_instrument_config", None)
         if not isinstance(cfg, Mapping):
@@ -6924,8 +7078,11 @@ class T510FEngine:
         passband = np.abs(raw_freq_hz) <= (view_bw_hz / 2.0)
         if not np.any(passband):
             passband = np.ones_like(raw_freq_hz, dtype=bool)
-        display_count = max(4, min(count, int(math.ceil(float(time_window_us) * 1e-6 * sample_rate))))
+        display_count = max(4, min(count, int(math.ceil(float(time_window_us) * 1e-6 * sample_rate)) + 1))
+        curve_count = max(64, min(16384, int(curve_points)))
         time_us = np.arange(display_count, dtype=np.float64) / sample_rate * 1_000_000.0
+        requested_time_us = np.linspace(0.0, float(time_window_us), curve_count, dtype=np.float64)
+        captured_window_us = float(time_us[-1]) if time_us.size else 0.0
 
         scope: dict[int, dict[str, Any]] = {}
         baseband_scope: dict[int, dict[str, Any]] = {}
@@ -6974,6 +7131,22 @@ class T510FEngine:
                 sample0=sample0,
                 sample_rate_hz=sample_rate,
                 center_hz=observe_center_hz,
+                mixer_sign=mixer_sign,
+            )
+            curve_i, curve_q = self._bandlimited_iq_interpolate_at_times(
+                raw_waveform,
+                raw_q_waveform,
+                requested_time_us,
+                sample_rate_hz=sample_rate,
+            )
+            rf_equivalent_curve = self._derive_rf_equivalent_waveform_at_times(
+                curve_i,
+                curve_q,
+                requested_time_us,
+                sample0=sample0,
+                sample_rate_hz=sample_rate,
+                center_hz=observe_center_hz,
+                mixer_sign=mixer_sign,
             )
 
             mag_dbfs = 20.0 * np.log10(np.maximum(np.abs(fft) / (window_norm * full_scale), 1e-12))
@@ -7001,12 +7174,17 @@ class T510FEngine:
 
             scope[idx] = {
                 "time_us": time_us,
+                "time_axis_source": "sample0_plus_sample_index_over_preview_sample_rate",
                 "waveform_i": raw_waveform,
                 "waveform_q": raw_q_waveform,
                 "waveform_mag": raw_magnitude_waveform,
                 "rf_equivalent_waveform": rf_equivalent_waveform,
                 "rf_equivalent_time_us": time_us,
+                "rf_equivalent_curve_waveform": rf_equivalent_curve,
+                "rf_equivalent_curve_time_us": requested_time_us,
                 "rf_equivalent_center_hz": observe_center_hz,
+                "rf_equivalent_carrier_hz": observe_center_hz,
+                "rf_equivalent_mixer_sign": int(mixer_sign),
                 "derived_from_real_iq": True,
                 "raw_rf": False,
                 "raw_waveform": raw_waveform,
@@ -7022,6 +7200,23 @@ class T510FEngine:
                 "preview_mode": int(preview.get("preview_mode", 0)),
                 "sample0": sample0,
                 "sample_rate_hz": sample_rate,
+                "expected_rf_hz": expected_rf_hz,
+                "expected_rf_mhz": expected_rf_hz / 1_000_000.0,
+                "expected_baseband_hz": expected_baseband_hz,
+                "expected_baseband_mhz": expected_baseband_hz / 1_000_000.0,
+                "requested_window_us": float(time_window_us),
+                "captured_window_us": captured_window_us,
+                "real_sample_count": int(display_count),
+                "rf_curve_point_count": int(curve_count),
+                "measured_rf_peak_hz": rf_peak_hz,
+                "measured_rf_peak_mhz": rf_peak_hz / 1_000_000.0,
+                "measured_baseband_hz": logical_peak_hz,
+                "measured_baseband_mhz": logical_peak_hz / 1_000_000.0,
+                "rf_samples_per_cycle": rf_samples_per_cycle,
+                "baseband_samples_per_cycle": baseband_samples_per_cycle,
+                "expected_cycles_in_window": expected_cycles_in_window,
+                "expected_baseband_cycles_in_window": expected_baseband_cycles_in_window,
+                "rf_near_nyquist_warning": rf_near_nyquist,
                 "rms": rms_code,
                 "rms_dbfs": rms_dbfs,
                 "max_abs_code": max_abs,
@@ -7029,13 +7224,17 @@ class T510FEngine:
             }
             baseband_scope[idx] = {
                 "time_us": time_us,
+                "time_axis_source": "sample0_plus_sample_index_over_preview_sample_rate",
                 "waveform": raw_waveform,
                 "raw_waveform": raw_waveform,
                 "raw_q_waveform": raw_q_waveform,
                 "raw_magnitude_waveform": raw_magnitude_waveform,
                 "rf_equivalent_waveform": rf_equivalent_waveform,
                 "rf_equivalent_time_us": time_us,
+                "rf_equivalent_curve_waveform": rf_equivalent_curve,
+                "rf_equivalent_curve_time_us": requested_time_us,
                 "rf_equivalent_center_hz": observe_center_hz,
+                "rf_equivalent_mixer_sign": int(mixer_sign),
                 "derived_from_real_iq": True,
                 "raw_rf": False,
                 "waveform_source": "rfdc_preview_buffer",
@@ -7043,6 +7242,17 @@ class T510FEngine:
                 "preview_mode": int(preview.get("preview_mode", 0)),
                 "sample0": sample0,
                 "sample_rate_hz": sample_rate,
+                "expected_rf_hz": expected_rf_hz,
+                "expected_baseband_hz": expected_baseband_hz,
+                "requested_window_us": float(time_window_us),
+                "captured_window_us": captured_window_us,
+                "real_sample_count": int(display_count),
+                "rf_curve_point_count": int(curve_count),
+                "rf_samples_per_cycle": rf_samples_per_cycle,
+                "baseband_samples_per_cycle": baseband_samples_per_cycle,
+                "expected_cycles_in_window": expected_cycles_in_window,
+                "expected_baseband_cycles_in_window": expected_baseband_cycles_in_window,
+                "rf_near_nyquist_warning": rf_near_nyquist,
                 "frequency_hz": raw_peak_hz,
                 "frequency_mhz": raw_peak_hz / 1_000_000.0,
                 "phase_deg": coherent_phase,
@@ -7071,8 +7281,10 @@ class T510FEngine:
                 "rf_peak_hz": rf_peak_hz,
                 "rf_peak_mhz": rf_peak_hz / 1_000_000.0,
                 "expected_baseband_hz": 0.0 if expected_offset_hz is None else expected_offset_hz,
+                "expected_baseband_mhz": expected_baseband_hz / 1_000_000.0,
                 "dac_signal_hz": 0.0 if dac_signal_value is None else dac_signal_value,
                 "expected_rf_hz": 0.0 if expected_signal_value is None else expected_signal_value,
+                "expected_rf_mhz": expected_rf_hz / 1_000_000.0,
                 "expected_signal_hz": 0.0 if expected_signal_value is None else expected_signal_value,
                 "input_signal_hz": 0.0 if expected_signal_value is None else expected_signal_value,
                 "input_source_mode": input_source_mode,
@@ -7083,6 +7295,10 @@ class T510FEngine:
                 "rms_dbfs": rms_dbfs,
                 "peak_dbfs": peak_dbfs,
                 "noise_floor_dbfs": noise_floor_dbfs,
+                "rf_samples_per_cycle": rf_samples_per_cycle,
+                "baseband_samples_per_cycle": baseband_samples_per_cycle,
+                "expected_cycles_in_window": expected_cycles_in_window,
+                "rf_near_nyquist_warning": rf_near_nyquist,
                 "max_abs_code": max_abs,
                 "clipped": bool(max_abs >= 32760.0),
                 "valid_frame": True,
@@ -7096,24 +7312,40 @@ class T510FEngine:
                 item["delta_coherent_phase_deg"] = self._wrap_phase_deg(
                     float(item["coherent_phase_deg"]) - ref_coherent_phase
                 )
+        measured_peak = (
+            dict(peaks[int(phase_ref_input)])
+            if int(phase_ref_input) in peaks
+            else (dict(next(iter(peaks.values()))) if peaks else {})
+        )
 
         return {
             "sample0": sample0,
             "count": count,
             "display_count": display_count,
+            "rf_curve_point_count": int(curve_count),
             "nfft": nfft,
             "input_mask": int(preview["input_mask"]),
             "inputs": list(preview["inputs"]),
             "sample_rate_hz": sample_rate,
             "axis_beat_rate_hz": float(preview.get("axis_beat_rate_hz", sample_rate)),
+            "time_axis_source": "sample0_plus_sample_index_over_preview_sample_rate",
             "observe_center_hz": observe_center_hz,
             "view_bw_hz": view_bw_hz,
             "dac_signal_hz": 0.0 if dac_signal_value is None else dac_signal_value,
             "expected_signal_hz": 0.0 if expected_signal_value is None else expected_signal_value,
             "input_signal_hz": 0.0 if expected_signal_value is None else expected_signal_value,
             "input_source_mode": input_source_mode,
-            "expected_baseband_hz": 0.0 if expected_offset_hz is None else expected_offset_hz,
+            "expected_rf_hz": expected_rf_hz,
+            "expected_baseband_hz": expected_baseband_hz,
+            "rf_samples_per_cycle": rf_samples_per_cycle,
+            "baseband_samples_per_cycle": baseband_samples_per_cycle,
+            "expected_cycles_in_window": expected_cycles_in_window,
+            "expected_baseband_cycles_in_window": expected_baseband_cycles_in_window,
+            "rf_near_nyquist_warning": rf_near_nyquist,
+            "measured_peak": measured_peak,
             "time_window_us": float(time_window_us),
+            "requested_window_us": float(time_window_us),
+            "captured_window_us": captured_window_us,
             "oversample": float(oversample),
             "phase_ref_input": int(phase_ref_input),
             "stabilize_phase": bool(stabilize_phase),

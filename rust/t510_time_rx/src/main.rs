@@ -11,7 +11,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{FromRawFd, RawFd};
 use std::ptr;
 use std::slice;
-use std::sync::atomic::{fence, AtomicUsize, Ordering};
+use std::sync::atomic::{fence, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -56,9 +56,17 @@ const MIB: usize = 1024 * 1024;
 const DEFAULT_TIME_COUNT: u16 = 64;
 const DEFAULT_FRAME_SIZE: usize = 16 * 1024;
 const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const WAVEFORM_MAGIC: u32 = 0x3257_4654; // "TFW2" little-endian on the wire.
+const WAVEFORM_MAGIC: u32 = 0x3557_4654; // "TFW5" little-endian on the wire.
+const WAVEFORM_BINARY_VERSION: u16 = 5;
+const WAVEFORM_BINARY_HEADER_BYTES: u16 = 160;
 const SPECTRUM_MAGIC: u32 = 0x3350_5354; // "TSP3" little-endian on the wire.
+const PREVIEW_STALE_AFTER: Duration = Duration::from_secs(2);
+const PREVIEW_LIVE_MIN_RATE_FRACTION: f64 = 0.25;
+const PREVIEW_LIVE_MIN_PPS_FLOOR: f64 = 10_000.0;
+const SPECTRUM_PREVIEW_COLLECT_TIMEOUT: Duration = Duration::from_millis(500);
 const NO_DISPLAY_OWNER: usize = usize::MAX;
+const NO_SPECTRUM_FRAME: u64 = u64::MAX;
+const SPECTRUM_PREVIEW_GROUP_LEAD: u64 = 4096;
 const DEFAULT_FLOW_COUNT_27H: usize = 24;
 const DEFAULT_TIME_FLOW_COUNT_27H: usize = 8;
 const DEFAULT_SPEC_FLOW_COUNT_27H: usize = 16;
@@ -543,7 +551,7 @@ impl ReceiverStats {
             last_spec_chan0: None,
             last_spec_chan_count: None,
             selected_bandwidth_mhz: BandwidthMode::from_mhz(args.initial_bandwidth_mhz)
-                .unwrap_or(BandwidthMode::Mhz200)
+                .unwrap_or(BandwidthMode::Mhz100)
                 .mhz(),
             detected_bandwidth_mhz: None,
             selected_detected_mismatch: false,
@@ -585,7 +593,48 @@ fn per_flow_detected_consensus(flows: &[FlowStats]) -> Option<u32> {
 #[derive(Debug, Clone, Serialize)]
 struct ApiState {
     config: DisplayConfig,
+    config_generation: u64,
     stats: ReceiverStats,
+    spec_preview: SpecPreviewStatus,
+    waveform_live: bool,
+    waveform_age_ms: Option<u64>,
+    spectrum_live: bool,
+    spectrum_age_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SpecPreviewStatus {
+    frame_id: Option<u64>,
+    sample0: Option<u64>,
+    coverage_blocks: u32,
+    block_count: u16,
+    complete: bool,
+    coverage_mask_lo: u64,
+    coverage_mask_hi: u64,
+    last_block_index: Option<u16>,
+    last_chan0: Option<u32>,
+    last_chan_count: Option<u16>,
+    last_dst_port: Option<u16>,
+    last_error: Option<String>,
+}
+
+impl Default for SpecPreviewStatus {
+    fn default() -> Self {
+        Self {
+            frame_id: None,
+            sample0: None,
+            coverage_blocks: 0,
+            block_count: SPEC_BLOCK_COUNT_27H,
+            complete: false,
+            coverage_mask_lo: 0,
+            coverage_mask_hi: 0,
+            last_block_index: None,
+            last_chan0: None,
+            last_chan_count: None,
+            last_dst_port: None,
+            last_error: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -631,7 +680,7 @@ impl Default for FullSpectrumAssembler {
                     input,
                     amplitude: vec![0.0; 4096],
                     phase_rad: vec![0.0; 4096],
-                    power_db: vec![0.0; 4096],
+                    power_db: vec![-160.0; 4096],
                 })
                 .collect(),
         }
@@ -639,24 +688,63 @@ impl Default for FullSpectrumAssembler {
 }
 
 impl FullSpectrumAssembler {
-    fn reset_for_frame(&mut self, frame_id: u64) {
-        self.frame_id = frame_id;
+    fn frame_group(frame_id: u64, block_count: u16) -> u64 {
+        frame_id / u64::from(block_count.max(1))
+    }
+
+    fn reset_for_layout(&mut self, block: &SpectrumSnapshot) {
+        self.sample0 = block.sample0;
+        self.seq_no = block.seq_no;
+        self.frame_id = block.frame_id;
+        self.product_id = block.product_id;
+        self.nchan = block.nchan;
+        self.block_count = block.block_count.max(1);
+        self.pfb_taps = block.pfb_taps;
+        self.fft_shift = block.fft_shift;
+        self.spec_status_flags = block.spec_status_flags;
+        self.spec_sample_rate_hz = block.spec_sample_rate_hz;
+        self.src_port = block.src_port;
+        self.dst_port = block.dst_port;
         self.coverage_mask_lo = 0;
         self.coverage_mask_hi = 0;
         self.gap_before = false;
-        for lane in &mut self.lanes {
-            lane.amplitude.fill(0.0);
-            lane.phase_rad.fill(0.0);
-            lane.power_db.fill(0.0);
+        if self.lanes.len() != block.lanes.len()
+            || self.lanes.first().map(|lane| lane.amplitude.len()).unwrap_or(0) != block.nchan as usize
+        {
+            self.lanes = (0..block.lanes.len())
+                .map(|input| SpectrumLane {
+                    input,
+                    amplitude: vec![0.0; block.nchan as usize],
+                    phase_rad: vec![0.0; block.nchan as usize],
+                    power_db: vec![-160.0; block.nchan as usize],
+                })
+                .collect();
+        } else {
+            for lane in &mut self.lanes {
+                lane.amplitude.fill(0.0);
+                lane.phase_rad.fill(0.0);
+                lane.power_db.fill(-160.0);
+            }
         }
     }
 
-    fn update(&mut self, block: &SpectrumSnapshot) -> SpectrumSnapshot {
-        if self.frame_id != block.frame_id {
-            self.reset_for_frame(block.frame_id);
+    fn layout_matches(&self, block: &SpectrumSnapshot) -> bool {
+        self.product_id == block.product_id
+            && Self::frame_group(self.frame_id, self.block_count)
+                == Self::frame_group(block.frame_id, block.block_count)
+            && self.nchan == block.nchan
+            && self.block_count == block.block_count.max(1)
+            && self.pfb_taps == block.pfb_taps
+            && self.lanes.len() == block.lanes.len()
+    }
+
+    fn ingest_block(&mut self, block: &SpectrumSnapshot) {
+        if self.product_id == 0 || !self.layout_matches(block) {
+            self.reset_for_layout(block);
         }
         self.sample0 = block.sample0;
         self.seq_no = block.seq_no;
+        self.frame_id = block.frame_id;
         self.product_id = block.product_id;
         self.nchan = block.nchan;
         self.block_count = block.block_count;
@@ -690,8 +778,19 @@ impl FullSpectrumAssembler {
         } else if block.block_index < 128 {
             self.coverage_mask_hi |= 1u64 << (block.block_index - 64);
         }
+    }
 
-        self.snapshot()
+    fn coverage_blocks(&self) -> u32 {
+        self.coverage_mask_lo.count_ones() + self.coverage_mask_hi.count_ones()
+    }
+
+    fn update(&mut self, block: &SpectrumSnapshot) -> Option<SpectrumSnapshot> {
+        let block_count = block.block_count.max(1).min(128);
+        if block.block_index >= block_count {
+            return None;
+        }
+        self.ingest_block(block);
+        Some(self.snapshot())
     }
 
     fn snapshot(&self) -> SpectrumSnapshot {
@@ -711,7 +810,7 @@ impl FullSpectrumAssembler {
             fft_shift: self.fft_shift,
             spec_status_flags: self.spec_status_flags,
             spec_sample_rate_hz: self.spec_sample_rate_hz,
-            coverage_blocks: self.coverage_mask_lo.count_ones() + self.coverage_mask_hi.count_ones(),
+            coverage_blocks: self.coverage_blocks(),
             coverage_mask_lo: self.coverage_mask_lo,
             coverage_mask_hi: self.coverage_mask_hi,
             src_port: self.src_port,
@@ -723,14 +822,316 @@ impl FullSpectrumAssembler {
 }
 
 #[derive(Debug, Clone)]
+struct SpecPreviewCapture {
+    active: bool,
+    last_publish: Instant,
+    decode_window_start: Instant,
+    decode_mask_lo: u64,
+    decode_mask_hi: u64,
+    assembler: FullSpectrumAssembler,
+    status: SpecPreviewStatus,
+}
+
+impl Default for SpecPreviewCapture {
+    fn default() -> Self {
+        Self {
+            active: false,
+            last_publish: Instant::now(),
+            decode_window_start: Instant::now(),
+            decode_mask_lo: 0,
+            decode_mask_hi: 0,
+            assembler: FullSpectrumAssembler::default(),
+            status: SpecPreviewStatus::default(),
+        }
+    }
+}
+
+impl SpecPreviewCapture {
+    fn header_frame_group(header: &T510Header) -> u64 {
+        header.frame_id / u64::from(header.block_count.max(1))
+    }
+
+    fn block_frame_group(block: &SpectrumSnapshot) -> u64 {
+        FullSpectrumAssembler::frame_group(block.frame_id, block.block_count)
+    }
+
+    fn arm_block(&mut self, block: &SpectrumSnapshot) {
+        self.active = true;
+        self.decode_window_start = Instant::now();
+        self.decode_mask_lo = 0;
+        self.decode_mask_hi = 0;
+        self.status = SpecPreviewStatus {
+            frame_id: Some(block.frame_id),
+            sample0: Some(block.sample0),
+            block_count: block.block_count.max(1),
+            last_block_index: Some(block.block_index),
+            last_chan0: Some(block.chan0),
+            last_chan_count: Some(block.chan_count),
+            last_dst_port: Some(block.dst_port),
+            ..SpecPreviewStatus::default()
+        };
+    }
+
+    fn arm_frame(&mut self, header: &T510Header) {
+        self.active = true;
+        self.decode_window_start = Instant::now();
+        self.decode_mask_lo = 0;
+        self.decode_mask_hi = 0;
+        self.status = SpecPreviewStatus {
+            frame_id: Some(header.frame_id),
+            sample0: Some(header.sample0),
+            block_count: header.block_count.max(1),
+            last_block_index: Some(header.block_index),
+            last_chan0: Some(header.chan0),
+            last_chan_count: Some(header.chan_count),
+            ..SpecPreviewStatus::default()
+        };
+    }
+
+    fn should_decode(&mut self, header: &T510Header, interval: Duration) -> bool {
+        let new_frame = self
+            .status
+            .frame_id
+            .map(|frame_id| frame_id / u64::from(header.block_count.max(1)) != Self::header_frame_group(header))
+            .unwrap_or(true);
+        if !self.active || new_frame {
+            self.arm_frame(header);
+        }
+        let block_count = header.block_count.max(1).min(128);
+        if header.block_index >= block_count {
+            return false;
+        }
+        if self.decode_window_start.elapsed() >= interval.max(Duration::from_millis(1)) {
+            self.decode_window_start = Instant::now();
+            self.decode_mask_lo = 0;
+            self.decode_mask_hi = 0;
+        }
+        if header.block_index < 64 {
+            let bit = 1u64 << header.block_index;
+            if self.decode_mask_lo & bit != 0 {
+                return false;
+            }
+            self.decode_mask_lo |= bit;
+        } else {
+            let bit = 1u64 << (header.block_index - 64);
+            if self.decode_mask_hi & bit != 0 {
+                return false;
+            }
+            self.decode_mask_hi |= bit;
+        }
+        true
+    }
+
+    fn ingest(&mut self, block: &SpectrumSnapshot, interval: Duration) -> Option<SpectrumSnapshot> {
+        let new_frame = self
+            .status
+            .frame_id
+            .map(|frame_id| {
+                FullSpectrumAssembler::frame_group(frame_id, block.block_count) != Self::block_frame_group(block)
+            })
+            .unwrap_or(true);
+        if !self.active || new_frame {
+            self.arm_block(block);
+        }
+        let block_count = block.block_count.max(1);
+        let snapshot = self.assembler.update(block)?;
+        let complete = snapshot.coverage_blocks >= u32::from(block_count);
+        let was_complete = self.status.complete;
+        self.status = SpecPreviewStatus {
+            frame_id: Some(snapshot.frame_id),
+            sample0: Some(snapshot.sample0),
+            coverage_blocks: snapshot.coverage_blocks,
+            block_count,
+            complete,
+            coverage_mask_lo: snapshot.coverage_mask_lo,
+            coverage_mask_hi: snapshot.coverage_mask_hi,
+            last_block_index: Some(block.block_index),
+            last_chan0: Some(block.chan0),
+            last_chan_count: Some(block.chan_count),
+            last_dst_port: Some(block.dst_port),
+            last_error: None,
+        };
+        if complete && (!was_complete || self.last_publish.elapsed() >= interval.max(Duration::from_millis(1))) {
+            self.last_publish = Instant::now();
+            Some(snapshot)
+        } else {
+            None
+        }
+    }
+
+    fn record_error(&mut self, header: Option<&T510Header>, message: String) {
+        if let Some(header) = header {
+            self.status.frame_id = Some(header.frame_id);
+            self.status.sample0 = Some(header.sample0);
+            self.status.block_count = header.block_count.max(1);
+            self.status.last_block_index = Some(header.block_index);
+            self.status.last_chan0 = Some(header.chan0);
+            self.status.last_chan_count = Some(header.chan_count);
+        }
+        self.status.complete = false;
+        self.status.last_error = Some(message);
+    }
+}
+
+#[derive(Debug)]
+struct SpectrumPreviewGate {
+    epoch: Instant,
+    target_frame_id: AtomicU64,
+    target_sample0: AtomicU64,
+    target_block_count: AtomicU64,
+    mask_lo: AtomicU64,
+    mask_hi: AtomicU64,
+    last_arm_ns: AtomicU64,
+    first_hit_ns: AtomicU64,
+}
+
+impl Default for SpectrumPreviewGate {
+    fn default() -> Self {
+        Self {
+            epoch: Instant::now(),
+            target_frame_id: AtomicU64::new(NO_SPECTRUM_FRAME),
+            target_sample0: AtomicU64::new(0),
+            target_block_count: AtomicU64::new(0),
+            mask_lo: AtomicU64::new(0),
+            mask_hi: AtomicU64::new(0),
+            last_arm_ns: AtomicU64::new(0),
+            first_hit_ns: AtomicU64::new(0),
+        }
+    }
+}
+
+impl SpectrumPreviewGate {
+    fn elapsed_ns(&self) -> u64 {
+        self.epoch
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64
+    }
+
+    fn reset(&self) {
+        self.target_frame_id.store(NO_SPECTRUM_FRAME, Ordering::SeqCst);
+        self.target_sample0.store(0, Ordering::SeqCst);
+        self.target_block_count.store(0, Ordering::SeqCst);
+        self.mask_lo.store(0, Ordering::SeqCst);
+        self.mask_hi.store(0, Ordering::SeqCst);
+        self.last_arm_ns.store(0, Ordering::SeqCst);
+        self.first_hit_ns.store(0, Ordering::SeqCst);
+    }
+
+    fn mark_complete(&self) {
+        self.target_frame_id.store(NO_SPECTRUM_FRAME, Ordering::SeqCst);
+        self.target_sample0.store(0, Ordering::SeqCst);
+        self.target_block_count.store(0, Ordering::SeqCst);
+        self.mask_lo.store(0, Ordering::SeqCst);
+        self.mask_hi.store(0, Ordering::SeqCst);
+        self.first_hit_ns.store(0, Ordering::SeqCst);
+    }
+
+    fn should_decode(&self, header: &T510Header, interval: Duration) -> bool {
+        let block_count = u64::from(header.block_count.max(1).min(128));
+        let block_index = u64::from(header.block_index);
+        if block_index >= block_count {
+            return false;
+        }
+        let current_group = header.frame_id / block_count;
+
+        let target_frame = self.target_frame_id.load(Ordering::SeqCst);
+        if target_frame == NO_SPECTRUM_FRAME {
+            let now_ns = self.elapsed_ns();
+            let last_arm_ns = self.last_arm_ns.load(Ordering::SeqCst);
+            if self
+                .last_arm_ns
+                .compare_exchange(last_arm_ns, now_ns, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let target_group = current_group.saturating_add(SPECTRUM_PREVIEW_GROUP_LEAD);
+                self.target_sample0.store(header.sample0, Ordering::SeqCst);
+                self.target_block_count.store(block_count, Ordering::SeqCst);
+                self.mask_lo.store(0, Ordering::SeqCst);
+                self.mask_hi.store(0, Ordering::SeqCst);
+                self.first_hit_ns.store(0, Ordering::SeqCst);
+                self.target_frame_id.store(target_group, Ordering::SeqCst);
+            }
+            return false;
+        }
+        if current_group < target_frame {
+            return false;
+        }
+        if current_group > target_frame {
+            let now_ns = self.elapsed_ns();
+            let first_hit_ns = self.first_hit_ns.load(Ordering::SeqCst);
+            let collect_timeout_ns = SPECTRUM_PREVIEW_COLLECT_TIMEOUT
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64;
+            if first_hit_ns != 0 && now_ns.saturating_sub(first_hit_ns) < collect_timeout_ns {
+                return false;
+            }
+            let interval_ns = interval
+                .max(Duration::from_millis(1))
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64;
+            let last_arm_ns = self.last_arm_ns.load(Ordering::SeqCst);
+            if now_ns.saturating_sub(last_arm_ns) < interval_ns {
+                return false;
+            }
+            if self
+                .last_arm_ns
+                .compare_exchange(last_arm_ns, now_ns, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let target_group = current_group.saturating_add(SPECTRUM_PREVIEW_GROUP_LEAD);
+                self.target_sample0.store(header.sample0, Ordering::SeqCst);
+                self.target_block_count.store(block_count, Ordering::SeqCst);
+                self.mask_lo.store(0, Ordering::SeqCst);
+                self.mask_hi.store(0, Ordering::SeqCst);
+                self.first_hit_ns.store(0, Ordering::SeqCst);
+                self.target_frame_id.store(target_group, Ordering::SeqCst);
+            }
+            return false;
+        }
+
+        if self.target_frame_id.load(Ordering::SeqCst) != current_group
+            || self.target_block_count.load(Ordering::SeqCst) != block_count
+        {
+            return false;
+        }
+
+        if block_index < 64 {
+            let bit = 1u64 << block_index;
+            let first = self.mask_lo.fetch_or(bit, Ordering::SeqCst) & bit == 0;
+            if first {
+                let now_ns = self.elapsed_ns();
+                let _ = self
+                    .first_hit_ns
+                    .compare_exchange(0, now_ns, Ordering::SeqCst, Ordering::SeqCst);
+            }
+            first
+        } else {
+            let bit = 1u64 << (block_index - 64);
+            let first = self.mask_hi.fetch_or(bit, Ordering::SeqCst) & bit == 0;
+            if first {
+                let now_ns = self.elapsed_ns();
+                let _ = self
+                    .first_hit_ns
+                    .compare_exchange(0, now_ns, Ordering::SeqCst, Ordering::SeqCst);
+            }
+            first
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct SharedState {
     config: DisplayConfig,
+    config_generation: u64,
     stats: ReceiverStats,
     waveform: Option<WaveformSnapshot>,
     waveform_binary: Option<Vec<u8>>,
+    waveform_updated: Option<Instant>,
     spectrum: Option<SpectrumSnapshot>,
     spectrum_binary: Option<Vec<u8>>,
-    spectrum_assembler: FullSpectrumAssembler,
+    spectrum_updated: Option<Instant>,
+    spectrum_preview: SpecPreviewCapture,
 }
 
 #[derive(Debug, Deserialize)]
@@ -739,6 +1140,7 @@ struct DisplayConfigPatch {
     center_mhz: Option<f64>,
     expected_mhz: Option<f64>,
     dac_mhz: Option<f64>,
+    waveform_view_mode: Option<String>,
     phase_deg_by_channel: Option<Vec<f64>>,
     channel_mask: Option<u16>,
     time_window_us: Option<f64>,
@@ -762,6 +1164,9 @@ impl DisplayConfigPatch {
         }
         if let Some(value) = self.dac_mhz {
             config.dac_mhz = value;
+        }
+        if let Some(value) = self.waveform_view_mode {
+            config.waveform_view_mode = value;
         }
         if let Some(phases) = self.phase_deg_by_channel {
             for (dst, src) in config.phase_deg_by_channel.iter_mut().zip(phases.into_iter()) {
@@ -789,14 +1194,82 @@ impl DisplayConfigPatch {
 
 fn sanitize_config(config: &mut DisplayConfig) {
     if BandwidthMode::from_mhz(config.bandwidth_mhz).is_none() {
-        config.bandwidth_mhz = 200;
+        config.bandwidth_mhz = 100;
     }
     config.display_points = config.display_points.clamp(64, 16384);
+    if !matches!(config.waveform_view_mode.as_str(), "dual" | "samples" | "curve") {
+        config.waveform_view_mode = "dual".to_string();
+    }
     config.time_window_us = config.time_window_us.clamp(0.02, 25.0);
     config.vertical_scale = config.vertical_scale.clamp(1.0, 1_000_000.0);
     config.channel_mask &= 0x00ff;
     if config.channel_mask == 0 {
         config.channel_mask = 0x0001;
+    }
+}
+
+fn apply_display_config_patch_to_shared(state: &mut SharedState, patch: DisplayConfigPatch) -> (DisplayConfig, u64) {
+    patch.apply_to(&mut state.config);
+    state.config_generation = state.config_generation.saturating_add(1);
+    state.waveform = None;
+    state.waveform_binary = None;
+    state.waveform_updated = None;
+    state.spectrum = None;
+    state.spectrum_binary = None;
+    state.spectrum_updated = None;
+    state.spectrum_preview = SpecPreviewCapture::default();
+    let selected = state.config.bandwidth_mode().mhz();
+    state.stats.selected_bandwidth_mhz = selected;
+    state.stats.selected_detected_mismatch = state
+        .stats
+        .detected_bandwidth_mhz
+        .map(|mhz| mhz != selected)
+        .unwrap_or(false);
+    (state.config.clone(), state.config_generation)
+}
+
+fn preview_age_ms(updated: Option<Instant>) -> Option<u64> {
+    updated.map(|instant| instant.elapsed().as_millis().min(u128::from(u64::MAX)) as u64)
+}
+
+fn preview_live(updated: Option<Instant>) -> bool {
+    updated
+        .map(|instant| instant.elapsed() <= PREVIEW_STALE_AFTER)
+        .unwrap_or(false)
+}
+
+fn expected_preview_pps(config: &DisplayConfig, stats: &ReceiverStats) -> f64 {
+    if stats.expected_packets_per_sec.is_finite() && stats.expected_packets_per_sec > 0.0 {
+        return stats.expected_packets_per_sec;
+    }
+    let time_count = stats.last_time_count.unwrap_or(DEFAULT_TIME_COUNT).max(1) as f64;
+    config.bandwidth_mode().sample_rate_hz() / (time_count * TIME_SUBSAMPLES_PER_BEAT as f64)
+}
+
+fn preview_rate_gate_pps(config: &DisplayConfig, stats: &ReceiverStats) -> f64 {
+    (expected_preview_pps(config, stats) * PREVIEW_LIVE_MIN_RATE_FRACTION).max(PREVIEW_LIVE_MIN_PPS_FLOOR)
+}
+
+fn waveform_rate_live(config: &DisplayConfig, stats: &ReceiverStats) -> bool {
+    stats.rx_processed_packets_per_sec.is_finite()
+        && stats.rx_processed_packets_per_sec >= preview_rate_gate_pps(config, stats)
+}
+
+fn spectrum_rate_live(config: &DisplayConfig, stats: &ReceiverStats) -> bool {
+    stats.spec_processed_packets_per_sec.is_finite()
+        && stats.spec_processed_packets_per_sec >= preview_rate_gate_pps(config, stats)
+}
+
+fn clear_stale_previews(state: &mut SharedState) {
+    if !preview_live(state.waveform_updated) || !waveform_rate_live(&state.config, &state.stats) {
+        state.waveform = None;
+        state.waveform_binary = None;
+        state.waveform_updated = None;
+    }
+    if !preview_live(state.spectrum_updated) || !spectrum_rate_live(&state.config, &state.stats) {
+        state.spectrum = None;
+        state.spectrum_binary = None;
+        state.spectrum_updated = None;
     }
 }
 
@@ -1631,6 +2104,168 @@ fn seq_is_before(seq: u32, expected: u32) -> bool {
     seq != expected && expected.wrapping_sub(seq) < 0x8000_0000
 }
 
+fn expected_signal_hz(config: &DisplayConfig) -> f64 {
+    if config.expected_mhz.is_finite() && config.expected_mhz > 0.0 {
+        config.expected_mhz * 1_000_000.0
+    } else if config.dac_mhz.is_finite() && config.dac_mhz > 0.0 {
+        config.dac_mhz * 1_000_000.0
+    } else {
+        config.center_mhz * 1_000_000.0
+    }
+}
+
+fn samples_per_cycle(sample_rate_hz: f64, frequency_hz: f64) -> f64 {
+    if !frequency_hz.is_finite() || frequency_hz.abs() < 1.0 {
+        f64::INFINITY
+    } else {
+        sample_rate_hz / frequency_hz.abs()
+    }
+}
+
+fn estimate_time_raw_baseband_hz(
+    packets: &[PacketCopy],
+    config: &DisplayConfig,
+    decim: u64,
+) -> Option<f64> {
+    let decim = decim.max(1);
+    let mut prev: [Option<(u64, f64, f64)>; TIME_NINPUT] = [None; TIME_NINPUT];
+    let mut weighted_hz_sum = 0.0f64;
+    let mut weight_sum = 0.0f64;
+    let mut pair_count = 0usize;
+
+    for packet in packets {
+        for beat in 0..packet.header.time_count as usize {
+            for sub in 0..TIME_SUBSAMPLES_PER_BEAT {
+                let logical_idx = beat * TIME_SUBSAMPLES_PER_BEAT + sub;
+                let sample_index = packet.header.sample0 + logical_idx as u64 * decim;
+                for channel in 0..TIME_NINPUT {
+                    if (config.channel_mask & (1u16 << channel)) == 0 {
+                        continue;
+                    }
+                    let Ok(offset) = time_payload_complex_offset(beat, sub, channel) else {
+                        continue;
+                    };
+                    if offset + 4 > packet.payload.len() {
+                        continue;
+                    }
+                    let i = i16::from_le_bytes([packet.payload[offset], packet.payload[offset + 1]]) as f64;
+                    let q = i16::from_le_bytes([packet.payload[offset + 2], packet.payload[offset + 3]]) as f64;
+                    let power = i * i + q * q;
+                    if power < 16.0 {
+                        prev[channel] = Some((sample_index, i, q));
+                        continue;
+                    }
+                    if let Some((prev_sample, prev_i, prev_q)) = prev[channel] {
+                        let delta = sample_index.wrapping_sub(prev_sample);
+                        if delta == decim {
+                            let re = i * prev_i + q * prev_q;
+                            let im = q * prev_i - i * prev_q;
+                            let weight = (power * (prev_i * prev_i + prev_q * prev_q)).sqrt();
+                            if weight > 0.0 {
+                                let angle = im.atan2(re);
+                                let hz = angle / (2.0 * std::f64::consts::PI)
+                                    * (RAW_SAMPLE_RATE_HZ / delta as f64);
+                                if hz.is_finite() {
+                                    weighted_hz_sum += hz * weight;
+                                    weight_sum += weight;
+                                    pair_count += 1;
+                                }
+                            }
+                        }
+                    }
+                    prev[channel] = Some((sample_index, i, q));
+                }
+            }
+        }
+    }
+
+    if pair_count >= 4 && weight_sum > 0.0 {
+        Some(weighted_hz_sum / weight_sum)
+    } else {
+        None
+    }
+}
+
+fn waveform_mixer_sign(raw_baseband_hz: Option<f64>, expected_baseband_hz: f64) -> f64 {
+    let Some(raw_hz) = raw_baseband_hz else {
+        return 1.0;
+    };
+    if !raw_hz.is_finite() || !expected_baseband_hz.is_finite() {
+        return 1.0;
+    }
+    if raw_hz.abs() < 1.0 || expected_baseband_hz.abs() < 1.0 {
+        return 1.0;
+    }
+    if (-raw_hz - expected_baseband_hz).abs() < (raw_hz - expected_baseband_hz).abs() {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+fn rf_equivalent_sample(i: f64, q: f64, sample_index: u64, center_hz: f64, mixer_sign: f64) -> f64 {
+    rf_equivalent_at_sample(i, q, sample_index as f64, center_hz, mixer_sign)
+}
+
+fn rf_equivalent_at_sample(i: f64, q: f64, sample_index: f64, center_hz: f64, mixer_sign: f64) -> f64 {
+    let theta = 2.0 * std::f64::consts::PI * center_hz * sample_index as f64 / RAW_SAMPLE_RATE_HZ;
+    i * theta.cos() - mixer_sign * q * theta.sin()
+}
+
+fn sinc(x: f64) -> f64 {
+    if x.abs() < 1.0e-12 {
+        1.0
+    } else {
+        let phase = std::f64::consts::PI * x;
+        phase.sin() / phase
+    }
+}
+
+fn bandlimited_iq_at_sample(raw: &[(u64, f64, f64)], sample_index: f64, decim: u64) -> (f64, f64) {
+    if raw.is_empty() {
+        return (0.0, 0.0);
+    }
+    if raw.len() < 4 {
+        return nearest_iq_at_sample(raw, sample_index);
+    }
+    let spacing = decim.max(1) as f64;
+    let radius = 12.0f64;
+    let mut i_acc = 0.0f64;
+    let mut q_acc = 0.0f64;
+    let mut w_acc = 0.0f64;
+    for (sample, i, q) in raw.iter().copied() {
+        let x = (sample_index - sample as f64) / spacing;
+        if x.abs() < 1.0e-9 {
+            return (i, q);
+        }
+        if x.abs() >= radius {
+            continue;
+        }
+        let weight = sinc(x) * sinc(x / radius);
+        i_acc += i * weight;
+        q_acc += q * weight;
+        w_acc += weight;
+    }
+    if w_acc.abs() > 1.0e-9 {
+        (i_acc / w_acc, q_acc / w_acc)
+    } else {
+        nearest_iq_at_sample(raw, sample_index)
+    }
+}
+
+fn nearest_iq_at_sample(raw: &[(u64, f64, f64)], sample_index: f64) -> (f64, f64) {
+    let mut best = raw[0];
+    let mut best_dist = (raw[0].0 as f64 - sample_index).abs();
+    for item in raw.iter().copied().skip(1) {
+        let dist = (item.0 as f64 - sample_index).abs();
+        if dist < best_dist {
+            best = item;
+            best_dist = dist;
+        }
+    }
+    (best.1, best.2)
+}
+
 struct DisplayCapture {
     active: bool,
     start_seq: Option<u32>,
@@ -1682,9 +2317,15 @@ impl DisplayCapture {
             gap_before,
         });
 
-        let samples_per_packet = (header.time_count as usize).saturating_mul(TIME_SUBSAMPLES_PER_BEAT).max(1);
-        let target_points = config.display_points.clamp(64, self.max_points);
-        let needed_packets = div_ceil(target_points, samples_per_packet).clamp(1, 128);
+        let samples_per_packet = (header.time_count as usize)
+            .saturating_mul(TIME_SUBSAMPLES_PER_BEAT)
+            .max(1);
+        let bandwidth = detected_bandwidth.unwrap_or_else(|| config.bandwidth_mode());
+        let window_samples = (config.time_window_us * bandwidth.sample_rate_hz() / 1_000_000.0)
+            .ceil()
+            .max(2.0) as usize;
+        let target_samples = window_samples.saturating_add(1).clamp(2, self.max_points.max(2));
+        let needed_packets = div_ceil(target_samples, samples_per_packet).clamp(1, 128);
         let mut seq = start;
         let seq_stride = seq_stride.max(1);
         let mut out = Vec::with_capacity(needed_packets);
@@ -1708,33 +2349,37 @@ impl DisplayCapture {
 
 fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -> Result<WaveformSnapshot, String> {
     let first = packets.first().ok_or_else(|| "no packets available for waveform".to_string())?;
-    let bandwidth = config.bandwidth_mode();
-    let decim = bandwidth.decimation();
-    let center_hz = config.center_mhz * 1_000_000.0;
-    let display_points = config.display_points.clamp(64, 16384);
-    let first_sample0 = first.header.sample0;
-    let available_points: usize = packets
+    let selected_bandwidth = config.bandwidth_mode();
+    let bandwidth = packets
         .iter()
-        .map(|packet| packet.header.time_count as usize * TIME_SUBSAMPLES_PER_BEAT)
-        .sum();
-    let points = available_points.min(display_points);
+        .rev()
+        .find_map(|packet| packet.detected_bandwidth)
+        .unwrap_or(selected_bandwidth);
+    let decim = bandwidth.decimation();
+    let expected_hz = expected_signal_hz(config);
+    let center_hz = config.center_mhz * 1_000_000.0;
+    let expected_baseband_hz = expected_hz - center_hz;
+    let raw_baseband_hz = estimate_time_raw_baseband_hz(packets, config, decim);
+    let mixer_sign = waveform_mixer_sign(raw_baseband_hz, expected_baseband_hz);
+    let window_us = config.time_window_us.max(0.0);
+    let target_samples = (window_us * bandwidth.sample_rate_hz() / 1_000_000.0)
+        .ceil()
+        .max(2.0) as usize;
+    let target_samples = target_samples.saturating_add(1).clamp(2, 16384);
+    let curve_points = config.display_points.clamp(64, 16384);
+    let first_sample0 = first.header.sample0;
     let mut channels = Vec::new();
 
     for channel in 0..TIME_NINPUT {
         if (config.channel_mask & (1u16 << channel)) == 0 {
             continue;
         }
-        let phase_rad = config.phase_deg_by_channel[channel].to_radians();
-        let mut x_us = Vec::with_capacity(points);
-        let mut y = Vec::with_capacity(points);
+        let mut raw = Vec::new();
         let mut sum_sq = 0.0f64;
         let mut max_abs: i16 = 0;
-        'packet_loop: for packet in packets {
+        for packet in packets {
             for beat in 0..packet.header.time_count as usize {
                 for sub in 0..TIME_SUBSAMPLES_PER_BEAT {
-                    if y.len() >= points {
-                        break 'packet_loop;
-                    }
                     let offset = time_payload_complex_offset(beat, sub, channel)?;
                     if offset + 4 > packet.payload.len() {
                         return Err("truncated payload while building waveform".to_string());
@@ -1747,22 +2392,58 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
                     sum_sq += i as f64 * i as f64 + q as f64 * q as f64;
                     let logical_idx = beat * TIME_SUBSAMPLES_PER_BEAT + sub;
                     let sample_index = packet.header.sample0 + logical_idx as u64 * decim;
-                    let theta = 2.0 * std::f64::consts::PI * center_hz * sample_index as f64 / RAW_SAMPLE_RATE_HZ + phase_rad;
-                    let rf = i as f64 * theta.cos() - q as f64 * theta.sin();
-                    let t_us = sample_index.saturating_sub(first_sample0) as f64 / RAW_SAMPLE_RATE_HZ * 1_000_000.0;
-                    x_us.push(t_us as f32);
-                    y.push((rf / config.vertical_scale.max(1.0)) as f32);
+                    if raw.len() < target_samples {
+                        raw.push((sample_index, i as f64, q as f64));
+                    }
                 }
             }
         }
-        let rms = if y.is_empty() {
+        let measured_len = raw.len();
+        let mut x_us = Vec::with_capacity(measured_len);
+        let mut i_values = Vec::with_capacity(measured_len);
+        let mut q_values = Vec::with_capacity(measured_len);
+        let mut mag_values = Vec::with_capacity(measured_len);
+        let mut sample_rf_values = Vec::with_capacity(measured_len);
+        let mut rf_x_us = Vec::with_capacity(curve_points);
+        let mut rf_values = Vec::with_capacity(curve_points);
+        let scale = config.vertical_scale.max(1.0);
+        for (sample_index, i, q) in raw.iter() {
+            let t_us = sample_index.saturating_sub(first_sample0) as f64 / RAW_SAMPLE_RATE_HZ * 1_000_000.0;
+            let rf = rf_equivalent_sample(*i, *q, *sample_index, center_hz, mixer_sign);
+            x_us.push(t_us as f32);
+            i_values.push((*i / scale) as f32);
+            q_values.push((*q / scale) as f32);
+            mag_values.push((i.hypot(*q) / scale) as f32);
+            sample_rf_values.push((rf / scale) as f32);
+        }
+        for point in 0..curve_points {
+            let frac = if curve_points > 1 {
+                point as f64 / (curve_points - 1) as f64
+            } else {
+                0.0
+            };
+            let t_us = window_us * frac;
+            let sample_index = first_sample0 as f64 + (t_us * 1.0e-6 * RAW_SAMPLE_RATE_HZ);
+            let (i, q) = bandlimited_iq_at_sample(&raw, sample_index, decim);
+            let rf = rf_equivalent_at_sample(i, q, sample_index, center_hz, mixer_sign);
+            rf_x_us.push(t_us as f32);
+            rf_values.push((rf / scale) as f32);
+        }
+        let y = sample_rf_values.clone();
+        let rms = if raw.is_empty() {
             0.0
         } else {
-            (sum_sq / y.len() as f64).sqrt() as f32
+            (sum_sq / raw.len() as f64).sqrt() as f32
         };
         channels.push(ChannelWaveform {
             channel,
             x_us,
+            i: i_values,
+            q: q_values,
+            mag: mag_values,
+            sample_rf: sample_rf_values,
+            rf_x_us,
+            rf: rf_values,
             y,
             rms_code: rms,
             max_abs_code: max_abs,
@@ -1774,11 +2455,23 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
         sample0: first_sample0,
         seq_no: first.header.seq_no,
         frame_id: first.header.frame_id,
-        selected_bandwidth_mhz: bandwidth.mhz(),
+        selected_bandwidth_mhz: selected_bandwidth.mhz(),
         detected_bandwidth_mhz: packets.iter().rev().find_map(|packet| packet.detected_bandwidth).map(|mode| mode.mhz()),
         decimation: decim,
         sample_rate_hz: bandwidth.sample_rate_hz(),
+        requested_window_us: window_us,
+        captured_window_us: channels
+            .first()
+            .and_then(|channel| channel.x_us.last())
+            .copied()
+            .unwrap_or(0.0) as f64,
         center_mhz: config.center_mhz,
+        expected_mhz: expected_hz / 1_000_000.0,
+        dac_mhz: config.dac_mhz,
+        expected_baseband_mhz: expected_baseband_hz / 1_000_000.0,
+        rf_samples_per_cycle: samples_per_cycle(bandwidth.sample_rate_hz(), expected_hz),
+        baseband_samples_per_cycle: samples_per_cycle(bandwidth.sample_rate_hz(), expected_baseband_hz),
+        rf_window_cycles: expected_hz.abs() * config.time_window_us.max(0.0) * 1.0e-6,
         gap_before: packets.iter().any(|packet| packet.gap_before),
         channels,
     })
@@ -1786,20 +2479,38 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
 
 fn encode_waveform_binary(snapshot: &WaveformSnapshot, seq_end: u32) -> Vec<u8> {
     let channel_count = snapshot.channels.len() as u32;
-    let points_per_channel = snapshot
+    let measured_points_per_channel = snapshot
         .channels
         .iter()
-        .map(|channel| channel.y.len())
+        .map(|channel| {
+            channel
+                .x_us
+                .len()
+                .min(channel.i.len())
+                .min(channel.q.len())
+                .min(channel.mag.len())
+                .min(channel.sample_rf.len())
+        })
+        .min()
+        .unwrap_or(0) as u32;
+    let rf_points_per_channel = snapshot
+        .channels
+        .iter()
+        .map(|channel| channel.rf_x_us.len().min(channel.rf.len()))
         .min()
         .unwrap_or(0) as u32;
     let mut channel_mask = 0u32;
     for channel in &snapshot.channels {
         channel_mask |= 1u32 << channel.channel;
     }
-    let mut out = Vec::with_capacity(64 + channel_count as usize * points_per_channel as usize * 4);
+    let mut out = Vec::with_capacity(
+        WAVEFORM_BINARY_HEADER_BYTES as usize
+            + channel_count as usize
+                * (measured_points_per_channel as usize * 20 + rf_points_per_channel as usize * 8),
+    );
     push_u32(&mut out, WAVEFORM_MAGIC);
-    push_u16(&mut out, 1);
-    push_u16(&mut out, 64);
+    push_u16(&mut out, WAVEFORM_BINARY_VERSION);
+    push_u16(&mut out, WAVEFORM_BINARY_HEADER_BYTES);
     push_u64(&mut out, snapshot.sample0);
     push_u32(&mut out, snapshot.seq_no);
     push_u32(&mut out, seq_end);
@@ -1809,17 +2520,46 @@ fn encode_waveform_binary(snapshot: &WaveformSnapshot, seq_end: u32) -> Vec<u8> 
         | ((snapshot.detected_bandwidth_mhz.map(|mhz| mhz != snapshot.selected_bandwidth_mhz).unwrap_or(false) as u32) << 1);
     push_u32(&mut out, flags);
     push_u32(&mut out, channel_mask);
-    push_u32(&mut out, points_per_channel);
+    push_u32(&mut out, measured_points_per_channel);
     push_u32(&mut out, channel_count);
     push_u32(&mut out, snapshot.decimation as u32);
-    push_u32(&mut out, 0);
-    push_u32(&mut out, 0);
-    push_u32(&mut out, 0);
-    while out.len() < 64 {
+    push_u32(&mut out, rf_points_per_channel);
+    push_f64(&mut out, snapshot.sample_rate_hz);
+    push_f64(
+        &mut out,
+        snapshot.requested_window_us,
+    );
+    push_f64(&mut out, snapshot.center_mhz);
+    push_f64(&mut out, snapshot.expected_mhz);
+    push_f64(&mut out, snapshot.dac_mhz);
+    push_f64(&mut out, snapshot.expected_baseband_mhz);
+    push_f64(&mut out, snapshot.rf_samples_per_cycle);
+    push_f64(&mut out, snapshot.baseband_samples_per_cycle);
+    push_f64(&mut out, snapshot.rf_window_cycles);
+    push_f64(&mut out, snapshot.captured_window_us);
+    while out.len() < WAVEFORM_BINARY_HEADER_BYTES as usize {
         out.push(0);
     }
     for channel in &snapshot.channels {
-        for value in channel.y.iter().take(points_per_channel as usize) {
+        for value in channel.x_us.iter().take(measured_points_per_channel as usize) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in channel.i.iter().take(measured_points_per_channel as usize) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in channel.q.iter().take(measured_points_per_channel as usize) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in channel.mag.iter().take(measured_points_per_channel as usize) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in channel.sample_rf.iter().take(measured_points_per_channel as usize) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in channel.rf_x_us.iter().take(rf_points_per_channel as usize) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in channel.rf.iter().take(rf_points_per_channel as usize) {
             out.extend_from_slice(&value.to_le_bytes());
         }
     }
@@ -1891,6 +2631,10 @@ fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+fn push_f64(out: &mut Vec<u8>, value: f64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
 struct ReceiverRuntime {
     dst_port_base: u16,
     src_port_base: u16,
@@ -1904,6 +2648,7 @@ struct ReceiverRuntime {
     flow_previous_headers: Vec<Option<T510Header>>,
     spec_previous_headers: Vec<Option<T510Header>>,
     config: DisplayConfig,
+    config_generation: u64,
     last_config_refresh: Instant,
     last_waveform: Instant,
     last_spectrum: Instant,
@@ -1927,9 +2672,9 @@ struct ReceiverRuntime {
 
 impl ReceiverRuntime {
     fn new(args: &Args, shared: Arc<Mutex<SharedState>>) -> Self {
-        let config = {
+        let (config, config_generation) = {
             let guard = shared.lock().unwrap();
-            guard.config.clone()
+            (guard.config.clone(), guard.config_generation)
         };
         Self {
             dst_port_base: args.dst_port_base(),
@@ -1944,6 +2689,7 @@ impl ReceiverRuntime {
             flow_previous_headers: vec![None; args.flow_count_clamped()],
             spec_previous_headers: vec![None; args.flow_count_clamped()],
             config,
+            config_generation,
             last_config_refresh: Instant::now(),
             last_waveform: Instant::now(),
             last_spectrum: Instant::now(),
@@ -2017,15 +2763,17 @@ impl ReceiverRuntime {
             STREAM_SPEC => {
                 if let Err(err) = validate_spec_header_fast(&header, udp_payload.len()) {
                     self.stats.parse_errors = self.stats.parse_errors.saturating_add(1);
+                    let message = format_fast_error(err);
                     if self.stats.parse_errors < 16 || self.stats.parse_errors.is_power_of_two() {
-                        self.stats.last_error = Some(format_fast_error(err));
+                        self.stats.last_error = Some(message.clone());
                     }
+                    record_spec_preview_error(&self.shared, Some(&header), message);
                     self.publish_if_due();
                     return;
                 }
                 if !self.spec_layout.matches(&header) {
                     self.stats.parse_errors = self.stats.parse_errors.saturating_add(1);
-                    self.stats.last_error = Some(format!(
+                    let message = format!(
                         "SPEC layout {:?} rejected header block_count={} chan_count={} time_count={} taps={} flags=0x{:08x}",
                         self.spec_layout,
                         header.block_count,
@@ -2033,7 +2781,9 @@ impl ReceiverRuntime {
                         header.time_count,
                         header.pfb_taps,
                         header.spec_status_flags
-                    ));
+                    );
+                    self.stats.last_error = Some(message.clone());
+                    record_spec_preview_error(&self.shared, Some(&header), message);
                     self.publish_if_due();
                     return;
                 }
@@ -2086,7 +2836,14 @@ impl ReceiverRuntime {
         if display_enabled {
             if let Some(packets) = self
                 .display_capture
-                .ingest(header, udp_payload, &self.config, detected, gap_before, 1)
+                .ingest(
+                    header,
+                    udp_payload,
+                    &self.config,
+                    self.stats.detected_bandwidth_mhz.and_then(BandwidthMode::from_mhz),
+                    gap_before,
+                    1,
+                )
             {
                 match build_waveform_from_packets(&packets, &self.config) {
                     Ok(waveform) => {
@@ -2098,6 +2855,7 @@ impl ReceiverRuntime {
                         if let Ok(mut guard) = self.shared.lock() {
                             guard.waveform = Some(waveform);
                             guard.waveform_binary = Some(binary);
+                            guard.waveform_updated = Some(Instant::now());
                         }
                     }
                     Err(err) => {
@@ -2128,21 +2886,32 @@ impl ReceiverRuntime {
         };
 
         let display_enabled = self.stats.spectrum_websocket_clients > 0 && !self.config.paused;
-        if display_enabled && self.last_spectrum.elapsed() >= self.spectrum_interval {
+        let should_decode = if display_enabled {
+            self.shared
+                .lock()
+                .map(|mut guard| guard.spectrum_preview.should_decode(&header, self.spectrum_interval))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if should_decode {
             match t510_time_rx::decode_spectrum_snapshot(udp_payload, &header, src_port, dst_port, gap_before) {
                 Ok(block) => {
-                    self.stats.spectrum_updates = self.stats.spectrum_updates.saturating_add(1);
-                    self.rate_spectrum_updates = self.rate_spectrum_updates.saturating_add(1);
                     if let Ok(mut guard) = self.shared.lock() {
-                        let spectrum = guard.spectrum_assembler.update(&block);
+                        if let Some(spectrum) = guard.spectrum_preview.ingest(&block, self.spectrum_interval) {
+                            self.stats.spectrum_updates = self.stats.spectrum_updates.saturating_add(1);
+                            self.rate_spectrum_updates = self.rate_spectrum_updates.saturating_add(1);
                         let binary = encode_spectrum_binary(&spectrum);
                         guard.spectrum = Some(spectrum);
                         guard.spectrum_binary = Some(binary);
+                        guard.spectrum_updated = Some(Instant::now());
+                        self.last_spectrum = Instant::now();
+                        }
                     }
-                    self.last_spectrum = Instant::now();
                 }
                 Err(err) => {
-                    self.stats.last_error = Some(err);
+                    self.stats.last_error = Some(err.clone());
+                    record_spec_preview_error(&self.shared, Some(&header), err);
                 }
             }
         }
@@ -2242,6 +3011,13 @@ impl ReceiverRuntime {
     fn refresh_config_if_due(&mut self) {
         if self.last_config_refresh.elapsed() >= Duration::from_millis(100) {
             if let Ok(guard) = self.shared.lock() {
+                if self.config_generation != guard.config_generation {
+                    self.config_generation = guard.config_generation;
+                    self.display_capture.arm();
+                    let now = Instant::now();
+                    self.last_waveform = now.checked_sub(self.waveform_interval).unwrap_or(now);
+                    self.last_spectrum = now.checked_sub(self.spectrum_interval).unwrap_or(now);
+                }
                 self.config = guard.config.clone();
                 self.stats.websocket_clients = guard.stats.websocket_clients;
                 self.stats.waveform_websocket_clients = guard.stats.waveform_websocket_clients;
@@ -2359,6 +3135,7 @@ struct FanoutWorkerConfig {
     shared: Arc<Mutex<SharedState>>,
     tx: mpsc::Sender<FanoutWorkerReport>,
     display_owner: Arc<AtomicUsize>,
+    spectrum_gate: Arc<SpectrumPreviewGate>,
 }
 
 struct FanoutWorkerRuntime {
@@ -2371,11 +3148,13 @@ struct FanoutWorkerRuntime {
     shared: Arc<Mutex<SharedState>>,
     tx: mpsc::Sender<FanoutWorkerReport>,
     display_owner: Arc<AtomicUsize>,
+    spectrum_gate: Arc<SpectrumPreviewGate>,
     stats: WorkerStats,
     per_flow: Vec<FlowStats>,
     flow_previous_headers: Vec<Option<T510Header>>,
     spec_previous_headers: Vec<Option<T510Header>>,
     config: DisplayConfig,
+    config_generation: u64,
     websocket_clients: u64,
     waveform_websocket_clients: u64,
     spectrum_websocket_clients: u64,
@@ -2401,10 +3180,17 @@ struct FanoutWorkerRuntime {
 
 impl FanoutWorkerRuntime {
     fn new(config: &FanoutWorkerConfig) -> Self {
-        let (display_config, websocket_clients, waveform_websocket_clients, spectrum_websocket_clients) = {
+        let (
+            display_config,
+            config_generation,
+            websocket_clients,
+            waveform_websocket_clients,
+            spectrum_websocket_clients,
+        ) = {
             let guard = config.shared.lock().unwrap();
             (
                 guard.config.clone(),
+                guard.config_generation,
                 guard.stats.websocket_clients,
                 guard.stats.waveform_websocket_clients,
                 guard.stats.spectrum_websocket_clients,
@@ -2419,6 +3205,7 @@ impl FanoutWorkerRuntime {
             spec_layout: config.spec_layout,
             shared: config.shared.clone(),
             tx: config.tx.clone(),
+            spectrum_gate: config.spectrum_gate.clone(),
             stats: WorkerStats::new(config.worker_id),
             per_flow: (0..config.flow_count)
                 .map(|flow_id| {
@@ -2432,6 +3219,7 @@ impl FanoutWorkerRuntime {
             flow_previous_headers: vec![None; config.flow_count],
             spec_previous_headers: vec![None; config.flow_count],
             config: display_config,
+            config_generation,
             websocket_clients,
             waveform_websocket_clients,
             spectrum_websocket_clients,
@@ -2505,15 +3293,17 @@ impl FanoutWorkerRuntime {
             STREAM_SPEC => {
                 if let Err(err) = validate_spec_header_fast(&header, view.payload.len()) {
                     self.stats.parse_errors = self.stats.parse_errors.saturating_add(1);
+                    let message = format_fast_error(err);
                     if self.stats.parse_errors < 16 || self.stats.parse_errors.is_power_of_two() {
-                        self.stats.last_error = Some(format_fast_error(err));
+                        self.stats.last_error = Some(message.clone());
                     }
+                    record_spec_preview_error(&self.shared, Some(&header), message);
                     self.publish_if_due();
                     return;
                 }
                 if !self.spec_layout.matches(&header) {
                     self.stats.parse_errors = self.stats.parse_errors.saturating_add(1);
-                    self.stats.last_error = Some(format!(
+                    let message = format!(
                         "SPEC layout {:?} rejected header block_count={} chan_count={} time_count={} taps={} flags=0x{:08x}",
                         self.spec_layout,
                         header.block_count,
@@ -2521,7 +3311,9 @@ impl FanoutWorkerRuntime {
                         header.time_count,
                         header.pfb_taps,
                         header.spec_status_flags
-                    ));
+                    );
+                    self.stats.last_error = Some(message.clone());
+                    record_spec_preview_error(&self.shared, Some(&header), message);
                     self.publish_if_due();
                     return;
                 }
@@ -2588,6 +3380,7 @@ impl FanoutWorkerRuntime {
                         if let Ok(mut guard) = self.shared.lock() {
                             guard.waveform = Some(waveform);
                             guard.waveform_binary = Some(binary);
+                            guard.waveform_updated = Some(Instant::now());
                         }
                     }
                     Err(err) => {
@@ -2617,21 +3410,26 @@ impl FanoutWorkerRuntime {
             false
         };
 
-        let display_enabled = !self.config.paused;
-        if display_enabled && self.last_spectrum.elapsed() >= self.spectrum_interval {
+        let display_enabled = self.spectrum_websocket_clients > 0 && !self.config.paused;
+        let should_decode = display_enabled && self.spectrum_gate.should_decode(&header, self.spectrum_interval);
+        if should_decode {
             match t510_time_rx::decode_spectrum_snapshot(udp_payload, &header, src_port, dst_port, gap_before) {
                 Ok(block) => {
-                    self.rate_spectrum_updates = self.rate_spectrum_updates.saturating_add(1);
                     if let Ok(mut guard) = self.shared.lock() {
-                        let spectrum = guard.spectrum_assembler.update(&block);
-                        let binary = encode_spectrum_binary(&spectrum);
-                        guard.spectrum = Some(spectrum);
-                        guard.spectrum_binary = Some(binary);
+                        if let Some(spectrum) = guard.spectrum_preview.ingest(&block, self.spectrum_interval) {
+                            self.rate_spectrum_updates = self.rate_spectrum_updates.saturating_add(1);
+                            self.spectrum_gate.mark_complete();
+                            let binary = encode_spectrum_binary(&spectrum);
+                            guard.spectrum = Some(spectrum);
+                            guard.spectrum_binary = Some(binary);
+                            guard.spectrum_updated = Some(Instant::now());
+                            self.last_spectrum = Instant::now();
+                        }
                     }
-                    self.last_spectrum = Instant::now();
                 }
                 Err(err) => {
-                    self.stats.last_error = Some(err);
+                    self.stats.last_error = Some(err.clone());
+                    record_spec_preview_error(&self.shared, Some(&header), err);
                 }
             }
         }
@@ -2745,6 +3543,16 @@ impl FanoutWorkerRuntime {
     fn refresh_config_if_due(&mut self) {
         if self.last_config_refresh.elapsed() >= Duration::from_millis(100) {
             if let Ok(guard) = self.shared.lock() {
+                if self.config_generation != guard.config_generation {
+                    self.config_generation = guard.config_generation;
+                    self.display_capture.arm();
+                    if self.worker_id == 0 {
+                        self.spectrum_gate.reset();
+                    }
+                    let now = Instant::now();
+                    self.last_waveform = now.checked_sub(self.waveform_interval).unwrap_or(now);
+                    self.last_spectrum = now.checked_sub(self.spectrum_interval).unwrap_or(now);
+                }
                 self.config = guard.config.clone();
                 self.websocket_clients = guard.stats.websocket_clients;
                 self.waveform_websocket_clients = guard.stats.waveform_websocket_clients;
@@ -3085,6 +3893,7 @@ fn run_fanout_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::
     let spec_flow_count = args.spec_flow_count_clamped();
     let (tx, rx) = mpsc::channel::<FanoutWorkerReport>();
     let display_owner = Arc::new(AtomicUsize::new(NO_DISPLAY_OWNER));
+    let spectrum_gate = Arc::new(SpectrumPreviewGate::default());
     let fanout = PacketFanoutConfig {
         group: args.fanout_group,
         mode: args.fanout_mode,
@@ -3108,6 +3917,7 @@ fn run_fanout_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::
             shared: shared.clone(),
             tx: tx.clone(),
             display_owner: display_owner.clone(),
+            spectrum_gate: spectrum_gate.clone(),
         };
         thread::spawn(move || run_fanout_worker(worker));
     }
@@ -3174,6 +3984,16 @@ fn run_fanout_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::
 
 fn format_fast_error(err: FastPacketError) -> String {
     format!("{:?}", err)
+}
+
+fn record_spec_preview_error(
+    shared: &Arc<Mutex<SharedState>>,
+    header: Option<&T510Header>,
+    message: String,
+) {
+    if let Ok(mut guard) = shared.lock() {
+        guard.spectrum_preview.record_error(header, message);
+    }
 }
 
 fn frame_next(prev: u64, now: u64) -> bool {
@@ -3346,10 +4166,21 @@ fn handle_http(mut stream: TcpStream, shared: Arc<Mutex<SharedState>>, web_fps: 
         handle_spectrum_ws(stream, &request, shared, web_fps)
     } else if first.starts_with("GET /api/state ") {
         let state = {
-            let guard = shared.lock().unwrap();
+            let mut guard = shared.lock().unwrap();
+            clear_stale_previews(&mut guard);
+            let waveform_age_ms = preview_age_ms(guard.waveform_updated);
+            let spectrum_age_ms = preview_age_ms(guard.spectrum_updated);
+            let waveform_live = preview_live(guard.waveform_updated) && waveform_rate_live(&guard.config, &guard.stats);
+            let spectrum_live = preview_live(guard.spectrum_updated) && spectrum_rate_live(&guard.config, &guard.stats);
             ApiState {
                 config: guard.config.clone(),
+                config_generation: guard.config_generation,
                 stats: guard.stats.clone(),
+                spec_preview: guard.spectrum_preview.status.clone(),
+                waveform_live,
+                waveform_age_ms,
+                spectrum_live,
+                spectrum_age_ms,
             }
         };
         let body = serde_json::to_vec(&state).unwrap_or_else(|_| b"{}".to_vec());
@@ -3358,19 +4189,16 @@ fn handle_http(mut stream: TcpStream, shared: Arc<Mutex<SharedState>>, web_fps: 
         let body = request_body(&buf);
         match serde_json::from_slice::<DisplayConfigPatch>(body) {
             Ok(patch) => {
-                let config = {
+                let (config, generation) = {
                     let mut guard = shared.lock().unwrap();
-                    patch.apply_to(&mut guard.config);
-                    let selected = guard.config.bandwidth_mode().mhz();
-                    guard.stats.selected_bandwidth_mhz = selected;
-                    guard.stats.selected_detected_mismatch = guard
-                        .stats
-                        .detected_bandwidth_mhz
-                        .map(|mhz| mhz != selected)
-                        .unwrap_or(false);
-                    guard.config.clone()
+                    apply_display_config_patch_to_shared(&mut guard, patch)
                 };
-                let body = serde_json::json!({"ok": true, "config": config}).to_string();
+                let body = serde_json::json!({
+                    "ok": true,
+                    "config": config,
+                    "config_generation": generation
+                })
+                .to_string();
                 write_response(&mut stream, "200 OK", "application/json", body.as_bytes())
             }
             Err(err) => {
@@ -3410,7 +4238,8 @@ fn handle_waveform_ws(
     let result = loop {
         thread::sleep(interval);
         let payload = {
-            let guard = shared.lock().unwrap();
+            let mut guard = shared.lock().unwrap();
+            clear_stale_previews(&mut guard);
             guard.waveform_binary.clone()
         };
         if let Some(payload) = payload {
@@ -3451,7 +4280,8 @@ fn handle_spectrum_ws(
     let result = loop {
         thread::sleep(interval);
         let payload = {
-            let guard = shared.lock().unwrap();
+            let mut guard = shared.lock().unwrap();
+            clear_stale_previews(&mut guard);
             guard.spectrum_binary.clone()
         };
         if let Some(payload) = payload {
@@ -3655,6 +4485,197 @@ mod tests {
             bytes[offset + 6],
             bytes[offset + 7],
         ])
+    }
+
+    fn le_f64(bytes: &[u8], offset: usize) -> f64 {
+        f64::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ])
+    }
+
+    fn time_packet(header: T510Header, i: i16, q: i16) -> PacketCopy {
+        let mut payload = vec![0u8; TIME_UDP_PAYLOAD_BYTES];
+        for beat in 0..header.time_count as usize {
+            for sub in 0..TIME_SUBSAMPLES_PER_BEAT {
+                for channel in 0..TIME_NINPUT {
+                    let offset = time_payload_complex_offset(beat, sub, channel).unwrap();
+                    payload[offset..offset + 2].copy_from_slice(&i.to_le_bytes());
+                    payload[offset + 2..offset + 4].copy_from_slice(&q.to_le_bytes());
+                }
+            }
+        }
+        PacketCopy {
+            header,
+            payload,
+            detected_bandwidth: Some(BandwidthMode::Mhz100),
+            gap_before: false,
+        }
+    }
+
+    fn time_packet_by_channel(header: T510Header, iq_by_channel: &[(i16, i16); TIME_NINPUT]) -> PacketCopy {
+        let mut payload = vec![0u8; TIME_UDP_PAYLOAD_BYTES];
+        for beat in 0..header.time_count as usize {
+            for sub in 0..TIME_SUBSAMPLES_PER_BEAT {
+                for (channel, (i, q)) in iq_by_channel.iter().copied().enumerate() {
+                    let offset = time_payload_complex_offset(beat, sub, channel).unwrap();
+                    payload[offset..offset + 2].copy_from_slice(&i.to_le_bytes());
+                    payload[offset + 2..offset + 4].copy_from_slice(&q.to_le_bytes());
+                }
+            }
+        }
+        PacketCopy {
+            header,
+            payload,
+            detected_bandwidth: Some(BandwidthMode::Mhz100),
+            gap_before: false,
+        }
+    }
+
+    fn time_packet_channel_samples(mut header: T510Header, channel: usize, samples: &[(i16, i16)]) -> PacketCopy {
+        header.time_count = div_ceil(samples.len(), TIME_SUBSAMPLES_PER_BEAT) as u16;
+        let mut payload = vec![0u8; TIME_UDP_PAYLOAD_BYTES];
+        for (idx, (i, q)) in samples.iter().copied().enumerate() {
+            let beat = idx / TIME_SUBSAMPLES_PER_BEAT;
+            let sub = idx % TIME_SUBSAMPLES_PER_BEAT;
+            let offset = time_payload_complex_offset(beat, sub, channel).unwrap();
+            payload[offset..offset + 2].copy_from_slice(&i.to_le_bytes());
+            payload[offset + 2..offset + 4].copy_from_slice(&q.to_le_bytes());
+        }
+        PacketCopy {
+            header,
+            payload,
+            detected_bandwidth: Some(BandwidthMode::Mhz100),
+            gap_before: false,
+        }
+    }
+
+    #[test]
+    fn display_defaults_to_stage27h_100mhz() {
+        let config = DisplayConfig::default();
+        assert_eq!(config.bandwidth_mhz, 100);
+        assert_eq!(config.bandwidth_mode(), BandwidthMode::Mhz100);
+
+        let mut invalid = config.clone();
+        invalid.bandwidth_mhz = 1234;
+        sanitize_config(&mut invalid);
+        assert_eq!(invalid.bandwidth_mhz, 100);
+
+        let mut args = test_args();
+        args.initial_bandwidth_mhz = 1234;
+        let stats = ReceiverStats::new(&args);
+        assert_eq!(stats.selected_bandwidth_mhz, 100);
+    }
+
+    #[test]
+    fn config_patch_increments_generation_and_resets_previews() {
+        let args = test_args();
+        let mut state = SharedState {
+            config: DisplayConfig::default(),
+            config_generation: 7,
+            stats: ReceiverStats::new(&args),
+            waveform: None,
+            waveform_binary: Some(vec![1, 2, 3]),
+            waveform_updated: Some(Instant::now()),
+            spectrum: None,
+            spectrum_binary: Some(vec![4, 5, 6]),
+            spectrum_updated: Some(Instant::now()),
+            spectrum_preview: SpecPreviewCapture::default(),
+        };
+        state.spectrum_preview.status.complete = true;
+        state.stats.detected_bandwidth_mhz = Some(100);
+
+        let (config, generation) = apply_display_config_patch_to_shared(
+            &mut state,
+            DisplayConfigPatch {
+                bandwidth_mhz: Some(20),
+                center_mhz: None,
+                expected_mhz: None,
+                dac_mhz: None,
+                waveform_view_mode: None,
+                phase_deg_by_channel: None,
+                channel_mask: None,
+                time_window_us: Some(0.5),
+                display_points: None,
+                vertical_scale: None,
+                paused: None,
+                pause: None,
+                freeze: None,
+            },
+        );
+
+        assert_eq!(generation, 8);
+        assert_eq!(config.bandwidth_mhz, 20);
+        assert_eq!(state.config_generation, 8);
+        assert!(state.waveform_binary.is_none());
+        assert!(state.waveform_updated.is_none());
+        assert!(state.spectrum_binary.is_none());
+        assert!(state.spectrum_updated.is_none());
+        assert!(!state.spectrum_preview.status.complete);
+        assert_eq!(state.stats.selected_bandwidth_mhz, 20);
+        assert!(state.stats.selected_detected_mismatch);
+    }
+
+    #[test]
+    fn stale_preview_cache_is_cleared_before_serving_web() {
+        let args = test_args();
+        let mut stats = ReceiverStats::new(&args);
+        stats.expected_packets_per_sec = 480_000.0;
+        stats.rx_processed_packets_per_sec = 480_000.0;
+        stats.spec_processed_packets_per_sec = 480_000.0;
+        let mut state = SharedState {
+            config: DisplayConfig::default(),
+            config_generation: 0,
+            stats,
+            waveform: None,
+            waveform_binary: Some(vec![1, 2, 3]),
+            waveform_updated: Some(Instant::now() - PREVIEW_STALE_AFTER - Duration::from_millis(1)),
+            spectrum: None,
+            spectrum_binary: Some(vec![4, 5, 6]),
+            spectrum_updated: Some(Instant::now()),
+            spectrum_preview: SpecPreviewCapture::default(),
+        };
+
+        clear_stale_previews(&mut state);
+
+        assert!(state.waveform_binary.is_none());
+        assert!(state.waveform_updated.is_none());
+        assert!(state.spectrum_binary.is_some());
+        assert!(state.spectrum_updated.is_some());
+    }
+
+    #[test]
+    fn low_rate_preview_cache_is_cleared_even_when_recent() {
+        let args = test_args();
+        let mut stats = ReceiverStats::new(&args);
+        stats.expected_packets_per_sec = 480_000.0;
+        stats.rx_processed_packets_per_sec = 1_500.0;
+        stats.spec_processed_packets_per_sec = 2_000.0;
+        let mut state = SharedState {
+            config: DisplayConfig::default(),
+            config_generation: 0,
+            stats,
+            waveform: None,
+            waveform_binary: Some(vec![1, 2, 3]),
+            waveform_updated: Some(Instant::now()),
+            spectrum: None,
+            spectrum_binary: Some(vec![4, 5, 6]),
+            spectrum_updated: Some(Instant::now()),
+            spectrum_preview: SpecPreviewCapture::default(),
+        };
+
+        clear_stale_previews(&mut state);
+
+        assert!(state.waveform_binary.is_none());
+        assert!(state.waveform_updated.is_none());
+        assert!(state.spectrum_binary.is_none());
+        assert!(state.spectrum_updated.is_none());
     }
 
     #[test]
@@ -3870,12 +4891,26 @@ mod tests {
             detected_bandwidth_mhz: Some(100),
             decimation: 1,
             sample_rate_hz: RAW_SAMPLE_RATE_HZ,
+            requested_window_us: 2.0,
+            captured_window_us: 1.0,
             center_mhz: 200.0,
+            expected_mhz: 120.0,
+            dac_mhz: 120.0,
+            expected_baseband_mhz: -80.0,
+            rf_samples_per_cycle: RAW_SAMPLE_RATE_HZ / 120_000_000.0,
+            baseband_samples_per_cycle: RAW_SAMPLE_RATE_HZ / 80_000_000.0,
+            rf_window_cycles: 30.0,
             gap_before: true,
             channels: vec![
                 ChannelWaveform {
                     channel: 0,
                     x_us: vec![0.0, 1.0],
+                    i: vec![1.0, -0.5],
+                    q: vec![0.2, 0.3],
+                    mag: vec![1.02, 0.58],
+                    sample_rf: vec![0.7, -0.3],
+                    rf_x_us: vec![0.0, 1.0, 2.0],
+                    rf: vec![0.8, -0.4],
                     y: vec![1.0, -0.5],
                     rms_code: 0.0,
                     max_abs_code: 1,
@@ -3884,6 +4919,12 @@ mod tests {
                 ChannelWaveform {
                     channel: 3,
                     x_us: vec![0.0, 1.0],
+                    i: vec![0.25, 0.75],
+                    q: vec![0.1, 0.2],
+                    mag: vec![0.27, 0.78],
+                    sample_rf: vec![0.15, 0.65],
+                    rf_x_us: vec![0.0, 1.0, 2.0],
+                    rf: vec![0.2, 0.6],
                     y: vec![0.25, 0.75],
                     rms_code: 0.0,
                     max_abs_code: 1,
@@ -3892,10 +4933,10 @@ mod tests {
             ],
         };
         let bytes = encode_waveform_binary(&snapshot, 12);
-        assert_eq!(bytes.len(), 64 + 2 * 2 * 4);
+        assert_eq!(bytes.len(), 160 + 2 * (2 * 20 + 2 * 8));
         assert_eq!(le_u32(&bytes, 0), WAVEFORM_MAGIC);
-        assert_eq!(le_u16(&bytes, 4), 1);
-        assert_eq!(le_u16(&bytes, 6), 64);
+        assert_eq!(le_u16(&bytes, 4), WAVEFORM_BINARY_VERSION);
+        assert_eq!(le_u16(&bytes, 6), WAVEFORM_BINARY_HEADER_BYTES);
         assert_eq!(le_u64(&bytes, 8), 123_456);
         assert_eq!(le_u32(&bytes, 16), 10);
         assert_eq!(le_u32(&bytes, 20), 12);
@@ -3906,10 +4947,356 @@ mod tests {
         assert_eq!(le_u32(&bytes, 40), 2);
         assert_eq!(le_u32(&bytes, 44), 2);
         assert_eq!(le_u32(&bytes, 48), 1);
-        assert_eq!(f32::from_le_bytes(bytes[64..68].try_into().unwrap()), 1.0);
-        assert_eq!(f32::from_le_bytes(bytes[68..72].try_into().unwrap()), -0.5);
-        assert_eq!(f32::from_le_bytes(bytes[72..76].try_into().unwrap()), 0.25);
-        assert_eq!(f32::from_le_bytes(bytes[76..80].try_into().unwrap()), 0.75);
+        assert_eq!(le_f64(&bytes, 56), RAW_SAMPLE_RATE_HZ);
+        assert_eq!(le_f64(&bytes, 64), 2.0);
+        assert_eq!(le_f64(&bytes, 72), 200.0);
+        assert_eq!(le_f64(&bytes, 80), 120.0);
+        assert_eq!(le_f64(&bytes, 88), 120.0);
+        assert_eq!(le_f64(&bytes, 96), -80.0);
+        assert_eq!(le_f64(&bytes, 128), 1.0);
+        assert_eq!(f32::from_le_bytes(bytes[160..164].try_into().unwrap()), 0.0);
+        assert_eq!(f32::from_le_bytes(bytes[164..168].try_into().unwrap()), 1.0);
+        assert_eq!(f32::from_le_bytes(bytes[168..172].try_into().unwrap()), 1.0);
+        assert_eq!(f32::from_le_bytes(bytes[172..176].try_into().unwrap()), -0.5);
+        assert_eq!(f32::from_le_bytes(bytes[176..180].try_into().unwrap()), 0.2);
+        assert_eq!(f32::from_le_bytes(bytes[180..184].try_into().unwrap()), 0.3);
+        assert_eq!(f32::from_le_bytes(bytes[184..188].try_into().unwrap()), 1.02);
+        assert_eq!(f32::from_le_bytes(bytes[188..192].try_into().unwrap()), 0.58);
+        assert_eq!(f32::from_le_bytes(bytes[192..196].try_into().unwrap()), 0.7);
+        assert_eq!(f32::from_le_bytes(bytes[196..200].try_into().unwrap()), -0.3);
+        assert_eq!(f32::from_le_bytes(bytes[200..204].try_into().unwrap()), 0.0);
+        assert_eq!(f32::from_le_bytes(bytes[204..208].try_into().unwrap()), 1.0);
+        assert_eq!(f32::from_le_bytes(bytes[208..212].try_into().unwrap()), 0.8);
+        assert_eq!(f32::from_le_bytes(bytes[212..216].try_into().unwrap()), -0.4);
+    }
+
+    #[test]
+    fn waveform_preview_keeps_real_iq_points_and_adds_display_curve() {
+        let mut config = DisplayConfig::default();
+        config.channel_mask = 0x0001;
+        config.display_points = 1024;
+        config.time_window_us = 10.0;
+        config.vertical_scale = 1.0;
+        config.dac_mhz = 0.0;
+        config.expected_mhz = 0.0;
+        config.center_mhz = 0.0;
+
+        let mut header = test_header(0);
+        header.sample0 = 0;
+        header.time_count = 2;
+        let snapshot = build_waveform_from_packets(&[time_packet(header, 100, 0)], &config).unwrap();
+        assert_eq!(snapshot.channels.len(), 1);
+        assert_eq!(snapshot.channels[0].x_us.len(), 8);
+        assert_eq!(snapshot.channels[0].i.len(), 8);
+        assert!(snapshot.channels[0].i.iter().all(|value| (*value - 100.0).abs() < 1.0e-3));
+        assert_eq!(snapshot.channels[0].sample_rf.len(), 8);
+        assert_eq!(snapshot.channels[0].rf.len(), 1024);
+        assert_eq!(snapshot.channels[0].rf_x_us.len(), 1024);
+    }
+
+    #[test]
+    fn waveform_scope_uses_real_iq_for_rf_reconstruction() {
+        let mut config = DisplayConfig::default();
+        config.channel_mask = 0x0003;
+        config.display_points = 1024;
+        config.time_window_us = 1.0;
+        config.vertical_scale = 1.0;
+        config.center_mhz = 61.44; // RAW_SAMPLE_RATE_HZ / 4.
+
+        let mut header = test_header(0);
+        header.sample0 = 1;
+        header.time_count = 1;
+
+        config.dac_mhz = 120.0;
+        config.expected_mhz = 120.0;
+        let packet = time_packet_by_channel(
+            header,
+            &[
+                (1000, 0),
+                (1000, 250),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+            ],
+        );
+        let snapshot = build_waveform_from_packets(&[packet], &config).unwrap();
+        assert!((snapshot.rf_window_cycles - 120.0).abs() < 1.0e-9);
+        assert_eq!(snapshot.expected_mhz, 120.0);
+        assert!((snapshot.expected_baseband_mhz - 58.56).abs() < 1.0e-9);
+        assert_eq!(snapshot.channels[0].sample_rf.len(), 4);
+        assert_eq!(snapshot.channels[1].sample_rf.len(), 4);
+        assert_eq!(snapshot.channels[0].rf.len(), 1024);
+        assert_eq!(snapshot.channels[1].rf.len(), 1024);
+        assert!((snapshot.channels[0].sample_rf[0]).abs() < 1.0e-3);
+        assert!((snapshot.channels[1].sample_rf[0] + 250.0).abs() < 1.0e-3);
+    }
+
+    fn dominant_curve_mhz(snapshot: &WaveformSnapshot) -> f64 {
+        let curve = &snapshot.channels[0].rf;
+        let n = curve.len().max(1);
+        let curve_sample_rate_mhz = n as f64 / snapshot.requested_window_us.max(1.0e-9);
+        let mut best = (0.0f64, 0usize);
+        for k in 1..(n / 2).min(256) {
+            let mut re = 0.0;
+            let mut im = 0.0;
+            for (idx, value) in curve.iter().copied().enumerate() {
+                let phase = -2.0 * std::f64::consts::PI * k as f64 * idx as f64 / n as f64;
+                re += value as f64 * phase.cos();
+                im += value as f64 * phase.sin();
+            }
+            let power = re * re + im * im;
+            if power > best.0 {
+                best = (power, k);
+            }
+        }
+        best.1 as f64 * curve_sample_rate_mhz / n as f64
+    }
+
+    fn tone_fit_fraction(snapshot: &WaveformSnapshot, mhz: f64) -> f64 {
+        let channel = &snapshot.channels[0];
+        let n = channel.rf.len().min(channel.rf_x_us.len());
+        if n == 0 {
+            return 0.0;
+        }
+        let mean = channel.rf.iter().take(n).map(|v| *v as f64).sum::<f64>() / n as f64;
+        let mut cc = 0.0;
+        let mut ss = 0.0;
+        let mut cs = 0.0;
+        let mut yc = 0.0;
+        let mut ys = 0.0;
+        let mut yy = 0.0;
+        for idx in 0..n {
+            let y = channel.rf[idx] as f64 - mean;
+            let phase = 2.0 * std::f64::consts::PI * mhz * channel.rf_x_us[idx] as f64;
+            let c = phase.cos();
+            let s = phase.sin();
+            cc += c * c;
+            ss += s * s;
+            cs += c * s;
+            yc += y * c;
+            ys += y * s;
+            yy += y * y;
+        }
+        let det = cc * ss - cs * cs;
+        if det.abs() < 1.0e-12 || yy <= 0.0 {
+            return 0.0;
+        }
+        let a = (yc * ss - ys * cs) / det;
+        let b = (ys * cc - yc * cs) / det;
+        let explained = a * yc + b * ys;
+        (explained / yy).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn rf_scope_uses_measured_iq_sideband_for_lower_rf_tone() {
+        let mut config = DisplayConfig::default();
+        config.channel_mask = 0x0001;
+        config.bandwidth_mhz = 100;
+        config.display_points = 1024;
+        config.time_window_us = 0.25;
+        config.vertical_scale = 1.0;
+        config.center_mhz = 100.0;
+        config.expected_mhz = 60.0;
+        config.dac_mhz = 60.0;
+
+        let amplitude = 1000.0;
+        let raw_hz = 40_000_000.0;
+        let sample_rate_hz = BandwidthMode::Mhz100.sample_rate_hz();
+        let mut samples = Vec::new();
+        for n in 0..64 {
+            let phase = 2.0 * std::f64::consts::PI * raw_hz * n as f64 / sample_rate_hz;
+            samples.push(((amplitude * phase.cos()).round() as i16, (amplitude * phase.sin()).round() as i16));
+        }
+
+        let mut header = test_header(0);
+        header.sample0 = 0;
+        let packet = time_packet_channel_samples(header, 0, &samples);
+        let snapshot = build_waveform_from_packets(&[packet], &config).unwrap();
+        assert_eq!(snapshot.channels.len(), 1);
+        assert_eq!(snapshot.channels[0].sample_rf.len(), 32);
+        assert_eq!(snapshot.channels[0].rf.len(), 1024);
+        assert!((snapshot.rf_window_cycles - 15.0).abs() < 1.0e-9);
+        assert!((dominant_curve_mhz(&snapshot) - 60.0).abs() < 2.5);
+        assert!(tone_fit_fraction(&snapshot, 60.0) > 0.96);
+    }
+
+    #[test]
+    fn rf_scope_curve_shows_upper_rf_tone_cycles() {
+        let mut config = DisplayConfig::default();
+        config.channel_mask = 0x0001;
+        config.bandwidth_mhz = 100;
+        config.display_points = 1024;
+        config.time_window_us = 0.25;
+        config.vertical_scale = 1.0;
+        config.center_mhz = 100.0;
+        config.expected_mhz = 140.0;
+        config.dac_mhz = 140.0;
+
+        let amplitude = 1000.0;
+        let raw_hz = 40_000_000.0;
+        let sample_rate_hz = BandwidthMode::Mhz100.sample_rate_hz();
+        let mut samples = Vec::new();
+        for n in 0..64 {
+            let phase = 2.0 * std::f64::consts::PI * raw_hz * n as f64 / sample_rate_hz;
+            samples.push(((amplitude * phase.cos()).round() as i16, (amplitude * phase.sin()).round() as i16));
+        }
+
+        let mut header = test_header(0);
+        header.sample0 = 0;
+        let packet = time_packet_channel_samples(header, 0, &samples);
+        let snapshot = build_waveform_from_packets(&[packet], &config).unwrap();
+        assert_eq!(snapshot.channels[0].sample_rf.len(), 32);
+        assert_eq!(snapshot.channels[0].rf.len(), 1024);
+        assert!((snapshot.rf_window_cycles - 35.0).abs() < 1.0e-9);
+        assert!((dominant_curve_mhz(&snapshot) - 140.0).abs() < 3.5);
+    }
+
+    #[test]
+    fn rf_scope_point_count_does_not_follow_configured_signal_frequency() {
+        let mut config = DisplayConfig::default();
+        config.channel_mask = 0x0001;
+        config.display_points = 1024;
+        config.time_window_us = 0.25;
+        config.vertical_scale = 1.0;
+        config.center_mhz = 200.0;
+
+        let mut header = test_header(0);
+        header.sample0 = 0;
+        header.time_count = DEFAULT_TIME_COUNT;
+        let packet = time_packet(header, 1000, 0);
+
+        let mut lens = Vec::new();
+        for (mhz, cycles) in [(160.0, 40.0), (190.0, 47.5), (240.0, 60.0)] {
+            config.expected_mhz = mhz;
+            config.dac_mhz = mhz;
+            let snapshot = build_waveform_from_packets(std::slice::from_ref(&packet), &config).unwrap();
+            assert!((snapshot.rf_window_cycles - cycles).abs() < 1.0e-9);
+            lens.push(snapshot.channels[0].rf.len());
+        }
+        assert_eq!(lens, vec![1024, 1024, 1024]);
+    }
+
+    fn spec_preview_header(frame_id: u64, block_index: u16, block_count: u16) -> T510Header {
+        T510Header {
+            magic: 0x5435_3130,
+            version: 2,
+            header_bytes: 128,
+            board_id: 1,
+            stream_type: STREAM_SPEC,
+            epoch_mode: 0,
+            flags: 0,
+            unix_sec: 0,
+            pps_count: 0,
+            sample0: frame_id * 4096,
+            frame_id,
+            seq_no: block_index as u32,
+            chan0: block_index as u32,
+            chan_count: 1,
+            time_count: 1,
+            ninput: 1,
+            payload_format: 0,
+            scale_id: 0,
+            payload_bytes: 8192,
+            product_id: 0xf101,
+            nchan: block_count,
+            block_index,
+            block_count,
+            pfb_taps: 0,
+            fft_shift: 0,
+            spec_status_flags: SPEC_FFT_ONLY_FLAG,
+            spec_sample_rate_hz: 100_000_000,
+            scale_mode: 0,
+            spec_half_band: false,
+            header_crc: 0,
+        }
+    }
+
+    fn spec_preview_block(frame_id: u64, block_index: u16, block_count: u16) -> SpectrumSnapshot {
+        let header = spec_preview_header(frame_id, block_index, block_count);
+        SpectrumSnapshot {
+            sample0: header.sample0,
+            seq_no: header.seq_no,
+            frame_id: header.frame_id,
+            chan0: header.chan0,
+            chan_count: header.chan_count,
+            time_count: header.time_count,
+            ninput: header.ninput,
+            product_id: header.product_id,
+            nchan: header.nchan,
+            block_index: header.block_index,
+            block_count: header.block_count,
+            pfb_taps: header.pfb_taps,
+            fft_shift: header.fft_shift,
+            spec_status_flags: header.spec_status_flags,
+            spec_sample_rate_hz: header.spec_sample_rate_hz,
+            coverage_blocks: 1,
+            coverage_mask_lo: 1u64 << block_index,
+            coverage_mask_hi: 0,
+            src_port: 4008 + block_index,
+            dst_port: 4308 + block_index,
+            gap_before: false,
+            lanes: vec![SpectrumLane {
+                input: 0,
+                amplitude: vec![block_index as f32 + 1.0],
+                phase_rad: vec![0.0],
+                power_db: vec![10.0],
+            }],
+        }
+    }
+
+    #[test]
+    fn spectrum_preview_gate_selects_unique_blocks_from_one_frame() {
+        let gate = SpectrumPreviewGate::default();
+        let interval = Duration::from_secs(10);
+
+        let arming_block = spec_preview_header(100, 0, 16);
+        assert!(!gate.should_decode(&arming_block, interval));
+
+        let target_group = (arming_block.frame_id / 16) + SPECTRUM_PREVIEW_GROUP_LEAD;
+        let block0 = spec_preview_header(target_group * 16, 0, 16);
+        let block1 = spec_preview_header(target_group * 16 + 1, 1, 16);
+        let next_group = spec_preview_header((target_group + 1) * 16, 0, 16);
+
+        assert!(gate.should_decode(&block0, interval));
+        assert!(!gate.should_decode(&block0, interval));
+        assert!(gate.should_decode(&block1, interval));
+        assert!(!gate.should_decode(&next_group, interval));
+
+        gate.reset();
+        assert!(!gate.should_decode(&next_group, interval));
+    }
+
+    #[test]
+    fn spec_preview_capture_publishes_only_complete_single_frame() {
+        let mut capture = SpecPreviewCapture::default();
+        capture.last_publish = Instant::now() - Duration::from_secs(1);
+        let interval = Duration::from_millis(100);
+
+        let block1_header = spec_preview_header(7, 1, 2);
+        assert!(capture.should_decode(&block1_header, interval));
+        assert!(capture.ingest(&spec_preview_block(7, 1, 2), interval).is_none());
+        assert_eq!(capture.status.coverage_blocks, 1);
+
+        let block0_header = spec_preview_header(8, 0, 2);
+        assert!(capture.should_decode(&block0_header, interval));
+        assert!(capture.ingest(&spec_preview_block(8, 0, 2), interval).is_none());
+        assert_eq!(capture.status.frame_id, Some(8));
+        assert_eq!(capture.status.coverage_blocks, 1);
+        assert!(!capture.status.complete);
+
+        let block1_header = spec_preview_header(8, 1, 2);
+        assert!(capture.should_decode(&block1_header, interval));
+        let snapshot = capture
+            .ingest(&spec_preview_block(8, 1, 2), Duration::from_millis(1))
+            .unwrap();
+        assert_eq!(snapshot.coverage_blocks, 2);
+        assert_eq!(snapshot.coverage_mask_lo & 0b11, 0b11);
+        assert_eq!(snapshot.lanes[0].amplitude[0], 1.0);
+        assert_eq!(snapshot.lanes[0].amplitude[1], 2.0);
+        assert!(capture.status.complete);
     }
 
     #[test]
@@ -3997,12 +5384,15 @@ fn main() -> std::io::Result<()> {
     sanitize_config(&mut initial_config);
     let shared = Arc::new(Mutex::new(SharedState {
         config: initial_config,
+        config_generation: 0,
         stats,
         waveform: None,
         waveform_binary: None,
+        waveform_updated: None,
         spectrum: None,
         spectrum_binary: None,
-        spectrum_assembler: FullSpectrumAssembler::default(),
+        spectrum_updated: None,
+        spectrum_preview: SpecPreviewCapture::default(),
     }));
 
     let receiver_shared = shared.clone();
@@ -4051,21 +5441,22 @@ const HTML: &str = r#"<!doctype html>
 <style>
 :root{color-scheme:dark;--bg:#090b0d;--panel:#151616;--panel2:#1d1f1f;--line:#343838;--text:#edf1ee;--muted:#a7b0aa;--ok:#6ee7a8;--warn:#f4c76b;--bad:#ff7b7b;--cyan:#57c7ff}
 *{box-sizing:border-box}
-html,body{height:100%}
+html,body{min-height:100%}
 body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text)}
-.app{height:100vh;display:grid;grid-template-rows:44px minmax(360px,1fr) auto;min-width:320px}
-.topbar{display:flex;align-items:center;gap:10px;padding:0 12px;background:#101211;border-bottom:1px solid var(--line);font-size:13px;white-space:nowrap;overflow:hidden}
+.app{min-height:100vh;display:block;min-width:320px}
+.topbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;min-height:44px;padding:7px 12px;background:#101211;border-bottom:1px solid var(--line);font-size:13px}
 .brand{font-weight:750;color:#f7faf8;margin-right:4px}
 .pill{display:inline-flex;align-items:center;min-height:24px;padding:2px 8px;border:1px solid #3b4240;border-radius:4px;background:#191b1b;color:var(--muted)}
 .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
-.scope-wrap{min-height:0;padding:10px 12px;background:#060707}
-.scope-grid{height:100%;min-height:0;display:grid;grid-template-columns:minmax(320px,1.1fr) minmax(320px,0.9fr);gap:10px}
-.plot{min-height:0;display:grid;grid-template-rows:24px minmax(0,1fr);gap:6px}
+.scope-wrap{padding:8px 10px;background:#060707}
+.scope-grid{display:grid;grid-template-columns:minmax(420px,0.95fr) minmax(520px,1.05fr);gap:10px;align-items:start}
+.plot{display:grid;grid-template-rows:24px minmax(0,1fr);gap:6px}
 .plot-title{display:flex;align-items:center;justify-content:space-between;color:#c9d2cd;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
-.spec-stack{min-height:0;display:grid;grid-template-rows:1fr 1fr 1fr 1.1fr;gap:8px}
-#scope,.spec-canvas{display:block;width:100%;height:100%;min-height:150px;background:#020303;border:1px solid var(--line);border-radius:6px}
-.bottom{background:var(--panel);border-top:1px solid var(--line);max-height:44vh;overflow:auto}
-.controls{display:grid;grid-template-columns:minmax(260px,1fr) minmax(320px,1.2fr) minmax(260px,1fr) minmax(380px,1.6fr);gap:12px;padding:10px 12px}
+.spec-stack{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,166px);gap:8px}
+#scope,.spec-canvas{display:block;width:100%;height:100%;background:#020303;border:1px solid var(--line);border-radius:6px}
+#scope{height:340px;min-height:300px}.spec-canvas{min-height:150px}
+.bottom{background:var(--panel);border-top:1px solid var(--line);overflow:visible}
+.controls{display:grid;grid-template-columns:minmax(250px,0.9fr) minmax(300px,1fr) minmax(220px,0.8fr) minmax(360px,1.3fr);gap:10px;padding:9px 10px}
 .group{min-width:0}
 .group h2{margin:0 0 8px;font-size:12px;font-weight:760;color:#d8ded9;text-transform:uppercase;letter-spacing:0}
 .field{display:grid;grid-template-columns:96px minmax(0,1fr);align-items:center;gap:8px;margin:6px 0;font-size:12px;color:var(--muted)}
@@ -4082,13 +5473,14 @@ button{cursor:pointer;background:#18201d}
 .metric{min-width:0;padding:6px 8px;background:#0d0f0f;border:1px solid #333a38;border-radius:4px;overflow:hidden}
 .metric b{display:block;color:#f0f5f1;font-weight:680;overflow:hidden;text-overflow:ellipsis}
 .metric span{color:var(--muted)}
-.science-note{margin:8px 0 0;padding:8px;border:1px solid #333a38;border-radius:4px;background:#0d0f0f;color:#b8c2bc;font-size:12px;line-height:1.45}
+.science-note{margin:8px 0 0;padding:7px;border:1px solid #333a38;border-radius:4px;background:#0d0f0f;color:#b8c2bc;font-size:12px;line-height:1.35}
 .science-note b{color:#eef4ef}
 details{border-top:1px solid var(--line);padding:8px 12px 10px}
 summary{cursor:pointer;color:#d8ded9;font-size:12px}
 pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#dce3df}
-@media (max-width:1120px){.scope-grid{grid-template-columns:1fr}.controls{grid-template-columns:1fr 1fr}.flows{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:760px){.app{grid-template-rows:72px minmax(420px,1fr) auto}.topbar{flex-wrap:wrap;gap:6px;padding:6px 10px}.controls{grid-template-columns:1fr}.bottom{max-height:52vh}.flows{grid-template-columns:1fr}}
+@media (max-width:1120px){.scope-grid{grid-template-columns:1fr}.spec-stack{grid-template-rows:repeat(2,170px)}.controls{grid-template-columns:1fr 1fr}.flows{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:760px){.topbar{gap:6px;padding:6px 10px}.scope-wrap{padding:8px}#scope{height:300px;min-height:280px}.spec-stack{grid-template-columns:1fr;grid-template-rows:repeat(4,150px)}.controls{grid-template-columns:1fr;padding:10px}.flows{grid-template-columns:1fr}.field{grid-template-columns:86px minmax(0,1fr)}}
+@media (max-height:820px) and (min-width:1121px){#scope{height:300px;min-height:280px}.spec-stack{grid-template-rows:repeat(2,146px)}}
 </style>
 </head>
 <body>
@@ -4098,7 +5490,7 @@ pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regul
     <div id="backendStatus" class="pill">backend --</div>
     <div id="wsStatus" class="pill warn">waveform connecting</div>
     <div id="specWsStatus" class="pill warn">spectrum connecting</div>
-    <div id="bwStatus" class="pill">selected 200 / detected --</div>
+    <div id="bwStatus" class="pill">selected 100 / detected --</div>
     <div id="lossStatus" class="pill">gaps --</div>
     <div id="rateStatus" class="pill">TIME -- / SPEC --</div>
     <div id="flowStatus" class="pill">flows --</div>
@@ -4108,7 +5500,7 @@ pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regul
   <main class="scope-wrap">
     <div class="scope-grid">
       <section class="plot">
-        <div class="plot-title"><span>TIME RF-equivalent waveform</span><span id="timePlotStatus">--</span></div>
+        <div class="plot-title"><span>TIME IQ-derived measured points</span><span id="timePlotStatus">--</span></div>
         <canvas id="scope"></canvas>
       </section>
       <section class="plot">
@@ -4126,7 +5518,7 @@ pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regul
     <div class="controls">
       <section class="group">
         <h2>Production Preview</h2>
-        <label class="field"><span>Bandwidth</span><select id="bandwidth"><option value="200">200 MHz</option><option value="100">100 MHz</option><option value="20">20 MHz</option></select></label>
+        <label class="field"><span>Bandwidth</span><select id="bandwidth"><option value="100" selected>100 MHz</option><option value="20">20 MHz</option><option value="200">200 MHz</option></select></label>
         <label class="field"><span>Center MHz</span><input id="center" type="number" step="0.5" value="200"></label>
         <div class="row">
           <label class="field"><span>Expected</span><input id="expected" type="number" step="0.5" value="200"></label>
@@ -4136,9 +5528,11 @@ pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regul
           <label class="field"><span>Window us</span><input id="timeWindow" type="number" step="0.05" value="0.25"></label>
         <label class="field"><span>Points</span><select id="points"><option selected>1024</option><option>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label>
         </div>
+        <label class="field"><span>Waveform</span><select id="waveMode"><option value="dual" selected>Curve+Samples</option><option value="samples">Samples only</option><option value="curve">Curve only</option></select></label>
         <label class="field"><span>Y scale</span><input id="yscale" type="number" step="64" value="512"></label>
-        <label class="field"><span>SPEC port</span><select id="specPort"><option value="auto">Auto</option></select></label>
+        <label class="field"><span>Spectrum</span><select id="specPort"><option value="full" selected>Full 4096</option></select></label>
         <label class="field"><span>SPEC input</span><select id="specLane"><option value="avg">Avg</option><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option></select></label>
+        <label class="field"><span>Phase ref</span><select id="phaseRef"><option value="0">CH0</option><option value="1" selected>CH1</option><option value="2">CH2</option><option value="3">CH3</option><option value="4">CH4</option><option value="5">CH5</option><option value="6">CH6</option><option value="7">CH7</option></select></label>
       </section>
       <section class="group">
         <h2>Channel Phase</h2>
@@ -4155,7 +5549,7 @@ pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regul
       </section>
       <section class="group">
         <h2>Production Gate</h2>
-        <div class="science-note"><b>Stage 27h.</b> Production gate is TIME_SPEC 100MHz with 8 TIME flows and 16 FFT-only SPEC flows, ports 4300..4323, and combined T510 UDP payload above 63Gbps. SPEC bins are complex voltage X=I+jQ from the FFT-only F-engine; amplitude is |X|, phase is atan2(Q,I), power is 10log10(I^2+Q^2), and waterfall is power history.</div>
+        <div class="science-note"><b>Stage 27h.</b> Production gate is TIME_SPEC 100MHz with 8 TIME flows and 16 FFT-only SPEC flows, ports 4300..4323, and combined T510 UDP payload above 63Gbps. SPEC bins are complex voltage X=I+jQ from the FFT-only F-engine; amplitude is |X|, phase history is target-bin relative atan2(Q,I), power is 10log10(I^2+Q^2), and waterfall is power history.</div>
         <div id="summary" class="summary"></div>
         <div id="flows" class="flows"></div>
       </section>
@@ -4169,43 +5563,116 @@ pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regul
 <script>
 const RAW=245760000;
 const colors=['#57c7ff','#f4c76b','#6ee7a8','#ff7b7b','#c99cff','#f79a5f','#5ee0d2','#ef7fb0'];
-let config=null, stats=null, applying=false, waveform=null, ws=null, specWs=null, wsFrames=0, specFrames=0, lastDraw=0;
-let spectrum=null, drawPending=false, specDrawPending=false, waterfallRows=[];
-const spectraByPort=new Map();
-const phases=document.getElementById('phases'), mask=document.getElementById('mask'), specPort=document.getElementById('specPort'), specLane=document.getElementById('specLane');
-for(let port=4308;port<=4323;port++){const o=document.createElement('option');o.value=String(port);o.textContent=String(port);specPort.appendChild(o);}
-specPort.addEventListener('change',()=>{selectSpectrum();requestAnimationFrame(drawSpectrum);});
+const PHASE_HISTORY_SECONDS=30;
+const PHASE_HISTORY_MAX_POINTS=2048;
+let config=null, configGeneration=0, stats=null, specPreview=null, waveformLive=false, spectrumLive=false, waveformAgeMs=null, spectrumAgeMs=null, applying=false, waveform=null, ws=null, specWs=null, wsFrames=0, specFrames=0, lastDraw=0;
+let spectrum=null, drawPending=false, specDrawPending=false, waterfallRows=[], phaseHistory=[], phaseHistoryKey='', phaseHistoryStatus='waiting for SPEC phase history';
+const plotScale={ampMax:null,powerMin:null,powerMax:null};
+const phases=document.getElementById('phases'), mask=document.getElementById('mask'), specPort=document.getElementById('specPort'), specLane=document.getElementById('specLane'), phaseRef=document.getElementById('phaseRef');
+specPort.addEventListener('change',()=>{requestAnimationFrame(drawSpectrum);});
 specLane.addEventListener('change',()=>{waterfallRows=[];requestAnimationFrame(drawSpectrum);});
+phaseRef.addEventListener('change',()=>{resetPhaseHistory('phase reference changed');requestAnimationFrame(drawSpectrum);});
 for(let i=0;i<8;i++){
   const p=document.createElement('label'); p.className='phase'; p.innerHTML=`CH${i}<input id="ph${i}" type="number" step="1" value="0">`; phases.appendChild(p);
   const m=document.createElement('label'); m.innerHTML=`${i}<input id="ch${i}" type="checkbox" checked>`; mask.appendChild(m);
 }
 function n(id, fallback=0){const v=Number(document.getElementById(id).value);return Number.isFinite(v)?v:fallback}
+function resetPhaseHistory(reason='waiting for SPEC phase history'){
+  phaseHistory=[];
+  phaseHistoryKey='';
+  phaseHistoryStatus=reason;
+}
+function currentPhaseRef(){
+  const v=Number(phaseRef?.value ?? 1);
+  return Math.max(0,Math.min(7,Number.isFinite(v)?v:1));
+}
 function collectConfig(){
   const phase_deg_by_channel=[]; let channel_mask=0;
   for(let i=0;i<8;i++){phase_deg_by_channel.push(n(`ph${i}`,0)); if(document.getElementById(`ch${i}`).checked) channel_mask|=(1<<i);}
-  return {bandwidth_mhz:Number(document.getElementById('bandwidth').value),center_mhz:n('center',200),expected_mhz:n('expected',200),dac_mhz:n('dac',200),phase_deg_by_channel,channel_mask,time_window_us:n('timeWindow',0.25),display_points:Number(document.getElementById('points').value),vertical_scale:Math.max(1,n('yscale',512)),paused:document.getElementById('pause').checked};
+  return {bandwidth_mhz:Number(document.getElementById('bandwidth').value),center_mhz:n('center',200),expected_mhz:n('expected',200),dac_mhz:n('dac',200),waveform_view_mode:document.getElementById('waveMode').value,phase_deg_by_channel,channel_mask,time_window_us:n('timeWindow',0.25),display_points:Number(document.getElementById('points').value),vertical_scale:Math.max(1,n('yscale',512)),paused:document.getElementById('pause').checked};
 }
-async function applyConfig(){applying=true;try{await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(collectConfig())});}finally{setTimeout(()=>applying=false,150);}}
+async function applyConfig(){
+  applying=true;
+  try{
+    const res=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(collectConfig())});
+    const body=await res.json().catch(()=>({ok:false,error:'invalid JSON response'}));
+    if(!res.ok||body.ok===false)throw new Error(body.error||`HTTP ${res.status}`);
+    config=body.config||config;
+    configGeneration=body.config_generation||configGeneration;
+    waveform=null;spectrum=null;waterfallRows=[];resetPhaseHistory('configuration changed');plotScale.ampMax=null;plotScale.powerMin=null;plotScale.powerMax=null;
+    document.getElementById('timePlotStatus').textContent=`config applied gen ${configGeneration}; waiting for fresh TIME preview`;
+    document.getElementById('specPlotStatus').textContent=`config applied gen ${configGeneration}; waiting for complete SPEC frame`;
+    requestAnimationFrame(drawTime);requestAnimationFrame(drawSpectrum);
+  }catch(e){
+    document.getElementById('dropStatus').className='pill bad';
+    document.getElementById('dropStatus').textContent=`config apply failed: ${e.message||e}`;
+  }finally{setTimeout(()=>applying=false,150);}
+}
 let applyTimer=null; function scheduleApply(){clearTimeout(applyTimer);applyTimer=setTimeout(applyConfig,120)}
 document.getElementById('apply').onclick=applyConfig;
 document.getElementById('freeze').onclick=()=>{const p=document.getElementById('pause');p.checked=!p.checked;applyConfig();};
-for(const id of ['bandwidth','center','expected','dac','timeWindow','points','yscale','pause']) document.getElementById(id).addEventListener('change',applyConfig);
+for(const id of ['bandwidth','center','expected','dac','timeWindow','points','waveMode','yscale','pause']) document.getElementById(id).addEventListener('change',applyConfig);
 for(let i=0;i<8;i++){document.getElementById(`ph${i}`).addEventListener('input',scheduleApply);document.getElementById(`ch${i}`).addEventListener('change',applyConfig);}
-function syncControls(c){if(!c||applying)return;const active=document.activeElement;if(active&&['INPUT','SELECT'].includes(active.tagName))return;document.getElementById('bandwidth').value=String(c.bandwidth_mhz);document.getElementById('center').value=c.center_mhz;document.getElementById('expected').value=c.expected_mhz;document.getElementById('dac').value=c.dac_mhz;document.getElementById('timeWindow').value=c.time_window_us;document.getElementById('points').value=String(c.display_points);document.getElementById('yscale').value=c.vertical_scale;document.getElementById('pause').checked=!!c.paused;for(let i=0;i<8;i++){document.getElementById(`ph${i}`).value=(c.phase_deg_by_channel||[])[i]||0;document.getElementById(`ch${i}`).checked=!!(c.channel_mask&(1<<i));}}
+function syncControls(c){if(!c||applying)return;const active=document.activeElement;if(active&&['INPUT','SELECT'].includes(active.tagName))return;document.getElementById('bandwidth').value=String(c.bandwidth_mhz);document.getElementById('center').value=c.center_mhz;document.getElementById('expected').value=c.expected_mhz;document.getElementById('dac').value=c.dac_mhz;document.getElementById('timeWindow').value=c.time_window_us;document.getElementById('points').value=String(c.display_points);document.getElementById('waveMode').value=c.waveform_view_mode||'dual';document.getElementById('yscale').value=c.vertical_scale;document.getElementById('pause').checked=!!c.paused;for(let i=0;i<8;i++){document.getElementById(`ph${i}`).value=(c.phase_deg_by_channel||[])[i]||0;document.getElementById(`ch${i}`).checked=!!(c.channel_mask&(1<<i));}}
 function parseWave(buf){
-  const dv=new DataView(buf); if(dv.getUint32(0,true)!==0x32574654)return null;
-  const headerBytes=dv.getUint16(6,true); const sample0=dv.getBigUint64(8,true);
+  const dv=new DataView(buf);
+  const magic=dv.getUint32(0,true);
+  if(magic!==0x35574654&&magic!==0x34574654&&magic!==0x33574654&&magic!==0x32574654)return null;
+  const version=dv.getUint16(4,true); const headerBytes=dv.getUint16(6,true); const sample0=dv.getBigUint64(8,true);
   const selected=dv.getUint32(24,true), detected=dv.getUint32(28,true), flags=dv.getUint32(32,true), maskBits=dv.getUint32(36,true);
-  const points=dv.getUint32(40,true), channelCount=dv.getUint32(44,true), decim=dv.getUint32(48,true);
+  const points=dv.getUint32(40,true), channelCount=dv.getUint32(44,true), decim=dv.getUint32(48,true), rfPoints=version>=4?dv.getUint32(52,true):points;
+  const sampleRateHz=version>=2?dv.getFloat64(56,true):RAW/(decim||1);
+  const windowUs=version>=2?dv.getFloat64(64,true):((points>1?(points-1):0)*decim/RAW*1e6);
+  const centerMhz=version>=3?dv.getFloat64(72,true):0;
+  const expectedMhz=version>=3?dv.getFloat64(80,true):0;
+  const dacMhz=version>=3?dv.getFloat64(88,true):0;
+  const basebandMhz=version>=3?dv.getFloat64(96,true):expectedMhz-centerMhz;
+  const rfSamplesPerCycle=version>=3?dv.getFloat64(104,true):Infinity;
+  const basebandSamplesPerCycle=version>=3?dv.getFloat64(112,true):Infinity;
+  const rfWindowCycles=version>=3?dv.getFloat64(120,true):0;
+  const capturedWindowUs=version>=5?dv.getFloat64(128,true):windowUs;
   let off=headerBytes; const channels=[];
   for(let ch=0;ch<8;ch++){
     if(!(maskBits&(1<<ch)))continue;
-    if(off+points*4>buf.byteLength)break;
-    channels.push({channel:ch,y:new Float32Array(buf,off,points)});
-    off+=points*4;
+    if(version>=5){
+      if(off+points*20+rfPoints*8>buf.byteLength)break;
+      const x=new Float32Array(buf,off,points); off+=points*4;
+      const i=new Float32Array(buf,off,points); off+=points*4;
+      const q=new Float32Array(buf,off,points); off+=points*4;
+      const mag=new Float32Array(buf,off,points); off+=points*4;
+      const sampleRf=new Float32Array(buf,off,points); off+=points*4;
+      const rfX=new Float32Array(buf,off,rfPoints); off+=rfPoints*4;
+      const rf=new Float32Array(buf,off,rfPoints); off+=rfPoints*4;
+      channels.push({channel:ch,x,i,q,mag,sampleRf,rfX,rf,y:sampleRf});
+    }else if(version>=4){
+      if(off+points*16+rfPoints*8>buf.byteLength)break;
+      const x=new Float32Array(buf,off,points); off+=points*4;
+      const i=new Float32Array(buf,off,points); off+=points*4;
+      const q=new Float32Array(buf,off,points); off+=points*4;
+      const mag=new Float32Array(buf,off,points); off+=points*4;
+      const rfX=new Float32Array(buf,off,rfPoints); off+=rfPoints*4;
+      const rf=new Float32Array(buf,off,rfPoints); off+=rfPoints*4;
+      channels.push({channel:ch,x,i,q,mag,sampleRf:rf,rfX,rf,y:rf});
+    }else if(version>=3){
+      if(off+points*20>buf.byteLength)break;
+      const x=new Float32Array(buf,off,points); off+=points*4;
+      const i=new Float32Array(buf,off,points); off+=points*4;
+      const q=new Float32Array(buf,off,points); off+=points*4;
+      const mag=new Float32Array(buf,off,points); off+=points*4;
+      const rf=new Float32Array(buf,off,points); off+=points*4;
+      channels.push({channel:ch,x,i,q,mag,rfX:x,rf,y:rf});
+    }else if(version>=2){
+      if(off+points*8>buf.byteLength)break;
+      const x=new Float32Array(buf,off,points); off+=points*4;
+      const y=new Float32Array(buf,off,points); off+=points*4;
+      channels.push({channel:ch,x,rf:y,y});
+    }else{
+      if(off+points*4>buf.byteLength)break;
+      channels.push({channel:ch,y:new Float32Array(buf,off,points)});
+      off+=points*4;
+    }
   }
-  return {sample0,seqStart:dv.getUint32(16,true),seqEnd:dv.getUint32(20,true),selected,detected:detected||null,gap:!!(flags&1),mismatch:!!(flags&2),maskBits,points,channelCount,decim,channels};
+  return {version,sample0,seqStart:dv.getUint32(16,true),seqEnd:dv.getUint32(20,true),selected,detected:detected||null,gap:!!(flags&1),mismatch:!!(flags&2),maskBits,points,rfPoints,channelCount,decim,sampleRateHz,windowUs,capturedWindowUs,centerMhz,expectedMhz,dacMhz,basebandMhz,rfSamplesPerCycle,basebandSamplesPerCycle,rfWindowCycles,channels};
 }
 function parseSpectrum(buf){
   const dv=new DataView(buf); if(dv.getUint32(0,true)!==0x33505354)return null;
@@ -4224,19 +5691,9 @@ function parseSpectrum(buf){
     const amp=new Float32Array(buf,off,bins); off+=bins*4;
     const phase=new Float32Array(buf,off,bins); off+=bins*4;
     const power=new Float32Array(buf,off,bins); off+=bins*4;
-    lanes.push({input:lane,amp,phase,power});
+    lanes.push({input:lane,amplitude:amp,phase_rad:phase,power});
   }
   return {sample0,frameId,seqNo,gap,chan0,chanCount,timeCount,ninput,srcPort,dstPort,laneCount,bins,productId,nchan,blockIndex,blockCount,pfbTaps,fftShift,specFlags,sampleRateHz,coverageBlocks,coverageMaskLo,coverageMaskHi,lanes};
-}
-function selectSpectrum(){
-  const key=specPort.value;
-  if(key==='auto'){
-    let latest=null;
-    for(const value of spectraByPort.values()){if(!latest || value.seqNo>latest.seqNo)latest=value;}
-    spectrum=latest;
-  }else{
-    spectrum=spectraByPort.get(Number(key))||null;
-  }
 }
 function connectWs(){
   const proto=location.protocol==='https:'?'wss':'ws'; ws=new WebSocket(`${proto}://${location.host}/ws/waveform`); ws.binaryType='arraybuffer';
@@ -4248,23 +5705,76 @@ function connectWs(){
 function connectSpectrumWs(){
   const proto=location.protocol==='https:'?'wss':'ws'; specWs=new WebSocket(`${proto}://${location.host}/ws/spectrum`); specWs.binaryType='arraybuffer';
   specWs.onopen=()=>{document.getElementById('specWsStatus').className='pill ok';document.getElementById('specWsStatus').textContent='spectrum connected';};
-  specWs.onmessage=(ev)=>{const parsed=parseSpectrum(ev.data); if(parsed){spectraByPort.set(parsed.dstPort,parsed); selectSpectrum(); specFrames++; if(!specDrawPending){specDrawPending=true; requestAnimationFrame(drawSpectrum);}}};
-  specWs.onclose=()=>{document.getElementById('specWsStatus').className='pill warn';document.getElementById('specWsStatus').textContent='spectrum reconnecting';setTimeout(connectSpectrumWs,700);};
+  specWs.onmessage=(ev)=>{const parsed=parseSpectrum(ev.data); if(parsed){spectrum=parsed; updatePhaseHistory(parsed); specFrames++; if(!specDrawPending){specDrawPending=true; requestAnimationFrame(drawSpectrum);}}};
+  specWs.onclose=()=>{resetPhaseHistory('spectrum websocket reconnecting');document.getElementById('specWsStatus').className='pill warn';document.getElementById('specWsStatus').textContent='spectrum reconnecting';setTimeout(connectSpectrumWs,700);};
   specWs.onerror=()=>{document.getElementById('specWsStatus').className='pill bad';document.getElementById('specWsStatus').textContent='spectrum error';};
 }
 function resizeCanvas(canvas){const dpr=Math.max(1,window.devicePixelRatio||1),r=canvas.getBoundingClientRect(),w=Math.max(320,Math.floor(r.width*dpr)),h=Math.max(240,Math.floor(r.height*dpr));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}return{dpr,w:r.width,h:r.height};}
 function drawTime(){
   drawPending=false;
   const canvas=document.getElementById('scope'),{dpr,w,h}=resizeCanvas(canvas),ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#020303';ctx.fillRect(0,0,w,h);ctx.strokeStyle='#1d2422';ctx.lineWidth=1;
-  for(let i=0;i<=8;i++){const y=i*h/8;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
+  const topPad=28,bottomPad=28,plotTop=topPad,plotH=Math.max(80,h-topPad-bottomPad);
+  for(let i=0;i<=6;i++){const y=plotTop+i*plotH/6;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
   for(let i=0;i<=10;i++){const x=i*w/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}
   ctx.fillStyle='#98a49e';ctx.font='12px ui-monospace, Menlo, monospace';
-  if(!waveform||!waveform.channels.length){ctx.fillText('waiting for TIME waveform stream',14,22);document.getElementById('timePlotStatus').textContent='waiting';return;}
-  const tmax=(config&&config.time_window_us)||0.25, sampleRate=RAW/(waveform.decim||1);
-  for(const ch of waveform.channels){ctx.strokeStyle=colors[ch.channel%colors.length];ctx.lineWidth=1.25;ctx.beginPath();let started=false;const yarr=ch.y;for(let i=0;i<yarr.length;i++){const t=i/sampleRate*1e6;const x=Math.max(0,Math.min(w,t/tmax*w));const y=Math.max(0,Math.min(h,h*0.5-yarr[i]*h*0.43));if(!started){ctx.moveTo(x,y);started=true}else ctx.lineTo(x,y);}ctx.stroke();}
-  for(const ch of waveform.channels){ctx.fillStyle=colors[ch.channel%colors.length];ctx.fillText(`CH${ch.channel}`,12,20+ch.channel*15);}
+  if(!waveform||!waveform.channels.length){const msg=waveformLive?'waiting for TIME waveform stream':'no live TIME waveform stream';ctx.fillText(msg,14,22);document.getElementById('timePlotStatus').textContent=msg;return;}
+  const requestedUs=(waveform.windowUs||config?.time_window_us||0.25);
+  const capturedUs=(waveform.capturedWindowUs||requestedUs);
+  const tmax=Math.max(requestedUs,1e-9);
+  const signalMhz=Math.abs((waveform.expectedMhz||waveform.dacMhz||0));
+  const rfCycles=signalMhz*tmax;
+  const mode=(config?.waveform_view_mode||'dual');
+  const showCurve=mode==='dual'||mode==='curve';
+  const showSamples=mode==='dual'||mode==='samples';
+  const sampleLimited=(waveform.rfSamplesPerCycle||Infinity)<4 || signalMhz>(waveform.sampleRateHz||0)/2e6;
+  let ymax=1.0;
+  for(const ch of waveform.channels){
+    if(showCurve){const rf=ch.rf||[];for(let i=0;i<rf.length;i++)ymax=Math.max(ymax,Math.abs(rf[i]));}
+    if(showSamples){const rf=ch.sampleRf||ch.y||[];for(let i=0;i<rf.length;i++)ymax=Math.max(ymax,Math.abs(rf[i]));}
+  }
+  ymax*=1.08;
+  function yPix(value){return Math.max(plotTop,Math.min(plotTop+plotH,plotTop+plotH*0.5-(value/ymax)*plotH*0.48));}
+  function xPix(t){return Math.max(0,Math.min(w,t/tmax*w));}
+  function plotCurve(ch,color,width=1.1){
+    const arr=ch.rf||[], xs=ch.rfX||null;
+    if(!arr||!arr.length)return;
+    ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();
+    let started=false;
+    for(let i=0;i<arr.length;i++){
+      const t=xs?xs[i]:(i/Math.max(arr.length-1,1))*tmax;
+      const x=xPix(t), y=yPix(arr[i]);
+      if(!started){ctx.moveTo(x,y);started=true}else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+  function plotSamples(ch,color){
+    const arr=ch.sampleRf||ch.y||[], xs=ch.x||null;
+    if(!arr||!arr.length)return;
+    ctx.fillStyle=color;ctx.strokeStyle='rgba(2,3,3,0.85)';ctx.lineWidth=1;
+    for(let i=0;i<arr.length;i++){
+      const t=xs?xs[i]:(i/Math.max(arr.length-1,1))*capturedUs;
+      if(t<0||t>tmax)continue;
+      const x=xPix(t), y=yPix(arr[i]);
+      ctx.beginPath();ctx.arc(x,y,2.1,0,Math.PI*2);ctx.fill();ctx.stroke();
+    }
+  }
+  for(const ch of waveform.channels){
+    const c=colors[ch.channel%colors.length], primary=ch.channel===0;
+    if(showCurve)plotCurve(ch,c,primary?1.35:0.9);
+    if(showSamples)plotSamples(ch,c);
+  }
+  for(let i=0;i<=4;i++){
+    const x=i*w/4;
+    const label=`${fmt(tmax*i/4,3)}us`;
+    ctx.fillText(label,Math.max(4,Math.min(w-72,x-18)),h-8);
+  }
+  ctx.fillStyle='#98a49e';
+  ctx.fillText(`TIME IQ RF preview: ${mode} ${fmt(signalMhz,3)} MHz -> ${fmt(rfCycles,2)} cycles / ${fmt(tmax,3)} us`,10,18);
+  ctx.fillText(`real samples ${waveform.points||0}, curve ${waveform.rfPoints||0}, fs ${fmt((waveform.sampleRateHz||0)/1e6,2)}MS/s, captured ${fmt(capturedUs,3)}us, center ${fmt(waveform.centerMhz,1)}MHz`,10,34);
+  for(const ch of waveform.channels){ctx.fillStyle=colors[ch.channel%colors.length];ctx.fillText(`CH${ch.channel}`,12+ch.channel*45,52);}
+  if(sampleLimited&&mode==='samples'){ctx.fillStyle='#f4c76b';ctx.fillText('samples-only view is sparse/aliased for this RF frequency',Math.max(10,w-390),20);}
   if(waveform.gap){ctx.fillStyle='rgba(244,199,107,0.17)';ctx.fillRect(0,0,w,30);ctx.fillStyle='#f4c76b';ctx.fillText('gap before current window',w-220,20);}
-  document.getElementById('timePlotStatus').textContent=`seq ${waveform.seqStart}..${waveform.seqEnd}`;
+  document.getElementById('timePlotStatus').textContent=`${mode} | requested ${fmt(tmax,3)}us captured ${fmt(capturedUs,3)}us | real ${waveform.points} curve ${waveform.rfPoints||0} | ${fmt(signalMhz,1)}MHz=${fmt(rfCycles,2)} cycles${sampleLimited?' | sparse samples':''}`;
   lastDraw=performance.now();
 }
 function prepPlot(canvas){
@@ -4289,10 +5799,198 @@ function selectedPowerSeries(current){
     return lane?lane.power:null;
   }
   const bins=current.bins||0, out=new Float32Array(bins);
-  for(const lane of current.lanes){for(let i=0;i<Math.min(bins,lane.power.length);i++)out[i]+=lane.power[i];}
+  for(const lane of current.lanes){for(let i=0;i<Math.min(bins,lane.power.length);i++){const p=lane.power[i];out[i]+=Math.pow(10,(Number.isFinite(p)?p:-160)/10);}}
   const denom=Math.max(1,current.lanes.length);
-  for(let i=0;i<out.length;i++)out[i]/=denom;
+  for(let i=0;i<out.length;i++)out[i]=10*Math.log10(Math.max(out[i]/denom,1e-16));
   return out;
+}
+function specFreqMhz(current,bin){
+  const bins=Math.max(1,current?.bins||current?.nchan||4096);
+  const sr=(current?.sampleRateHz||0)>0?current.sampleRateHz:((config?.bandwidth_mhz||0)>0?(config.bandwidth_mhz*1e6):100e6);
+  const center=config?.center_mhz||0;
+  const signed=(bin<bins/2?bin:bin-bins)*sr/bins/1e6;
+  return center+signed;
+}
+function targetRfMhz(){
+  const expected=Number(config?.expected_mhz);
+  if(Number.isFinite(expected)&&expected>0)return expected;
+  const dac=Number(config?.dac_mhz);
+  return Number.isFinite(dac)&&dac>0?dac:NaN;
+}
+function targetSpecBin(current){
+  const target=targetRfMhz();
+  if(!current||!Number.isFinite(target))return null;
+  const bins=Math.max(1,current.bins||current.nchan||4096);
+  const sr=(current.sampleRateHz||0)>0?current.sampleRateHz:((config?.bandwidth_mhz||0)>0?config.bandwidth_mhz*1e6:100e6);
+  const center=Number(config?.center_mhz)||0;
+  const binHz=sr/bins;
+  if(!(binHz>0))return null;
+  let idx=Math.round(((target-center)*1e6)/binHz);
+  idx=((idx%bins)+bins)%bins;
+  return {idx,targetMhz:target,binMhz:specFreqMhz(current,idx),sampleRateHz:sr};
+}
+function shiftedIndex(current,idx){
+  const bins=Math.max(1,current?.bins||4096);
+  return (idx+Math.floor(bins/2))%bins;
+}
+function shiftedSeries(current,series){
+  const bins=Math.max(1,current?.bins||0);
+  const out=new Float32Array(bins);
+  for(let i=0;i<bins;i++){
+    const v=series[shiftedIndex(current,i)];
+    out[i]=v===undefined?0:v;
+  }
+  return out;
+}
+function shiftedFreqSeries(current){
+  const bins=Math.max(1,current?.bins||4096), out=new Float32Array(bins);
+  for(let i=0;i<bins;i++)out[i]=specFreqMhz(current,shiftedIndex(current,i));
+  return out;
+}
+function measuredPeak(current){
+  const power=selectedPowerSeries(current);
+  if(!power||!power.length)return null;
+  let idx=0,val=-Infinity;
+  for(let i=0;i<power.length;i++){if(Number.isFinite(power[i])&&power[i]>val){val=power[i];idx=i;}}
+  const lane0=current.lanes.find(l=>l.input===0)||current.lanes[0];
+  const ch0Phase=lane0&&lane0.phase_rad?lane0.phase_rad[idx]:NaN;
+  const ch0Amp=lane0&&lane0.amplitude?lane0.amplitude[idx]:NaN;
+  return {idx,powerDb:val,rfMhz:specFreqMhz(current,idx),ch0Phase,ch0Amp};
+}
+function wrapPhase(v){
+  if(!Number.isFinite(v))return NaN;
+  while(v>Math.PI)v-=2*Math.PI;
+  while(v<-Math.PI)v+=2*Math.PI;
+  return v;
+}
+function avgPowerDbAtBin(current,idx){
+  if(!current||!current.lanes.length)return NaN;
+  let sum=0,count=0;
+  for(const lane of current.lanes){
+    const p=lane.power?lane.power[idx]:NaN;
+    if(Number.isFinite(p)){sum+=Math.pow(10,p/10);count++;}
+  }
+  return count?10*Math.log10(Math.max(sum/count,1e-16)):NaN;
+}
+function median(values){
+  const xs=values.filter(Number.isFinite).sort((a,b)=>a-b);
+  if(!xs.length)return NaN;
+  const mid=Math.floor(xs.length/2);
+  return xs.length%2?xs[mid]:(xs[mid-1]+xs[mid])*0.5;
+}
+function noiseFloorDb(current,targetIdx){
+  if(!current||!current.lanes.length)return NaN;
+  const bins=current.bins||0, guard=Math.max(16,Math.floor(bins/128)), vals=[];
+  for(let i=0;i<bins;i++){
+    const d=Math.abs(i-targetIdx), wrapD=Math.min(d,bins-d);
+    if(wrapD<=guard)continue;
+    const p=avgPowerDbAtBin(current,i);
+    if(Number.isFinite(p))vals.push(p);
+  }
+  return median(vals);
+}
+function phaseHistoryKeyFor(current,target,ref){
+  return [
+    configGeneration,
+    fmt(config?.center_mhz,6),
+    fmt(target.targetMhz,6),
+    target.idx,
+    Math.round(target.sampleRateHz||0),
+    ref,
+    current.bins||0,
+    current.blockCount||0
+  ].join('|');
+}
+function updatePhaseHistory(current){
+  const ref=currentPhaseRef();
+  if(!current||!current.lanes||!current.lanes.length){phaseHistoryStatus='waiting for SPEC phase history';return;}
+  const blockCount=current.blockCount||16, coverage=current.coverageBlocks||0;
+  if(coverage<blockCount){phaseHistoryStatus=`partial SPEC coverage ${coverage}/${blockCount}`;return;}
+  const target=targetSpecBin(current);
+  if(!target){phaseHistoryStatus='target frequency unavailable';return;}
+  const refLane=current.lanes.find(l=>l.input===ref);
+  if(!refLane||!refLane.phase_rad||target.idx>=refLane.phase_rad.length){phaseHistoryStatus=`reference CH${ref} unavailable`;return;}
+  const targetPower=avgPowerDbAtBin(current,target.idx), noise=noiseFloorDb(current,target.idx), snr=targetPower-noise;
+  if(!Number.isFinite(snr)||snr<12.0){phaseHistoryStatus=`target bin low SNR ${fmt(snr,1)}dB`;return;}
+  const key=phaseHistoryKeyFor(current,target,ref);
+  if(key!==phaseHistoryKey)resetPhaseHistory('phase target changed');
+  phaseHistoryKey=key;
+  const refPhase=refLane.phase_rad[target.idx];
+  if(!Number.isFinite(refPhase)){phaseHistoryStatus=`reference CH${ref} phase unavailable`;return;}
+  const last=phaseHistory.length?phaseHistory[phaseHistory.length-1]:null;
+  const relRad=Array(8).fill(NaN), relDeg=Array(8).fill(NaN), phaseRad=Array(8).fill(NaN), amp=Array(8).fill(NaN), powerDb=Array(8).fill(NaN);
+  for(const lane of current.lanes){
+    const input=lane.input;
+    if(input<0||input>=8)continue;
+    const phase=lane.phase_rad?lane.phase_rad[target.idx]:NaN;
+    const raw=wrapPhase(phase-refPhase);
+    let value=raw;
+    const prev=last?.relRad?.[input];
+    if(Number.isFinite(value)&&Number.isFinite(prev)){
+      while(value-prev>Math.PI)value-=2*Math.PI;
+      while(value-prev<-Math.PI)value+=2*Math.PI;
+    }
+    phaseRad[input]=phase;
+    relRad[input]=value;
+    relDeg[input]=Number.isFinite(value)?value*180/Math.PI:NaN;
+    amp[input]=lane.amplitude?lane.amplitude[target.idx]:NaN;
+    powerDb[input]=lane.power?lane.power[target.idx]:NaN;
+  }
+  const now=performance.now()/1000;
+  phaseHistory.push({t:now,bin:target.idx,targetMhz:target.targetMhz,binMhz:target.binMhz,ref,relRad,relDeg,phaseRad,amp,powerDb,snrDb:snr,targetPowerDb:targetPower,noiseDb:noise,coverage,blockCount});
+  const cutoff=now-PHASE_HISTORY_SECONDS;
+  while(phaseHistory.length&&phaseHistory[0].t<cutoff)phaseHistory.shift();
+  while(phaseHistory.length>PHASE_HISTORY_MAX_POINTS)phaseHistory.shift();
+  phaseHistoryStatus=`target bin ${target.idx} ${fmt(target.binMhz,3)}MHz SNR ${fmt(snr,1)}dB`;
+}
+function peakLaneMetrics(current,peak){
+  if(!current||!peak)return [];
+  const ref=current.lanes.find(l=>l.input===0)||current.lanes[0];
+  const refPhase=ref&&ref.phase_rad?ref.phase_rad[peak.idx]:NaN;
+  return current.lanes.map(l=>{
+    const amp=l.amplitude?l.amplitude[peak.idx]:NaN;
+    const phase=l.phase_rad?l.phase_rad[peak.idx]:NaN;
+    return {input:l.input,amp,phase,rel:wrapPhase(phase-refPhase)};
+  });
+}
+function gatedPhaseSeries(current,lane,peak){
+  const bins=current?.bins||0, out=new Float32Array(bins);
+  out.fill(NaN);
+  if(!lane||!lane.phase_rad||!lane.power||!peak)return out;
+  const peakPower=Number.isFinite(peak.powerDb)?peak.powerDb:-Infinity;
+  const guard=Math.max(3,Math.floor(bins/512));
+  for(let i=0;i<bins;i++){
+    const near=Math.abs(i-peak.idx)<=guard;
+    const strong=Number.isFinite(lane.power[i])&&lane.power[i]>=peakPower-18.0;
+    if(near||strong)out[i]=lane.phase_rad[i];
+  }
+  return out;
+}
+function drawAxisLabels(ctx,size,labelLeft,labelRight){
+  ctx.fillStyle='#98a49e';
+  ctx.font='12px ui-monospace, Menlo, monospace';
+  ctx.fillText(labelLeft,8,16);
+  const metrics=ctx.measureText(labelRight);
+  ctx.fillText(labelRight,Math.max(8,size.w-metrics.width-8),16);
+}
+function drawBinTicks(ctx,size,bins){
+  ctx.fillStyle='#98a49e';
+  ctx.font='11px ui-monospace, Menlo, monospace';
+  const mid=Math.floor((bins||4096)/2);
+  ctx.fillText('0',8,size.h-8);
+  ctx.fillText(String(mid),Math.max(8,size.w/2-18),size.h-8);
+  const last=String(Math.max(0,(bins||4096)-1));
+  ctx.fillText(last,Math.max(8,size.w-8-ctx.measureText(last).width),size.h-8);
+}
+function smoothMax(prev,target){
+  if(!Number.isFinite(prev)||prev<=0)return Math.max(target,1);
+  return target>prev?target:(prev*0.92+target*0.08);
+}
+function smoothRange(prevMin,prevMax,targetMin,targetMax){
+  if(!Number.isFinite(prevMin)||!Number.isFinite(prevMax))return [targetMin,targetMax];
+  const min=targetMin<prevMin?targetMin:(prevMin*0.94+targetMin*0.06);
+  const max=targetMax>prevMax?targetMax:(prevMax*0.94+targetMax*0.06);
+  return [min,max];
 }
 function drawSeries(ctx,size,seriesList,yMin,yMax){
   const ySpan=Math.max(yMax-yMin,1e-9);
@@ -4312,6 +6010,30 @@ function drawSeries(ctx,size,seriesList,yMin,yMax){
     ctx.stroke();
   }
 }
+function drawSeriesWithX(ctx,size,seriesList,xMin,xMax,yMin,yMax){
+  const ySpan=Math.max(yMax-yMin,1e-9), xSpan=Math.max(xMax-xMin,1e-9);
+  for(const item of seriesList){
+    const series=item.series||[], xs=item.x||[];
+    ctx.strokeStyle=item.color;ctx.lineWidth=item.width||1.2;ctx.beginPath();
+    let started=false, n=Math.min(series.length,xs.length);
+    const stride=Math.max(1,Math.floor(n/Math.max(1,size.w*1.5)));
+    for(let i=0;i<n;i+=stride){
+      if(!Number.isFinite(series[i])||!Number.isFinite(xs[i])){started=false;continue;}
+      const x=(xs[i]-xMin)/xSpan*size.w;
+      const norm=(series[i]-yMin)/ySpan;
+      const y=size.h - Math.max(0,Math.min(1,norm))*size.h;
+      if(!started){ctx.moveTo(x,y);started=true;}else{ctx.lineTo(x,y);}
+    }
+    ctx.stroke();
+  }
+}
+function drawVerticalMarker(ctx,size,x,xMin,xMax,color,label){
+  if(!Number.isFinite(x))return;
+  const px=(x-xMin)/Math.max(xMax-xMin,1e-9)*size.w;
+  if(px<0||px>size.w)return;
+  ctx.save();ctx.strokeStyle=color;ctx.lineWidth=1;ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(px,0);ctx.lineTo(px,size.h);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=color;ctx.font='11px ui-monospace, Menlo, monospace';ctx.fillText(label,Math.max(2,Math.min(size.w-90,px+4)),28);ctx.restore();
+}
 function drawWaterfallCanvas(ctx,size,rows){
   if(!rows.length){ctx.fillStyle='#98a49e';ctx.fillText('waiting for power history',14,22);return;}
   let min=Infinity,max=-Infinity;
@@ -4330,6 +6052,88 @@ function drawWaterfallCanvas(ctx,size,rows){
     }
   }
 }
+function drawPhaseHistory(ctx,size){
+  const now=performance.now()/1000;
+  const rows=phaseHistory.filter(r=>now-r.t<=PHASE_HISTORY_SECONDS);
+  if(!rows.length){
+    ctx.fillStyle='#98a49e';
+    ctx.fillText(phaseHistoryStatus||'waiting for SPEC phase history',14,22);
+    return;
+  }
+  let yMin=0,yMax=0;
+  for(const row of rows){
+    for(const v of row.relDeg||[]){
+      if(Number.isFinite(v)){yMin=Math.min(yMin,v);yMax=Math.max(yMax,v);}
+    }
+  }
+  let span=yMax-yMin;
+  if(span<10){const mid=(yMin+yMax)*0.5;yMin=mid-5;yMax=mid+5;span=10;}
+  const pad=Math.max(2,span*0.12);
+  yMin-=pad;yMax+=pad;
+  const ySpan=Math.max(yMax-yMin,1e-9);
+  function xPix(t){return size.w-(now-t)/PHASE_HISTORY_SECONDS*size.w;}
+  function yPix(v){return size.h-Math.max(0,Math.min(1,(v-yMin)/ySpan))*size.h;}
+  ctx.save();
+  ctx.strokeStyle='rgba(244,199,107,0.42)';
+  ctx.lineWidth=1;
+  ctx.setLineDash([4,4]);
+  const zero=yPix(0);
+  ctx.beginPath();ctx.moveTo(0,zero);ctx.lineTo(size.w,zero);ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle='#98a49e';
+  ctx.font='11px ui-monospace, Menlo, monospace';
+  for(let i=0;i<=3;i++){
+    const age=PHASE_HISTORY_SECONDS*(1-i/3), x=size.w*i/3;
+    ctx.fillText(`${-Math.round(age)}s`,Math.max(2,Math.min(size.w-36,x+2)),size.h-8);
+  }
+  ctx.fillText(`${fmt(yMax,0)}deg`,6,28);
+  ctx.fillText(`${fmt(yMin,0)}deg`,6,size.h-22);
+  for(let ch=0;ch<8;ch++){
+    ctx.strokeStyle=colors[ch%colors.length];
+    ctx.lineWidth=ch===0?2.2:(ch===currentPhaseRef()?1.5:1.1);
+    ctx.beginPath();
+    let started=false;
+    for(const row of rows){
+      const value=row.relDeg?.[ch];
+      if(!Number.isFinite(value)){started=false;continue;}
+      const x=xPix(row.t), y=yPix(value);
+      if(x<0||x>size.w){started=false;continue;}
+      if(!started){ctx.moveTo(x,y);started=true;}else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+function blockCovered(current, block){
+  if(!current)return false;
+  const b=BigInt(block);
+  if(block<64)return ((current.coverageMaskLo>>b)&1n)===1n;
+  return ((current.coverageMaskHi>>BigInt(block-64))&1n)===1n;
+}
+function shadeMissingBlocks(ctx,size,current){
+  const blockCount=Math.max(1,current.blockCount||16), bins=Math.max(1,current.bins||4096);
+  ctx.save();
+  for(let block=0;block<blockCount;block++){
+    if(blockCovered(current,block))continue;
+    const x0=block/blockCount*size.w, x1=(block+1)/blockCount*size.w;
+    ctx.fillStyle='rgba(255,123,123,0.08)';
+    ctx.fillRect(x0,0,Math.max(1,x1-x0),size.h);
+  }
+  ctx.strokeStyle='rgba(151,164,158,0.28)';
+  ctx.lineWidth=1;
+  for(let block=1;block<blockCount;block++){
+    const x=block/blockCount*size.w;
+    ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,size.h);ctx.stroke();
+  }
+  ctx.restore();
+}
+function spectrumWaitingMessage(){
+  if(!spectrumLive)return 'no live SPEC spectrum stream';
+  if(stats&&(stats.spec_packets||0)===0)return 'no SPEC packets received yet';
+  if(specPreview&&specPreview.last_error)return `SPEC preview: ${specPreview.last_error}`;
+  if(specPreview&&(specPreview.coverage_blocks||0)>0)return `partial SPEC coverage ${specPreview.coverage_blocks}/${specPreview.block_count||16}`;
+  return 'waiting for SPEC F-engine stream';
+}
 function drawSpectrum(){
   specDrawPending=false;
   const amp=prepPlot(document.getElementById('specAmp'));
@@ -4338,35 +6142,51 @@ function drawSpectrum(){
   const waterfall=prepPlot(document.getElementById('specWaterfall'));
   const current=spectrum;
   if(!current||!current.lanes.length){
-    for(const p of [amp,phase,power,waterfall])p.ctx.fillText('waiting for SPEC F-engine stream',14,22);
-    document.getElementById('specPlotStatus').textContent='waiting';
+    const msg=spectrumWaitingMessage();
+    for(const p of [amp,phase,power,waterfall])p.ctx.fillText(msg,14,22);
+    document.getElementById('specPlotStatus').textContent=msg;
     return;
   }
   let ampMax=1, pMin=Infinity, pMax=-Infinity;
   for(const lane of current.lanes){
-    for(const v of lane.amp){if(v>ampMax)ampMax=v;}
+    for(const v of lane.amplitude){if(v>ampMax)ampMax=v;}
     for(const v of lane.power){if(v<pMin)pMin=v;if(v>pMax)pMax=v;}
   }
   if(!Number.isFinite(pMin)||!Number.isFinite(pMax)||pMax<=pMin){pMin=0;pMax=1;}
-  drawSeries(amp.ctx,amp.size,current.lanes.map(l=>({series:l.amp,color:colors[l.input%colors.length]})),0,ampMax);
-  drawSeries(phase.ctx,phase.size,current.lanes.map(l=>({series:l.phase,color:colors[l.input%colors.length]})),-Math.PI,Math.PI);
+  plotScale.ampMax=smoothMax(plotScale.ampMax,ampMax*1.08);
+  [plotScale.powerMin,plotScale.powerMax]=smoothRange(plotScale.powerMin,plotScale.powerMax,pMin-3,pMax+3);
+  ampMax=plotScale.ampMax;
+  pMin=plotScale.powerMin;
+  pMax=plotScale.powerMax;
+  for(const p of [amp,power,waterfall])shadeMissingBlocks(p.ctx,p.size,current);
+  const freq=shiftedFreqSeries(current);
+  const xMin=freq.length?freq[0]:(config?.center_mhz||0)-50, xMax=freq.length?freq[freq.length-1]:(config?.center_mhz||0)+50;
+  const peak=measuredPeak(current), target=targetSpecBin(current), expected=target?target.targetMhz:(config?.expected_mhz||config?.dac_mhz||NaN);
+  drawSeriesWithX(amp.ctx,amp.size,current.lanes.map(l=>({x:freq,series:shiftedSeries(current,l.amplitude),color:colors[l.input%colors.length]})),xMin,xMax,0,ampMax);
+  drawPhaseHistory(phase.ctx,phase.size);
   const selectedPower=selectedPowerSeries(current);
-  drawSeries(power.ctx,power.size,[{series:selectedPower||[],color:'#6ee7a8',width:1.4}],pMin,pMax);
+  const shiftedPower=selectedPower?shiftedSeries(current,selectedPower):null;
+  drawSeriesWithX(power.ctx,power.size,[{x:freq,series:shiftedPower||[],color:'#6ee7a8',width:1.4}],xMin,xMax,pMin,pMax);
+  for(const p of [amp,power]){drawVerticalMarker(p.ctx,p.size,expected,xMin,xMax,'#f4c76b','target');if(peak)drawVerticalMarker(p.ctx,p.size,peak.rfMhz,xMin,xMax,'#ff7b7b','peak');}
   if(selectedPower&&selectedPower.length){
-    waterfallRows.push(new Float32Array(selectedPower));
+    waterfallRows.push(new Float32Array(shiftedPower));
     if(waterfallRows.length>96)waterfallRows.shift();
   }
   drawWaterfallCanvas(waterfall.ctx,waterfall.size,waterfallRows);
-  amp.ctx.fillStyle='#dfe5e0';
   const fftOnly=((current.specFlags||0)&0x100)!==0 && (current.pfbTaps||0)===0;
-  amp.ctx.fillText(`amplitude |X|, ${current.coverageBlocks||0}/${current.blockCount||16} blocks, ${fftOnly?'FFT-only':'layout check'}`,14,22);
-  phase.ctx.fillStyle='#dfe5e0';
-  phase.ctx.fillText('phase atan2(Q,I), radians',14,22);
-  power.ctx.fillStyle='#dfe5e0';
-  power.ctx.fillText(`power dB, bins ${current.bins}, taps ${current.pfbTaps}, shift ${current.fftShift}`,14,22);
-  waterfall.ctx.fillStyle='#dfe5e0';
-  waterfall.ctx.fillText(`waterfall ${specLane.value==='avg'?'avg':('input '+specLane.value)} power history`,14,22);
-  document.getElementById('specPlotStatus').textContent=`4096 bins seq ${current.seqNo} coverage ${current.coverageBlocks||0}/${current.blockCount||16}`;
+  drawAxisLabels(amp.ctx,amp.size,`amp |X| ${fftOnly?'FFT-only':'layout check'}`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
+  const latestPhase=phaseHistory.length?phaseHistory[phaseHistory.length-1]:null;
+  drawAxisLabels(phase.ctx,phase.size,`relative phase vs CH${currentPhaseRef()} deg / ${PHASE_HISTORY_SECONDS}s`,latestPhase?`bin ${latestPhase.bin} ${fmt(latestPhase.binMhz,3)} MHz SNR ${fmt(latestPhase.snrDb,1)}dB`:phaseHistoryStatus);
+  const complete=(current.coverageBlocks||0)>=(current.blockCount||16);
+  drawAxisLabels(power.ctx,power.size,`power dB ${complete?'complete':'partial'} ${current.coverageBlocks||0}/${current.blockCount||16} blocks`,peak?`peak ${fmt(peak.rfMhz,3)} MHz CH0 phase ${fmt(peak.ch0Phase,2)} rad`:`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
+  drawAxisLabels(waterfall.ctx,waterfall.size,`waterfall ${specLane.value==='avg'?'avg':('input '+specLane.value)} power history`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
+  const laneMetrics=peakLaneMetrics(current,peak);
+  document.getElementById('specPlotStatus').textContent=`${complete?'complete':'partial'} 4096 bins coverage ${current.coverageBlocks||0}/${current.blockCount||16}${target?` target ${fmt(target.targetMhz,3)}MHz bin ${target.idx}`:''}${peak?` peak ${fmt(peak.rfMhz,3)}MHz bin ${peak.idx} power ${fmt(peak.powerDb,1)}dB`:''} phase ref CH${currentPhaseRef()} history ${phaseHistory.length}`;
+  if(latestPhase){
+    document.getElementById('channelStats').innerHTML=Array.from({length:8},(_,i)=>metric(`SPEC CH${i}`,`amp ${fmt(latestPhase.amp[i],0)} ph ${fmt(latestPhase.phaseRad[i]*180/Math.PI,1)}deg rel ${fmt(latestPhase.relDeg[i],1)}deg`)).join('');
+  }else if(laneMetrics.length){
+    document.getElementById('channelStats').innerHTML=laneMetrics.map(m=>metric(`SPEC CH${m.input}`,`amp ${fmt(m.amp,0)} ph ${fmt(m.phase*180/Math.PI,1)}deg rel ${fmt(m.rel*180/Math.PI,1)}deg`)).join('');
+  }
 }
 function fmt(v,d=2){return Number.isFinite(v)?Number(v).toFixed(d):'--'} function fmtInt(v){return v===null||v===undefined?'--':String(v)}
 function metric(label,value,cls=''){return `<div class="metric ${cls}"><span>${label}</span><b>${value}</b></div>`}
@@ -4379,7 +6199,7 @@ function renderStats(s){
   const flowOk=(s.flow_count||0)===24&&(s.time_flow_count||0)===8&&(s.spec_flow_count||0)===16&&(s.active_worker_count||0)>=24;
   document.getElementById('flowStatus').className=`pill ${flowOk?'ok':'warn'}`;document.getElementById('flowStatus').textContent=`flows ${s.time_flow_count||0}+${s.spec_flow_count||0}/${s.flow_count||0}`;
   const dropTotal=(s.parse_errors||0)+(s.ring_drops||0)+(s.worker_ring_drops||0)+(s.kernel_drops||0)+(s.app_drops||0);document.getElementById('dropStatus').className=`pill ${dropTotal?'bad':'ok'}`;document.getElementById('dropStatus').textContent=`drops ${dropTotal} preview T${fmt(s.display_update_hz,1)} S${fmt(s.spectrum_update_hz,1)}Hz`;
-  document.getElementById('pointsStatus').className=`pill ${waveform&&config&&waveform.points<config.display_points?'warn':''}`;document.getElementById('pointsStatus').textContent=`points ${waveform?waveform.points:'--'} / fps ${fmt(s.display_update_hz,1)}`;
+  document.getElementById('pointsStatus').className=`pill ${waveformLive?'ok':'warn'}`;document.getElementById('pointsStatus').textContent=`${waveformLive?'live':'stale'} pts ${waveform?waveform.points:'--'} age ${waveformAgeMs===null?'--':waveformAgeMs}ms / gen ${configGeneration} / fps ${fmt(s.display_update_hz,1)} / sweep ${fmt(s.spectrum_update_hz,1)}`;
   document.getElementById('summary').innerHTML=[
     metric('expected FPGA',`${fmt(s.expected_packets_per_sec,0)} pps each / T ${fmt(s.expected_time_gbps,2)}G S ${fmt(s.expected_spec_gbps,2)}G`),
     metric('processed TIME',`${fmt(s.rx_processed_packets_per_sec,0)} pps / ${fmt(s.rx_processed_gbps,2)} Gbps`),
@@ -4391,8 +6211,10 @@ function renderStats(s){
     metric('TIME gaps',`${s.seq_gaps}/${s.frame_gaps}/${s.sample0_gaps}`,statusCls),
     metric('SPEC gaps',`${s.spec_seq_gaps||0}/${s.spec_frame_gaps||0}`,specGapTotal?'warn':'')
   ].join('');
+  const sp=specPreview||{};
+  document.getElementById('summary').innerHTML+=metric('SPEC preview',`${sp.complete?'complete':'partial'} ${sp.coverage_blocks||0}/${sp.block_count||16} block=${fmtInt(sp.last_block_index)} chan0=${fmtInt(sp.last_chan0)}`,sp.complete?'ok':((s.spec_packets||0)>0?'warn':''));
   document.getElementById('flows').innerHTML=(s.per_flow||[]).map(f=>metric(`:${f.dst_port}`,`T${f.time_packets||0} S${f.spec_packets||0} ${fmt(f.gbps,2)}G`,(f.seq_gaps||f.frame_gaps||f.sample0_gaps||f.spec_seq_gaps||f.spec_frame_gaps)?'warn':'')).join('');
-  document.getElementById('channelStats').innerHTML=Array.from({length:8},(_,i)=>metric(`CH${i}`,`rms ${fmt((s.channel_rms_code||[])[i],0)} max ${fmtInt((s.channel_max_abs_code||[])[i])}${(s.channel_clipped||[])[i]?' clip':''}`,(s.channel_clipped||[])[i]?'warn':'')).join('');
+  if(!spectrum)document.getElementById('channelStats').innerHTML=Array.from({length:8},(_,i)=>metric(`TIME CH${i}`,`rms ${fmt((s.channel_rms_code||[])[i],0)} max ${fmtInt((s.channel_max_abs_code||[])[i])}${(s.channel_clipped||[])[i]?' clip':''}`,(s.channel_clipped||[])[i]?'warn':'')).join('');
   const detailOpen=!!document.querySelector('details')?.open, statsEl=document.getElementById('stats');
   if(!detailOpen){statsEl.textContent='';return;}
 statsEl.textContent=`backend=${s.backend} iface=${s.interface} flows=${s.flow_count} time_flows=${s.time_flow_count} spec_flows=${s.spec_flow_count} dst_port_base=${s.dst_port_base} src_port_base=${s.src_port_base}
@@ -4405,16 +6227,35 @@ kernel_drops=${s.kernel_drops} ring_drops=${s.ring_drops} app_drops=${s.app_drop
 seq_gaps=${s.seq_gaps} frame_gaps=${s.frame_gaps} sample0_gaps=${s.sample0_gaps} spec_seq_gaps=${s.spec_seq_gaps||0} spec_frame_gaps=${s.spec_frame_gaps||0}
 ring_bytes=${s.ring_bytes} block=${s.ring_block_size} blocks=${s.ring_block_count} frame=${s.ring_frame_size} frames=${s.ring_frame_count} fill=${fmt(s.ring_fill_percent,3)} freeze_q=${s.ring_freeze_q_count}
 nic_rx_packets_per_sec=${fmt(s.nic_rx_packets_per_sec,3)} nic_rx_gbps=${fmt(s.nic_rx_gbps,6)} dropped=${s.nic_rx_dropped_delta} errors=${s.nic_rx_errors_delta} missed=${s.nic_rx_missed_errors_delta} crc=${s.nic_rx_crc_errors_delta}
-selected_bw=${s.selected_bandwidth_mhz}MHz detected_bw=${s.detected_bandwidth_mhz||'unknown'}MHz mismatch=${s.selected_detected_mismatch}
+selected_bw=${s.selected_bandwidth_mhz}MHz detected_bw=${s.detected_bandwidth_mhz||'unknown'}MHz mismatch=${s.selected_detected_mismatch} config_generation=${configGeneration}
 last_seq=${fmtInt(s.last_seq_no)} frame=${fmtInt(s.last_frame_id)} sample0=${fmtInt(s.last_sample0)} time_count=${fmtInt(s.last_time_count)} waveform_updates=${s.waveform_updates} ws_frames=${wsFrames}
 last_spec_seq=${fmtInt(s.last_spec_seq_no)} spec_frame=${fmtInt(s.last_spec_frame_id)} spec_sample0=${fmtInt(s.last_spec_sample0)} chan0=${fmtInt(s.last_spec_chan0)} chan_count=${fmtInt(s.last_spec_chan_count)} spectrum_updates=${s.spectrum_updates} spec_ws_frames=${specFrames}
+spec_preview=${JSON.stringify(specPreview||{},null,2)}
 per_flow=${JSON.stringify(s.per_flow||[],null,2)}
 per_worker=${JSON.stringify(s.per_worker||[],null,2)}
 last_error=${s.last_error||''}`;
 }
-async function poll(){try{const res=await fetch('/api/state',{cache:'no-store'});const state=await res.json();config=state.config;stats=state.stats;syncControls(config);renderStats(stats);}catch(e){}finally{setTimeout(poll,1000);}}
+function ingestState(state){
+  config=state.config;
+  configGeneration=state.config_generation||configGeneration;
+  stats=state.stats;
+  specPreview=state.spec_preview||null;
+  waveformLive=!!state.waveform_live;
+  spectrumLive=!!state.spectrum_live;
+  waveformAgeMs=state.waveform_age_ms??null;
+  spectrumAgeMs=state.spectrum_age_ms??null;
+  if(!waveformLive){waveform=null;requestAnimationFrame(drawTime);}
+  if(!spectrumLive){spectrum=null;waterfallRows=[];resetPhaseHistory('no live SPEC spectrum stream');requestAnimationFrame(drawSpectrum);}
+  syncControls(config);
+  renderStats(stats);
+}
+async function poll(){try{const res=await fetch('/api/state',{cache:'no-store'});ingestState(await res.json());}catch(e){}finally{setTimeout(poll,1000);}}
 window.addEventListener('resize',()=>{requestAnimationFrame(drawTime);requestAnimationFrame(drawSpectrum);});
-applyConfig().finally(()=>{connectWs();connectSpectrumWs();poll();requestAnimationFrame(drawTime);requestAnimationFrame(drawSpectrum);});
+async function initPage(){
+  try{const res=await fetch('/api/state',{cache:'no-store'});ingestState(await res.json());}catch(e){}
+  connectWs();connectSpectrumWs();poll();requestAnimationFrame(drawTime);requestAnimationFrame(drawSpectrum);
+}
+initPage();
 </script>
 </body>
 </html>

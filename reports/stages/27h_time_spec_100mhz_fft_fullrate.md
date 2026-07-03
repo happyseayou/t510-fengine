@@ -231,6 +231,7 @@ Stage 27h 可以声明：
 - TIME 与 SPEC 均接近 `480kpps`。
 - 合计 T510 UDP 载荷稳定超过 `63Gbps`。
 - 波形与频谱预览在主机 Web/Jupyter 生产路径中可用。
+- Rust Web 与 notebook 15 的生产显示已经收紧为真实数据视图：TIME 波形来自真实 IQ 样点的 RF 等效重建，SPEC 频谱/瀑布来自完整 `16/16` block 的 FFT-only snapshot，SPEC 相位面板显示固定 target bin 上各通道相对参考通道的滚动相位历史。
 
 Stage 27h 不能声明：
 
@@ -239,6 +240,24 @@ Stage 27h 不能声明：
 - FFT-only 频谱已经等价于最终科学 PFB 产品。
 - 交换机、DGX/X-engine、ARP/VLAN/PTP 或全 RF 频段标定通过。
 - 生产 license 风险已经最终解决。
+
+## 生产 UI 收尾
+
+截至 2026-07-03 CST，Stage 27h 的 Jupyter 控制端和 Rust Web 监控端完成生产显示收尾；该收尾不修改 RTL、UDP wire contract、TSP3 spectrum binary、24-flow 配置或 `63Gbps+` 验收门槛。
+
+- notebook 15 保留生产控制和生产预览：接收端 IP/端口/MAC、模式/带宽/中心频率、8 路 DAC-ADC 环回、DAC tone 频率/幅度/相位，以及 RF 还原波形和 FFT-only 生产频谱。
+- RF 波形显示语义已明确：使用真实 TIME/RFDC IQ 样点逐点形成包络，再按中心频率重建 RF 等效曲线；同时保留真实采样点标记。曲线用于人眼判断 RF 频率和相位，采样点用于证明数据来源；停流后 stale preview 会清空，不继续显示旧波形。
+- Rust Web 的 SPEC 频谱和瀑布只发布完整 `4096` bin snapshot；assembler 必须收齐 `16/16` 个 `256-channel` block，避免把 partial frame 或 mixed frame 当成生产频谱。
+- SPEC phase 面板从频率横轴的瞬时 phase 图改为时间横轴的滚动相对 phase 图。目标 bin 优先由 `expected_mhz` 决定，缺省时回退到 `dac_mhz`；bin 映射使用 TSP3 中的真实 `sampleRateHz`。默认参考通道为 `CH1`，显示 `wrap/unwrap(phase[ch] - phase[CH1])` 的 degree 曲线，默认窗口 `30s`，最多保留 `2048` 点。
+- phase history 只在 `coverage=16/16` 且 target bin 平均功率高于噪声底 `12dB` 时追加；当 `expected_mhz/dac_mhz/center_mhz/bandwidth_mhz/phaseRef` 改变、配置 Apply、SPEC 断流或 coverage 不完整时清空。
+
+本轮实流检查使用 `center=100MHz`、`expected=dac=60MHz`：
+
+- Rust receiver 运行在 `0.0.0.0:8089`，配置 `24` flow、`8` TIME、`16` SPEC、`spec-layout=stage27h`。
+- `/api/state` 显示 TIME/SPEC 均 live，速率约 TIME `479.9 kpps / 31.94 Gbps`、SPEC `479.9 kpps / 31.94 Gbps`。
+- 5 秒窗口内历史 drop/gap 计数没有继续增长。
+- 从 `/ws/spectrum` 抓取完整 TSP3 snapshot 后，`60MHz` target 映射到 bin `2763`，peak 也在 bin `2763`，target bin 频率约 `60.010MHz`。
+- target bin 上 CH0 相对 CH1 的相位约 `-51.56 deg`；CH1..CH7 相对 CH1 约在 `-0.27..+0.37 deg` 范围，符合当前 CH0 使用更长线缆、其余通道近似等长的实验预期。
 
 ## 27h 后续工作建议
 
@@ -263,7 +282,7 @@ Stage 27h 之后应保持全速目标不动，按生产化顺序继续推进：
 
 5. Jupyter 与 Rust Web：
    - notebook 15 继续作为生产控制/预览入口，只保留接收端 IP/端口/MAC、模式/带宽/中心频率、8 路 DAC-ADC 环回、DAC tone 频率/幅度/相位，以及 RF 还原波形和 FFT-only 频谱。
-   - Rust Web 继续围绕 TIME 波形、F-engine 状态、频谱、瀑布图、活跃流/工作线程、丢包/间断和预览刷新率做生产显示，不恢复历史 debug 面板作为主界面。
+   - Rust Web 继续围绕 TIME RF 等效波形、F-engine 状态、完整 FFT-only 频谱、瀑布图、target-bin 相对相位滚动图、活跃流/工作线程、丢包/间断和预览刷新率做生产显示，不恢复历史 debug 面板作为主界面。
 
 ## 推荐复现命令
 

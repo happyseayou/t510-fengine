@@ -1,5 +1,6 @@
 # stage 27d目前还是演示的阶段，当确认流量正常后，就要开始做生产力的收紧
-# stage 27e TIME + SPEC， TIME预览波形，SPEC预览频谱
+# stage 27e-h TIME + SPEC， TIME预览波形，SPEC预览频谱
+# stage 27i TIME + SPEC， 加入PFB
 
 # 预计stage 28开始生产力收紧，具体要求
 ## 1、去除所有的多余的模块，包括RTL和本地接收端
