@@ -1,6 +1,16 @@
 # stage 27d目前还是演示的阶段，当确认流量正常后，就要开始做生产力的收紧
-# stage 27e-h TIME + SPEC， TIME预览波形，SPEC预览频谱
-# stage 27i TIME + SPEC， 加入PFB
+# stage 27e-i TIME + SPEC， TIME预览波形，SPEC预览频谱
+
+100MHz:
+  有 PL decim2 alias 问题。
+  raw 端点/带外分量被折叠进 122.88MHz。
+
+200MHz:
+  没有 PL decim2 alias。
+  raw 端点/带外分量仍会直接出现在频谱边缘/低频端。
+  SPEC_ONLY 200MHz 还有额外的 F-engine/output backpressure 问题。
+
+# stage 27j TIME + SPEC， 加入PFB
 
 # 预计stage 28开始生产力收紧，具体要求
 ## 1、去除所有的多余的模块，包括RTL和本地接收端

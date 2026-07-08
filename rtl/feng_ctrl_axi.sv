@@ -5,7 +5,8 @@ module feng_ctrl_axi #(
     parameter integer N_TX_ENDPOINTS = 72,
     parameter integer N_SPEC_ROUTES  = 64,
     parameter integer N_TIME_ROUTES  = 8,
-    parameter bit     PRODUCTION_27H = 1'b0
+    parameter bit     PRODUCTION_27H = 1'b0,
+    parameter bit     RAW_WITNESS_DIAGNOSTIC = 1'b0
 ) (
     input  wire                         s_axi_aclk,
     input  wire                         s_axi_aresetn,
@@ -143,6 +144,9 @@ module feng_ctrl_axi #(
     input  wire [31:0]                  pfb_input_fifo_level,
     input  wire [31:0]                  pfb_peak_chan,
     input  wire [31:0]                  pfb_peak_power,
+    input  wire                         science_aa100_active,
+    input  wire                         science_aa100_primed,
+    input  wire [31:0]                  science_aa100_coeff_version,
     input  wire [31:0]                  time_ddr_ring_status,
     input  wire [31:0]                  time_ddr_ring_occupancy,
     input  wire [31:0]                  time_ddr_ring_write_count,
@@ -235,6 +239,10 @@ module feng_ctrl_axi #(
     output logic [N_TIME_ROUTES*16-1:0] tx_time_route_input_mask_vec,
     output logic [N_TIME_ROUTES*8-1:0]  tx_time_route_endpoint_vec,
     output logic [15:0]                 rfdc_active_mask,
+    output logic                        diag_adc_force_zero,
+    output logic                        diag_adc_force_hold,
+    output logic [7:0]                  diag_adc_channel_mask,
+    output logic                        diag_dac_gate,
     output logic                        debug_capture_start_pulse,
     output logic                        debug_capture_clear_pulse,
     output logic [9:0]                  debug_time_rd_addr,
@@ -291,19 +299,25 @@ module feng_ctrl_axi #(
     output wire [2:0]                   science_output_mode_cfg
 );
 
-    localparam [31:0] CORE_VERSION = 32'h0001_0026;
+`ifdef T510_STAGE27I_ANTI_ALIAS
+    localparam [31:0] CORE_VERSION = 32'h0001_002B;
+`elsif T510_STAGE27I_RAW_WITNESS
+    localparam [31:0] CORE_VERSION = 32'h0001_002A;
+`else
+    localparam [31:0] CORE_VERSION = 32'h0001_0029;
+`endif
     localparam [31:0] DEBUG_NFFT = 32'd1024;
     localparam [31:0] DEBUG_OBS_SAMPLE_RATE_HZ = 32'd61_440_000;
     localparam [31:0] PREVIEW_SAMPLE_RATE_HZ = 32'd245_760_000;
     localparam [31:0] PREVIEW_AXIS_BEAT_RATE_HZ = 32'd61_440_000;
     localparam [31:0] PREVIEW_MODE_FULLRATE_IQ = 32'd1;
-    localparam [31:0] SCIENCE_CAPABILITY_WORD = 32'h0000_0307;
+    localparam [31:0] SCIENCE_CAPABILITY_WORD = 32'h0000_0707;
     localparam [2:0]  SCIENCE_MODE_OFF              = 3'd0;
     localparam [2:0]  SCIENCE_MODE_TIME_ONLY        = 3'd1;
     localparam [2:0]  SCIENCE_MODE_SPEC_ONLY        = 3'd2;
     localparam [2:0]  SCIENCE_MODE_TIME_SPEC        = 3'd3;
     localparam [2:0]  SCIENCE_MODE_TIME_MONITOR_SPEC = 3'd4;
-    localparam [15:0] FFT_ONLY_DEFAULT_SHIFT = 16'h0aab;
+    localparam [15:0] FFT_ONLY_DEFAULT_SHIFT = 16'h0556;
     localparam [1:0]  SYNC_EXTERNAL_PPS   = 2'd0;
     localparam [1:0]  SYNC_SOFTWARE_EPOCH = 2'd1;
     localparam [1:0]  SYNC_FREE_RUN       = 2'd2;
@@ -393,6 +407,7 @@ module feng_ctrl_axi #(
     localparam [3:0] READ_BANK_PREVIEW_BUF   = 4'd8;
     localparam [3:0] READ_BANK_PREVIEW_EVENT = 4'd9;
     localparam [3:0] READ_BANK_LANE_MON      = 4'd10;
+    localparam [3:0] READ_BANK_RAW_WITNESS   = 4'd11;
     localparam [3:0] READ_BANK_ZERO          = 4'd15;
     logic [3:0]            read_bank_latched;
 
@@ -447,7 +462,9 @@ module feng_ctrl_axi #(
     assign science_status_word = {
         16'd0,
         science_output_mode,
-        3'd0,
+        1'b0,
+        science_aa100_primed,
+        science_aa100_active,
         science_bandwidth_mode,
         2'd0,
         science_cmac_live_ready,
@@ -477,8 +494,8 @@ module feng_ctrl_axi #(
                 ((addr >= 18'h0b600) && (addr < 18'h0b628)) ||
                 ((addr >= 18'h0b700) && (addr < 18'h0b704)) ||
                 ((addr >= 18'h0c000) && (addr < 18'h0d000)) ||
-                ((addr >= 18'h0e200) && (addr < 18'h0e228)) ||
-                ((addr >= 18'h0e800) && (addr < 18'h0f800)) ||
+                (!RAW_WITNESS_DIAGNOSTIC && ((addr >= 18'h0e200) && (addr < 18'h0e228))) ||
+                (!RAW_WITNESS_DIAGNOSTIC && ((addr >= 18'h0e800) && (addr < 18'h0f800))) ||
                 ((addr >= 18'h10000) && (addr < 18'h12100)) ||
                 ((addr >= 18'h13000) && (addr < 18'h14900));
         end
@@ -509,8 +526,13 @@ module feng_ctrl_axi #(
                 stage27h_read_bank = READ_BANK_TX;
             end else if ((addr >= 18'h0b100) && (addr < 18'h0b160)) begin
                 stage27h_read_bank = READ_BANK_TX_INDIRECT;
-            end else if ((addr >= 18'h0d000) && (addr < 18'h0d054)) begin
+            end else if (((addr >= 18'h0d000) && (addr < 18'h0d05c)) ||
+                         (addr == 18'h0d060)) begin
                 stage27h_read_bank = READ_BANK_SCIENCE;
+            end else if (RAW_WITNESS_DIAGNOSTIC &&
+                         (((addr >= 18'h0e200) && (addr < 18'h0e228)) ||
+                          ((addr >= 18'h0e800) && (addr < 18'h0f800)))) begin
+                stage27h_read_bank = READ_BANK_RAW_WITNESS;
             end else begin
                 stage27h_read_bank = READ_BANK_ZERO;
             end
@@ -853,6 +875,10 @@ module feng_ctrl_axi #(
             tx_time_route_endpoint_vec[0 +: 8] <= 8'd0;
             qsfp_test_interval_cycles <= 32'd322_266;
             rfdc_active_mask    <= 16'hffff;
+            diag_adc_force_zero <= 1'b0;
+            diag_adc_force_hold <= 1'b0;
+            diag_adc_channel_mask <= 8'hff;
+            diag_dac_gate <= 1'b0;
             dac_tone_enable     <= 1'b1;
             dac_tone_amplitude  <= 16'd2048;
             dac_tone_phase_step <= 32'h0080_0000;
@@ -1323,7 +1349,7 @@ module feng_ctrl_axi #(
                     16'h090c: begin
                         pfb_taps <= PRODUCTION_27H ? 16'd0 : write_exec_data[15:0];
                     end
-                    16'h0910: pfb_fft_shift <= write_exec_data[15:0];
+                    16'h0910: pfb_fft_shift <= PRODUCTION_27H ? {4'd0, write_exec_data[11:0]} : write_exec_data[15:0];
                     16'h0914: begin
                         if (PRODUCTION_27H) begin
                             pfb_chan0 <= 32'd0;
@@ -1401,6 +1427,18 @@ module feng_ctrl_axi #(
                             time_multiflow_count <= 4'd8;
                         end else begin
                             time_multiflow_count <= write_exec_data[19:16];
+                        end
+                    end
+                    16'hd060: begin
+                        if (write_exec_strb[0]) begin
+                            diag_adc_force_zero <= write_exec_data[0];
+                            diag_adc_force_hold <= write_exec_data[1];
+                        end
+                        if (write_exec_strb[1]) begin
+                            diag_adc_channel_mask <= write_exec_data[15:8];
+                        end
+                        if (write_exec_strb[2]) begin
+                            diag_dac_gate <= write_exec_data[16];
                         end
                     end
                     16'hb700: begin
@@ -1821,7 +1859,47 @@ module feng_ctrl_axi #(
                         16'hd048: read_data_next = time_ddr_ring_drop_count;
                         16'hd04c: read_data_next = time_ddr_ring_error_count;
                         16'hd050: read_data_next = {12'd0, time_multiflow_count, 5'd0, time_multiflow_base_endpoint, 7'd0, time_multiflow_enable};
+                        16'hd054: read_data_next = {
+                            22'd0,
+                            science_aa100_primed,
+                            science_aa100_active,
+                            8'd41
+                        };
+                        16'hd058: read_data_next = science_aa100_coeff_version;
+                        16'hd060: read_data_next = {15'd0, diag_dac_gate, diag_adc_channel_mask, 6'd0, diag_adc_force_hold, diag_adc_force_zero};
                         default: read_data_next = 32'd0;
+                    endcase
+                end
+                READ_BANK_RAW_WITNESS: begin
+                    case (read_addr)
+                        16'he200: read_data_next = 32'd0;
+                        16'he204: read_data_next = {
+                            5'd0,
+                            rfdc_axis_raw_witness_channel_select,
+                            7'd0,
+                            rfdc_axis_raw_witness_beat_count,
+                            3'd0,
+                            rfdc_axis_raw_witness_tvalid_seen,
+                            rfdc_axis_raw_witness_overflow,
+                            rfdc_axis_raw_witness_capturing,
+                            rfdc_axis_raw_witness_valid,
+                            rfdc_axis_raw_witness_armed
+                        };
+                        16'he208: read_data_next = {29'd0, rfdc_axis_raw_witness_channel_select_ctrl};
+                        16'he20c: read_data_next = {23'd0, rfdc_axis_raw_witness_capture_beats};
+                        16'he210: read_data_next = rfdc_axis_raw_witness_sample0[31:0];
+                        16'he214: read_data_next = rfdc_axis_raw_witness_sample0[63:32];
+                        16'he218: read_data_next = rfdc_axis_raw_witness_rfdc_flags;
+                        16'he21c: read_data_next = {21'd0, rfdc_axis_raw_witness_beat_count, 2'b00};
+                        16'he220: read_data_next = 32'd1024;
+                        16'he224: read_data_next = {16'd0, rfdc_axis_raw_witness_valid_mask};
+                        default: begin
+                            if ((read_addr >= 18'h0e800) && (read_addr < 18'h0f800)) begin
+                                read_data_next = rfdc_axis_raw_witness_rd_data;
+                            end else begin
+                                read_data_next = 32'd0;
+                            end
+                        end
                     endcase
                 end
                 default: begin
@@ -2212,6 +2290,14 @@ module feng_ctrl_axi #(
             16'hd048: read_data_next = time_ddr_ring_drop_count;
             16'hd04c: read_data_next = time_ddr_ring_error_count;
             16'hd050: read_data_next = {12'd0, time_multiflow_count, 5'd0, time_multiflow_base_endpoint, 7'd0, time_multiflow_enable};
+            16'hd054: read_data_next = {
+                22'd0,
+                science_aa100_primed,
+                science_aa100_active,
+                8'd41
+            };
+            16'hd058: read_data_next = science_aa100_coeff_version;
+            16'hd060: read_data_next = {15'd0, diag_dac_gate, diag_adc_channel_mask, 6'd0, diag_adc_force_hold, diag_adc_force_zero};
             default: begin
                 if ((read_addr >= 16'h0500) && (read_addr < 16'h0520)) begin
                     lane_idx = (read_addr - 16'h0500) >> 2;

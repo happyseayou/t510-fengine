@@ -139,14 +139,16 @@ if {$use_streaming_27h} {
     set lane_prev_throttle [get_property CONFIG.throttle_scheme $lane_ip]
     set lane_prev_clock [get_property CONFIG.target_clock_frequency $lane_ip]
     set lane_prev_throughput [get_property CONFIG.target_data_throughput $lane_ip]
+    set lane_prev_rounding [get_property CONFIG.rounding_modes $lane_ip]
     if {
         ($lane_prev_channels ne "1") ||
         ($lane_prev_impl ne "pipelined_streaming_io") ||
         ($lane_prev_throttle ne "nonrealtime") ||
-        ($lane_prev_clock ne "325")
+        ($lane_prev_clock ne "325") ||
+        ($lane_prev_rounding ne "convergent_rounding")
     } {
         set ::T510_STAGE27H_XFFT_LANE_CONFIG_CHANGED 1
-        puts "STAGE27H_XFFT_LANE_CONFIG_CHANGED previous channels=$lane_prev_channels implementation_options=$lane_prev_impl throttle_scheme=$lane_prev_throttle target_clock_frequency=$lane_prev_clock target_data_throughput=$lane_prev_throughput"
+        puts "STAGE27H_XFFT_LANE_CONFIG_CHANGED previous channels=$lane_prev_channels implementation_options=$lane_prev_impl throttle_scheme=$lane_prev_throttle target_clock_frequency=$lane_prev_clock target_data_throughput=$lane_prev_throughput rounding_modes=$lane_prev_rounding"
     }
 
     set_cfg $lane_ip channels 1
@@ -157,7 +159,7 @@ if {$use_streaming_27h} {
     set_cfg $lane_ip input_width 16
     set_cfg $lane_ip phase_factor_width 16
     set_cfg $lane_ip scaling_options scaled
-    set_cfg $lane_ip rounding_modes truncation
+    set_cfg $lane_ip rounding_modes convergent_rounding
     set_cfg $lane_ip aclken false
     set_cfg $lane_ip aresetn false
     set_cfg $lane_ip ovflo true 0
@@ -183,7 +185,8 @@ if {$use_streaming_27h} {
     set lane_actual_throughput [get_property CONFIG.target_data_throughput $lane_ip]
     set lane_actual_clock [get_property CONFIG.target_clock_frequency $lane_ip]
     set lane_actual_channels [get_property CONFIG.channels $lane_ip]
-    puts "STAGE27H_XFFT_LANE_VERIFY channels=$lane_actual_channels implementation_options=$lane_actual_impl throttle_scheme=$lane_actual_throttle target_clock_frequency=$lane_actual_clock target_data_throughput=$lane_actual_throughput"
+    set lane_actual_rounding [get_property CONFIG.rounding_modes $lane_ip]
+    puts "STAGE27H_XFFT_LANE_VERIFY channels=$lane_actual_channels implementation_options=$lane_actual_impl throttle_scheme=$lane_actual_throttle target_clock_frequency=$lane_actual_clock target_data_throughput=$lane_actual_throughput rounding_modes=$lane_actual_rounding"
     if {$lane_actual_channels ne "1"} {
         error "Stage 27h lane XFFT must be single-channel; got $lane_actual_channels"
     }
@@ -195,6 +198,9 @@ if {$use_streaming_27h} {
     }
     if {$lane_actual_clock ne "325"} {
         error "Stage 27h lane XFFT requires target_clock_frequency=325 for CMAC-domain FFT; got $lane_actual_clock"
+    }
+    if {$lane_actual_rounding ne "convergent_rounding"} {
+        error "Stage 27h lane XFFT requires convergent_rounding to avoid deterministic truncation bias; got $lane_actual_rounding"
     }
     puts "STAGE27H_XFFT_LANE_NOTE nonrealtime pipelined streaming keeps full-rate ready/valid semantics; board SPEC 480kpps remains the production gate"
 

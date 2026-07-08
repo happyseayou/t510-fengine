@@ -80,6 +80,7 @@ module tb_xfft_8lane_config_wrapper;
     wire         event_status_channel_halt;
     wire         event_data_in_channel_halt;
     wire         event_data_out_channel_halt;
+    integer lane_idx;
 
     t510_fengine_xfft_4096_8lane_streaming dut (
         .aclk(clk),
@@ -110,8 +111,15 @@ module tb_xfft_8lane_config_wrapper;
     initial begin
         repeat (4) @(posedge clk);
         cfg_data[7:0] = 8'hff;
-        cfg_data[31:8] = 24'h555555;
+        for (lane_idx = 0; lane_idx < 8; lane_idx = lane_idx + 1) begin
+            cfg_data[(8 + lane_idx*12) +: 12] = 12'h550 + lane_idx[11:0];
+        end
         cfg_valid = 1'b1;
+        #1;
+        `TB_CHECK_EQ(cfg_data[19:8], 12'h550, "wrapper test drives lane0 12-bit scale schedule")
+        `TB_CHECK_EQ(cfg_data[103:92], 12'h557, "wrapper test drives lane7 12-bit scale schedule")
+        `TB_CHECK_EQ(dut.gen_lane_xfft[0].lane_config_tdata[12:1], 12'h550, "lane0 wrapper uses 12-bit scale schedule")
+        `TB_CHECK_EQ(dut.gen_lane_xfft[7].lane_config_tdata[12:1], 12'h557, "lane7 wrapper uses 12-bit scale schedule")
         @(posedge clk);
         `TB_CHECK(!cfg_ready, "8-lane XFFT wrapper holds config valid through delayed lane ready")
         repeat (8) begin

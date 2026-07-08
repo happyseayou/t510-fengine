@@ -27,6 +27,16 @@ rsync -av --delete -e "${PYNQ_RSYNC_RSH}" \
 
 rsync -av -e "${PYNQ_RSYNC_RSH}" \
   "${REPO_ROOT}/scripts/pynq_stage27h_time_spec_fft_fullrate.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27h_rfdc_spur_audit.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27i_rfdc_diag_spur_probe.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27i_frontend_spur_audit.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27i_spec_sideband_audit.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27i_rfdc_200m_rootcause_audit.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27i_100m_spur_taxonomy_audit.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27i_rfdc_mixer_event_audit.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27i_rfdc_mixer_sequence_audit.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27i_raw_lane_witness_audit.py" \
+  "${REPO_ROOT}/scripts/pynq_stage27i_antialias_spur_acceptance.py" \
   "${PYNQ_TARGET}:${PYNQ_BRINGUP_DIR}/scripts/"
 
 rsync -av -e "${PYNQ_RSYNC_RSH}" \
@@ -63,6 +73,36 @@ Board convergence entry:
   cd ${PYNQ_BRINGUP_DIR}
   source /etc/profile.d/xrt_setup.sh
   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27h_time_spec_fft_fullrate.py --no-download --matrix converge
+
+RFDC/TIME spur audit entry:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27h_rfdc_spur_audit.py --fixed-rf-audit
+
+Stage 27i diagnostic spur probe entry, for the diagnostic 0x00010029 bitstream only:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27i_rfdc_diag_spur_probe.py
+
+Stage 27i front-end spur audit entry, for the diagnostic 0x00010029 bitstream only:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27i_frontend_spur_audit.py
+
+Stage 27i SPEC sideband audit entry, for the diagnostic 0x00010029 bitstream only:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27i_spec_sideband_audit.py
+
+Stage 27i RFDC 100/200MHz root-cause audit entry, for the diagnostic 0x00010029 bitstream only:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27i_rfdc_200m_rootcause_audit.py
+
+Stage 27i 100MHz TIME-first spur taxonomy audit entry, for the diagnostic 0x00010029 bitstream only:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27i_100m_spur_taxonomy_audit.py
+
+Stage 27i RFDC mixer/NCO/SYSREF event audit entry, for the diagnostic 0x00010029 bitstream only:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27i_rfdc_mixer_event_audit.py
+
+Stage 27i RFDC mixer sequence audit entry, for the diagnostic 0x00010029 bitstream only:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27i_rfdc_mixer_sequence_audit.py
+
+Stage 27i RFDC raw-lane witness audit entry, for the diagnostic 0x0001002A bitstream only:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27i_raw_lane_witness_audit.py
+
+Stage 27i 100MHz anti-alias spur acceptance entry, for the 0x0001002B production candidate:
+  sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27i_antialias_spur_acceptance.py
 
 Jupyter production entry:
   ${PYNQ_JUPYTER_DIR}/notebooks/15_stage27h_time_spec_fft_fullrate_control.ipynb

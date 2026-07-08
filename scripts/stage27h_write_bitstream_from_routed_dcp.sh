@@ -7,35 +7,31 @@ LOCAL_LOCALE="${LOCAL_LOCALE:-${HOME}/.local/share/locale}"
 REPORT_DIR="${REPO_ROOT}/reports/board"
 mkdir -p "${REPORT_DIR}"
 
-STAGE_NAME="${T510_TIMING_STAGE_NAME:-stage27h_timing_closure_iter}"
-PIDFILE="${REPORT_DIR}/${STAGE_NAME}_vivado.pid"
-LOG="${REPORT_DIR}/${STAGE_NAME}_vivado.log"
-JOU="${REPORT_DIR}/${STAGE_NAME}_vivado.jou"
-OUT="${REPORT_DIR}/${STAGE_NAME}_nohup.out"
+PIDFILE="${REPORT_DIR}/stage27h_10028_direct_bitstream.pid"
+LOG="${REPORT_DIR}/stage27h_10028_direct_bitstream.log"
+JOU="${REPORT_DIR}/stage27h_10028_direct_bitstream.jou"
+OUT="${REPORT_DIR}/stage27h_10028_direct_bitstream_nohup.out"
 
 if [[ -f "${PIDFILE}" ]]; then
   old_pid="$(cat "${PIDFILE}" 2>/dev/null || true)"
   if [[ -n "${old_pid}" ]] && ps -p "${old_pid}" >/dev/null 2>&1; then
     old_cmd="$(ps -o cmd= -p "${old_pid}")"
-    if [[ "${old_cmd}" == *"stage27h_timing_closure_iter.tcl"* ]]; then
+    if [[ "${old_cmd}" == *"stage27h_write_bitstream_from_routed_dcp.tcl"* ]]; then
       old_pgid="$(ps -o pgid= -p "${old_pid}" | tr -d ' ')"
-      echo "Stopping existing Stage 27h timing closure run pid=${old_pid} pgid=${old_pgid}"
+      echo "Stopping existing Stage 27h direct bitstream run pid=${old_pid} pgid=${old_pgid}"
       kill -TERM "-${old_pgid}" 2>/dev/null || true
       sleep 5
       if ps -p "${old_pid}" >/dev/null 2>&1; then
         kill -KILL "-${old_pgid}" 2>/dev/null || true
       fi
     else
-      echo "Refusing to reuse ${PIDFILE}: pid ${old_pid} is not a Stage 27h timing closure run." >&2
+      echo "Refusing to reuse ${PIDFILE}: pid ${old_pid} is not a Stage 27h direct bitstream run." >&2
       exit 1
     fi
   fi
 fi
 
 rm -f "${PIDFILE}" "${LOG}" "${JOU}" "${OUT}"
-rm -f \
-  "${REPO_ROOT}/demo-ant.runs/synth_1/__synthesis_is_running__" \
-  "${REPO_ROOT}/demo-ant.runs/impl_1/__implementation_is_running__"
 
 setsid bash -c '
   echo $$ > "$1"
@@ -43,7 +39,7 @@ setsid bash -c '
   export LOCPATH="$3"
   export LD_LIBRARY_PATH="$4/lib/lnx64.o/SuSE${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   exec "$4/bin/vivado" -mode batch \
-    -source scripts/stage27h_timing_closure_iter.tcl \
+    -source scripts/stage27h_write_bitstream_from_routed_dcp.tcl \
     -journal "$5" \
     -log "$6"
 ' _ "${PIDFILE}" "${REPO_ROOT}" "${LOCAL_LOCALE}" "${VIVADO_ROOT}" "${JOU}" "${LOG}" \
@@ -54,8 +50,7 @@ pid="$(cat "${PIDFILE}")"
 ps -o pid,ppid,pgid,sid,etimes,stat,cmd -p "${pid}"
 
 cat <<EOF
-Stage 27h/27i timing closure run started.
-  stage: ${STAGE_NAME}
+Stage 27h direct bitstream run started.
   pid: ${pid}
   log: ${LOG}
   journal: ${JOU}

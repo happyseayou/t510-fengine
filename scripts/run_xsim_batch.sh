@@ -27,6 +27,7 @@ fi
 rtl_files=(
   rtl/sync_fsm.sv
   rtl/axis_stream_duplicator.sv
+  rtl/science_decim2_halfband_aa.sv
   rtl/science_rate_selector.sv
   rtl/science_stream_decimator.sv
   rtl/requantizer.sv

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-EXPECTED_CORE_VERSION = 0x0001_0026
+EXPECTED_CORE_VERSION = 0x0001_002B
 
 
 def _repo_root() -> Path:
@@ -147,11 +147,13 @@ def main() -> int:
     parser.add_argument("--time-live-interval-beats", type=int, default=0)
     parser.add_argument("--input-mask", default="0x00ff")
     parser.add_argument("--pfb-taps", type=int, default=0)
-    parser.add_argument("--pfb-fft-shift", type=lambda value: int(value, 0), default=0x5556)
+    parser.add_argument("--pfb-fft-shift", type=lambda value: int(value, 0), default=0x0556)
     parser.add_argument("--min-time-pps", type=float, default=470_000.0)
     parser.add_argument("--min-spec-pps", type=float, default=470_000.0)
     parser.add_argument("--min-combined-t510-udp-payload-mbps", type=float, default=63_000.0)
-    parser.add_argument("--sync-mode", default="free_run")
+    parser.add_argument("--clock-ref", default="external_10mhz")
+    parser.add_argument("--sync-mode", default="external_pps")
+    parser.add_argument("--measurement-ready-timeout-s", type=float, default=10.0)
     parser.add_argument("--settle-s", type=float, default=0.05)
     parser.add_argument("--no-start", action="store_true")
     parser.add_argument("--skip-reject-check", action="store_true")
@@ -182,6 +184,7 @@ def main() -> int:
                 min_time_pps=float(args.min_time_pps),
                 min_spec_pps=float(args.min_spec_pps),
                 min_combined_t510_udp_payload_mbps=float(args.min_combined_t510_udp_payload_mbps),
+                measurement_ready_timeout_s=float(args.measurement_ready_timeout_s),
                 dst_ip=args.dst_ip,
                 dst_mac=args.dst_mac,
                 src_ip=args.src_ip,
@@ -203,7 +206,10 @@ def main() -> int:
                 pfb_taps=int(args.pfb_taps),
                 pfb_fft_shift=int(args.pfb_fft_shift),
                 diagnostic_ignore_link_gate=bool(args.diagnostic_ignore_link_gate),
+                clock_ref=(None if index > 0 else (None if str(args.clock_ref).lower() == "none" else str(args.clock_ref))),
                 sync_mode=(None if index > 0 else (None if str(args.sync_mode).lower() == "none" else str(args.sync_mode))),
+                expected_clock_ref=(None if str(args.clock_ref).lower() == "none" else str(args.clock_ref)),
+                expected_sync_mode=(None if str(args.sync_mode).lower() == "none" else str(args.sync_mode)),
                 start=not bool(args.no_start),
                 settle_s=float(args.settle_s),
             )
@@ -240,7 +246,7 @@ def main() -> int:
             "binary": "rust/t510_time_rx/target/release/t510_time_rx",
             "interface": "ens2f0np0",
             "web": "0.0.0.0:8089",
-            "fanout_group": "0x278",
+            "fanout_group": "0x279",
             "dst_port_range": f"{args.time_dst_port_base}..{args.spec_dst_port_base + args.spec_route_count - 1}",
             "time_ports": f"{args.time_dst_port_base}..{args.time_dst_port_base + args.time_flow_count - 1}",
             "spec_ports": f"{args.spec_dst_port_base}..{args.spec_dst_port_base + args.spec_route_count - 1}",
@@ -256,7 +262,7 @@ def main() -> int:
                 "--fanout-mode",
                 "port",
                 "--fanout-group",
-                "0x278",
+                "0x279",
                 "--initial-bandwidth-mhz",
                 "100",
             ],

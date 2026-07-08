@@ -22,6 +22,7 @@ pub const SPEC_BLOCK_COUNT_27H: u16 = 16;
 pub const SPEC_BLOCK_CHANS_27H: u16 = 256;
 pub const SPEC_TIME_COUNT_27H: u16 = 1;
 pub const SPEC_FFT_ONLY_FLAG: u32 = 1 << 8;
+pub const SPEC_ANTI_ALIAS_100M_FLAG: u32 = 1 << 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BandwidthMode {
@@ -80,9 +81,9 @@ impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             bandwidth_mhz: 100,
-            center_mhz: 200.0,
-            expected_mhz: 200.0,
-            dac_mhz: 200.0,
+            center_mhz: 100.0,
+            expected_mhz: 60.010,
+            dac_mhz: 60.010,
             waveform_view_mode: "dual".to_string(),
             phase_deg_by_channel: [0.0; TIME_NINPUT],
             channel_mask: 0x00ff,

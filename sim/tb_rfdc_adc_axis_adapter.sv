@@ -7,6 +7,9 @@ module tb_rfdc_adc_axis_adapter;
     logic [63:0] d [0:15];
     logic [15:0] valid = 16'h0000;
     logic [15:0] active_mask = 16'hffff;
+    logic diag_force_zero = 1'b0;
+    logic diag_force_hold = 1'b0;
+    logic [7:0] diag_channel_mask = 8'hff;
     wire [15:0] ready;
     wire [1023:0] m_axis_tdata;
     wire [31:0] m_axis_tuser;
@@ -20,6 +23,12 @@ module tb_rfdc_adc_axis_adapter;
     wire [255:0] preview_tdata3;
     wire [63:0] preview_sample0;
     wire preview_tvalid;
+    wire [255:0] raw_preview_tdata0;
+    wire [255:0] raw_preview_tdata1;
+    wire [255:0] raw_preview_tdata2;
+    wire [255:0] raw_preview_tdata3;
+    wire [63:0] raw_preview_sample0;
+    wire raw_preview_tvalid;
     wire all_adc_valid;
     wire [15:0] current_valid_mask;
     wire [15:0] seen_valid_mask;
@@ -98,6 +107,9 @@ module tb_rfdc_adc_axis_adapter;
         .m33_axis_tready(ready[15]),
         .m33_axis_tvalid(valid[15]),
         .active_port_mask(active_mask),
+        .diag_force_zero(diag_force_zero),
+        .diag_force_hold(diag_force_hold),
+        .diag_channel_mask(diag_channel_mask),
         .m_axis_tdata(m_axis_tdata),
         .m_axis_tuser(m_axis_tuser),
         .m_axis_sample0(m_axis_sample0),
@@ -110,6 +122,12 @@ module tb_rfdc_adc_axis_adapter;
         .m_preview_tdata3(preview_tdata3),
         .m_preview_sample0(preview_sample0),
         .m_preview_tvalid(preview_tvalid),
+        .m_raw_preview_tdata0(raw_preview_tdata0),
+        .m_raw_preview_tdata1(raw_preview_tdata1),
+        .m_raw_preview_tdata2(raw_preview_tdata2),
+        .m_raw_preview_tdata3(raw_preview_tdata3),
+        .m_raw_preview_sample0(raw_preview_sample0),
+        .m_raw_preview_tvalid(raw_preview_tvalid),
         .all_adc_valid(all_adc_valid),
         .current_valid_mask(current_valid_mask),
         .seen_valid_mask(seen_valid_mask),
@@ -225,6 +243,46 @@ module tb_rfdc_adc_axis_adapter;
         `TB_CHECK(all_adc_valid, "complex ch0 mask accepts m00 and m01")
         `TB_CHECK_EQ(last_fire_tdata[31:0], 32'h2001_2000, "complex ch0 lower I/Q packing")
         `TB_CHECK_EQ(last_fire_tdata[287:256], 32'h2101_2100, "complex ch0 sub1 I/Q packing")
+
+        active_mask <= 16'hffff;
+        valid <= 16'hffff;
+        diag_channel_mask <= 8'h01;
+        set_low_words(16'h3000);
+        @(posedge clk);
+        #1;
+        `TB_CHECK_EQ(last_fire_tdata[31:0], 32'h3001_3000, "diagnostic channel mask keeps CH0")
+        `TB_CHECK_EQ(last_fire_tdata[255:32], 224'd0, "diagnostic channel mask zeros CH1..CH7 in sub0")
+        `TB_CHECK_EQ(last_fire_tdata[287:256], 32'h3101_3100, "diagnostic channel mask keeps CH0 in sub1")
+        `TB_CHECK_EQ(last_fire_tdata[511:288], 224'd0, "diagnostic channel mask zeros CH1..CH7 in sub1")
+        `TB_CHECK_EQ(last_fire_tdata[543:512], 32'h3201_3200, "diagnostic channel mask keeps CH0 in sub2")
+        `TB_CHECK_EQ(last_fire_tdata[767:544], 224'd0, "diagnostic channel mask zeros CH1..CH7 in sub2")
+        `TB_CHECK_EQ(last_fire_tdata[799:768], 32'h3301_3300, "diagnostic channel mask keeps CH0 in sub3")
+        `TB_CHECK_EQ(last_fire_tdata[1023:800], 224'd0, "diagnostic channel mask zeros CH1..CH7 in sub3")
+        `TB_CHECK_EQ(raw_preview_tdata0[255:224], 32'h300f_300e, "raw preview ignores diagnostic channel mask")
+        `TB_CHECK_EQ(raw_preview_tdata3[255:224], 32'h330f_330e, "raw preview sub3 ignores diagnostic channel mask")
+
+        diag_channel_mask <= 8'hff;
+        diag_force_zero <= 1'b1;
+        set_low_words(16'h4000);
+        @(posedge clk);
+        #1;
+        `TB_CHECK_EQ(last_fire_tdata, 1024'd0, "diagnostic force-zero zeros adapter output without stopping valid")
+        `TB_CHECK(m_axis_tvalid, "diagnostic force-zero preserves full-rate valid")
+        `TB_CHECK_EQ(raw_preview_tdata0[31:0], 32'h4001_4000, "raw preview ignores diagnostic force-zero")
+
+        diag_force_zero <= 1'b0;
+        set_low_words(16'h5000);
+        @(posedge clk);
+        #1;
+        `TB_CHECK_EQ(last_fire_tdata[31:0], 32'h5001_5000, "diagnostic hold seed sample")
+        diag_force_hold <= 1'b1;
+        set_low_words(16'h6000);
+        @(posedge clk);
+        #1;
+        `TB_CHECK_EQ(last_fire_tdata[31:0], 32'h5001_5000, "diagnostic force-hold repeats held data")
+        `TB_CHECK_EQ(raw_preview_tdata0[31:0], 32'h6001_6000, "raw preview ignores diagnostic force-hold")
+        diag_force_hold <= 1'b0;
+        diag_channel_mask <= 8'hff;
 
         `TB_PASS("tb_rfdc_adc_axis_adapter")
     end

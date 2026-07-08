@@ -20,8 +20,11 @@ module science_rate_selector #(
     output wire                                         m_axis_tvalid,
     output wire                                         m_axis_tlast,
     input  wire                                         m_axis_tready,
-    output logic [31:0]                                  output_beat_count,
-    output logic [31:0]                                  dropped_beat_count
+    output wire                                         aa100_active,
+    output wire                                         aa100_primed,
+    output wire [31:0]                                  aa100_coeff_version,
+    output wire [31:0]                                  output_beat_count,
+    output wire [31:0]                                  dropped_beat_count
 );
 
     localparam integer SUB_W = NINPUT * SAMPLE_W;
@@ -30,6 +33,11 @@ module science_rate_selector #(
     localparam [1:0] BW_20MHZ  = 2'd0;
     localparam [1:0] BW_100MHZ = 2'd1;
     localparam [1:0] BW_200MHZ = 2'd2;
+`ifdef T510_STAGE27I_ANTI_ALIAS
+    localparam bit AA100_ENABLED = 1'b1;
+`else
+    localparam bit AA100_ENABLED = 1'b0;
+`endif
 
     logic [DATA_W-1:0] pending_tdata;
     logic [USER_W-1:0] pending_tuser;
@@ -55,14 +63,60 @@ module science_rate_selector #(
     logic candidate_tlast;
     logic candidate_valid;
 
-    wire input_fire = s_axis_tvalid && s_axis_tready;
+    logic [31:0] legacy_output_beat_count;
+    logic [31:0] legacy_dropped_beat_count;
 
-    assign s_axis_tready = !pending_valid || m_axis_tready;
-    assign m_axis_tdata = pending_tdata;
-    assign m_axis_tuser = pending_tuser;
-    assign m_axis_sample0 = pending_sample0;
-    assign m_axis_tlast = pending_tlast;
-    assign m_axis_tvalid = pending_valid;
+    wire bw100_selected = (bandwidth_mode == BW_100MHZ);
+    wire bw100_aa_selected = bw100_selected && AA100_ENABLED;
+    wire legacy_s_axis_tready = !pending_valid || m_axis_tready;
+    wire legacy_input_fire = !bw100_aa_selected && s_axis_tvalid && legacy_s_axis_tready;
+
+    wire aa_s_axis_tready;
+    wire [DATA_W-1:0] aa_m_axis_tdata;
+    wire [USER_W-1:0] aa_m_axis_tuser;
+    wire [SAMPLE0_W-1:0] aa_m_axis_sample0;
+    wire aa_m_axis_tvalid;
+    wire aa_m_axis_tlast;
+    wire [31:0] aa_output_beat_count;
+    wire [31:0] aa_dropped_beat_count;
+
+    assign s_axis_tready = bw100_aa_selected ? aa_s_axis_tready : legacy_s_axis_tready;
+    assign m_axis_tdata = bw100_aa_selected ? aa_m_axis_tdata : pending_tdata;
+    assign m_axis_tuser = bw100_aa_selected ? aa_m_axis_tuser : pending_tuser;
+    assign m_axis_sample0 = bw100_aa_selected ? aa_m_axis_sample0 : pending_sample0;
+    assign m_axis_tlast = bw100_aa_selected ? aa_m_axis_tlast : pending_tlast;
+    assign m_axis_tvalid = bw100_aa_selected ? aa_m_axis_tvalid : pending_valid;
+    assign output_beat_count = bw100_aa_selected ? aa_output_beat_count : legacy_output_beat_count;
+    assign dropped_beat_count = bw100_aa_selected ? aa_dropped_beat_count : legacy_dropped_beat_count;
+
+    science_decim2_halfband_aa #(
+        .NINPUT(NINPUT),
+        .SUBSAMPLES_PER_BEAT(SUBSAMPLES_PER_BEAT),
+        .SAMPLE_W(SAMPLE_W),
+        .USER_W(USER_W),
+        .SAMPLE0_W(SAMPLE0_W)
+    ) u_science_decim2_halfband_aa (
+        .clk(clk),
+        .rst_n(rst_n),
+        .enable(bw100_aa_selected),
+        .s_axis_tdata(s_axis_tdata),
+        .s_axis_tuser(s_axis_tuser),
+        .s_axis_sample0(s_axis_sample0),
+        .s_axis_tvalid(s_axis_tvalid),
+        .s_axis_tlast(s_axis_tlast),
+        .s_axis_tready(aa_s_axis_tready),
+        .m_axis_tdata(aa_m_axis_tdata),
+        .m_axis_tuser(aa_m_axis_tuser),
+        .m_axis_sample0(aa_m_axis_sample0),
+        .m_axis_tvalid(aa_m_axis_tvalid),
+        .m_axis_tlast(aa_m_axis_tlast),
+        .m_axis_tready(m_axis_tready),
+        .aa_active(aa100_active),
+        .aa_primed(aa100_primed),
+        .aa_coeff_version(aa100_coeff_version),
+        .output_beat_count(aa_output_beat_count),
+        .dropped_beat_count(aa_dropped_beat_count)
+    );
 
     function automatic [SUB_W-1:0] sub_sample(
         input logic [DATA_W-1:0] data,
@@ -80,7 +134,7 @@ module science_rate_selector #(
         candidate_tlast = s_axis_tlast;
         candidate_valid = 1'b0;
 
-        if (input_fire) begin
+        if (legacy_input_fire) begin
             case (bandwidth_mode)
                 BW_200MHZ: begin
                     candidate_tdata = s_axis_tdata;
@@ -143,14 +197,20 @@ module science_rate_selector #(
             decim8_tuser <= {USER_W{1'b0}};
             decim8_sample0 <= {SAMPLE0_W{1'b0}};
             decim8_tlast <= 1'b0;
-            output_beat_count <= 32'd0;
-            dropped_beat_count <= 32'd0;
+            legacy_output_beat_count <= 32'd0;
+            legacy_dropped_beat_count <= 32'd0;
         end else begin
+            if (bw100_aa_selected) begin
+                pending_valid <= 1'b0;
+                decim2_phase <= 1'b0;
+                decim8_phase <= 3'd0;
+            end
+
             if (pending_valid && m_axis_tready) begin
                 pending_valid <= 1'b0;
             end
 
-            if (input_fire) begin
+            if (legacy_input_fire) begin
                 case (bandwidth_mode)
                     BW_100MHZ: begin
                         decim2_phase <= ~decim2_phase;
@@ -195,17 +255,17 @@ module science_rate_selector #(
                 endcase
             end
 
-            if (s_axis_tvalid && !s_axis_tready) begin
-                dropped_beat_count <= dropped_beat_count + 32'd1;
+            if (!bw100_selected && s_axis_tvalid && !legacy_s_axis_tready) begin
+                legacy_dropped_beat_count <= legacy_dropped_beat_count + 32'd1;
             end
 
-            if (candidate_valid) begin
+            if (!bw100_selected && candidate_valid) begin
                 pending_tdata <= candidate_tdata;
                 pending_tuser <= candidate_tuser;
                 pending_sample0 <= candidate_sample0;
                 pending_tlast <= candidate_tlast;
                 pending_valid <= 1'b1;
-                output_beat_count <= output_beat_count + 32'd1;
+                legacy_output_beat_count <= legacy_output_beat_count + 32'd1;
             end
         end
     end

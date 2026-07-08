@@ -356,6 +356,9 @@ class RegisterMap:
     SCIENCE_TIME_DDR_RING_DROP_COUNT: int = 0x0D048
     SCIENCE_TIME_DDR_RING_ERROR_COUNT: int = 0x0D04C
     SCIENCE_TIME_MULTIFLOW_CONTROL: int = 0x0D050
+    SCIENCE_ANTIALIAS_STATUS: int = 0x0D054
+    SCIENCE_ANTIALIAS_COEFF_VERSION: int = 0x0D058
+    STAGE27I_DIAG_CONTROL: int = 0x0D060
     DAC_TX_WITNESS_CONTROL: int = 0x0B600
     DAC_TX_WITNESS_STATUS: int = 0x0B604
     DAC_TX_WITNESS_CAPTURE_WORDS: int = 0x0B608
@@ -521,6 +524,8 @@ class T510FEngine:
         "tcxo_10mhz": 1,
         "gps_10mhz": 2,
     }
+    PRODUCTION_CLOCK_REF = "external_10mhz"
+    PRODUCTION_SYNC_MODE = "external_pps"
     DAC_MODES = {
         "single_tone": 0,
         "tone": 0,
@@ -572,7 +577,7 @@ class T510FEngine:
     TX_SPEC_ROUTE_COUNT = 64
     TX_TIME_ROUTE_COUNT = 8
     FENGINE_DEFAULT_FFT_SHIFT: int = 0x5556
-    FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT: int = 0x0AAB
+    FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT: int = 0x0556
     STAGE27F_PRODUCTION_SCOPE = {
         "data_streams": "TIME native 512b + SPEC/F-engine FENGINE_IQ16 4096-channel science streams",
         "control_preview": "Jupyter notebook 13_astronomer_rf_observation_console.ipynb",
@@ -1233,16 +1238,51 @@ class T510FEngine:
         adc_nco_hz: float,
         dac_nco_hz: float,
         require: bool,
+        rfdc_mixer_sequence: str = "sysref_reset_before_pulse",
     ) -> dict[str, Any]:
         try:
             import xrfdc  # type: ignore
         except ImportError:
             xrfdc = None  # type: ignore[assignment]
         event_sysref = self._xrfdc_const(xrfdc, ("EVNT_SRC_SYSREF", "XRFDC_EVNT_SRC_SYSREF"), 2)
+        event_immediate = self._xrfdc_const(xrfdc, ("EVNT_SRC_IMMEDIATE", "XRFDC_EVNT_SRC_IMMEDIATE"), 0)
+        event_slice = self._xrfdc_const(xrfdc, ("EVNT_SRC_SLICE", "XRFDC_EVNT_SRC_SLICE"), 1)
+        event_tile = self._xrfdc_const(xrfdc, ("EVNT_SRC_TILE", "XRFDC_EVNT_SRC_TILE"), 2)
         event_mixer = self._xrfdc_const(xrfdc, ("EVENT_MIXER", "XRFDC_EVENT_MIXER"), 1)
         mixer_type_fine = self._xrfdc_const(xrfdc, ("MIXER_TYPE_FINE", "XRFDC_MIXER_TYPE_FINE"), 2)
         mode_r2c = self._xrfdc_const(xrfdc, ("MIXER_MODE_R2C", "XRFDC_MIXER_MODE_R2C"), 1)
         mode_c2r = self._xrfdc_const(xrfdc, ("MIXER_MODE_C2R", "XRFDC_MIXER_MODE_C2R"), 2)
+        sequence = str(rfdc_mixer_sequence).strip().lower().replace("-", "_")
+        allowed_sequences = {
+            "sysref_reset_before_pulse",
+            "sysref_no_reset",
+            "event_update_then_reset",
+            "event_reset_then_update",
+            "event_update_no_reset",
+            "tile_update_then_reset",
+            "tile_reset_then_update",
+            "tile_update_no_reset",
+            "slice_update_then_reset",
+            "slice_reset_then_update",
+            "slice_update_no_reset",
+        }
+        if sequence not in allowed_sequences:
+            raise ValueError(f"unsupported rfdc_mixer_sequence {rfdc_mixer_sequence!r}")
+        uses_sysref_event = sequence.startswith("sysref_")
+        if uses_sysref_event:
+            event_source = event_sysref
+            event_source_name = "sysref"
+        elif sequence.startswith("slice_"):
+            event_source = event_slice
+            event_source_name = "slice"
+        elif sequence.startswith(("tile_", "event_")):
+            # Stage 27i diagnostic compatibility: old "event_*" names now map
+            # to TILE events because 4GSPS ADC blocks reject IMMEDIATE.
+            event_source = event_tile
+            event_source_name = "tile"
+        else:
+            event_source = event_immediate
+            event_source_name = "immediate"
         results: list[dict[str, Any]] = []
         failures: list[str] = []
         skipped: list[str] = []
@@ -1255,16 +1295,52 @@ class T510FEngine:
                 return
             try:
                 settings["Freq"] = float(freq_mhz)
-                settings["EventSource"] = event_sysref
+                if event_source is not None:
+                    settings["EventSource"] = event_source
                 settings["MixerType"] = mixer_type_fine
                 settings["MixerMode"] = mixer_mode
                 block.MixerSettings = settings
-                if hasattr(block, "ResetNCOPhase"):
-                    block.ResetNCOPhase()
-                elif hasattr(block, "reset_nco_phase"):
-                    block.reset_nco_phase()
-                else:
-                    raise RuntimeError("ResetNCOPhase API unavailable")
+                operations: list[dict[str, Any]] = []
+
+                def reset_nco_phase() -> None:
+                    if hasattr(block, "ResetNCOPhase"):
+                        value = block.ResetNCOPhase()
+                    elif hasattr(block, "reset_nco_phase"):
+                        value = block.reset_nco_phase()
+                    else:
+                        raise RuntimeError("ResetNCOPhase API unavailable")
+                    operations.append({"op": "ResetNCOPhase", "result": repr(value)})
+
+                def update_event() -> None:
+                    if hasattr(block, "UpdateEvent"):
+                        value = block.UpdateEvent(event_mixer)
+                    elif hasattr(block, "update_event"):
+                        value = block.update_event(event_mixer)
+                    else:
+                        raise RuntimeError("UpdateEvent API unavailable")
+                    operations.append({"op": "UpdateEvent", "event": int(event_mixer), "result": repr(value)})
+
+                reset_then_update_sequences = (
+                    "event_reset_then_update",
+                    "tile_reset_then_update",
+                    "slice_reset_then_update",
+                )
+                update_then_reset_sequences = (
+                    "event_update_then_reset",
+                    "tile_update_then_reset",
+                    "slice_update_then_reset",
+                )
+                update_no_reset_sequences = (
+                    "event_update_no_reset",
+                    "tile_update_no_reset",
+                    "slice_update_no_reset",
+                )
+                if sequence == "sysref_reset_before_pulse" or sequence in reset_then_update_sequences:
+                    reset_nco_phase()
+                if sequence in update_then_reset_sequences or sequence in reset_then_update_sequences or sequence in update_no_reset_sequences:
+                    update_event()
+                if sequence in update_then_reset_sequences:
+                    reset_nco_phase()
                 readback = dict(getattr(block, "MixerSettings", settings))
                 results.append(
                     {
@@ -1274,7 +1350,11 @@ class T510FEngine:
                         "requested_freq_mhz": float(freq_mhz),
                         "readback_freq_mhz": float(readback.get("Freq", freq_mhz)),
                         "event_source": readback.get("EventSource"),
+                        "requested_event_source": int(event_source) if event_source is not None else None,
+                        "requested_event_source_name": event_source_name,
                         "mixer_mode": readback.get("MixerMode"),
+                        "rfdc_mixer_sequence": sequence,
+                        "operations": operations,
                     }
                 )
             except Exception as exc:
@@ -1298,6 +1378,13 @@ class T510FEngine:
             "configured": configured,
             "event_mixer": event_mixer,
             "event_sysref": event_sysref,
+            "event_immediate": event_immediate,
+            "event_slice": event_slice,
+            "event_tile": event_tile,
+            "event_source": event_source,
+            "event_source_name": event_source_name,
+            "rfdc_mixer_sequence": sequence,
+            "uses_sysref_event": bool(uses_sysref_event),
             "adc_blocks": adc_count,
             "dac_blocks": dac_count,
             "results": results,
@@ -1566,6 +1653,7 @@ class T510FEngine:
         mts_dac_tiles: int | None = None,
         mts_adc_ref_tile: int = 0,
         mts_dac_ref_tile: int = 0,
+        rfdc_mixer_sequence: str = "sysref_reset_before_pulse",
     ) -> dict[str, Any]:
         if self.rfdc is None:
             raise RuntimeError("RFDC_SYSREF_API_UNAVAILABLE: RFDC IP handle not found")
@@ -1593,29 +1681,46 @@ class T510FEngine:
             adc_nco_hz=float(adc_nco_hz),
             dac_nco_hz=float(dac_nco_hz),
             require=require,
+            rfdc_mixer_sequence=str(rfdc_mixer_sequence),
         )
         result["mixer"] = mixer
         mts_available = bool(result["mts"].get("available", True))
-        try:
-            result["sysref_update_on"] = self.clock.set_sysref(True)
-        except Exception as exc:
-            raise RuntimeError(f"RFDC_SYSREF_LOCK_FAILED: enabling LMK SYSREF for mixer update failed: {exc}") from exc
-        if mts_available:
-            result["mts_sysref_enable_for_mixer_update"] = self._call_rfdc_mts_sysref_config(
-                enable=True,
-                label="mts_sysref_enable_for_mixer_update",
-                required=require_mts,
-            )
-        time.sleep(0.2)
-        result["event_updates"] = self._update_rfdc_mixer_events(event_mixer=int(mixer["event_mixer"]), driver_update=False)
-        time.sleep(0.1)
-        if mts_available:
-            result["mts_sysref_disable_after_mixer_update"] = self._call_rfdc_mts_sysref_config(
-                enable=False,
-                label="mts_sysref_disable_after_mixer_update",
-                required=require_mts,
-            )
-        result["sysref_after"] = self.clock.set_sysref(False)
+        if bool(mixer.get("uses_sysref_event", True)):
+            try:
+                result["sysref_update_on"] = self.clock.set_sysref(True)
+            except Exception as exc:
+                raise RuntimeError(f"RFDC_SYSREF_LOCK_FAILED: enabling LMK SYSREF for mixer update failed: {exc}") from exc
+            if mts_available:
+                result["mts_sysref_enable_for_mixer_update"] = self._call_rfdc_mts_sysref_config(
+                    enable=True,
+                    label="mts_sysref_enable_for_mixer_update",
+                    required=require_mts,
+                )
+            time.sleep(0.2)
+            result["event_updates"] = self._update_rfdc_mixer_events(event_mixer=int(mixer["event_mixer"]), driver_update=False)
+            time.sleep(0.1)
+            if mts_available:
+                result["mts_sysref_disable_after_mixer_update"] = self._call_rfdc_mts_sysref_config(
+                    enable=False,
+                    label="mts_sysref_disable_after_mixer_update",
+                    required=require_mts,
+                )
+            result["sysref_after"] = self.clock.set_sysref(False)
+        else:
+            result["sysref_update_on"] = {
+                "skipped": True,
+                "reason": "rfdc_mixer_sequence uses non-SYSREF EventSource and block.UpdateEvent(EVENT_MIXER)",
+                "rfdc_mixer_sequence": mixer.get("rfdc_mixer_sequence"),
+                "event_source": mixer.get("event_source"),
+                "event_source_name": mixer.get("event_source_name"),
+            }
+            result["event_updates"] = [
+                {
+                    "driver_update_in_block_sequence": True,
+                    "rfdc_mixer_sequence": mixer.get("rfdc_mixer_sequence"),
+                }
+            ]
+            result["sysref_after"] = self.clock.set_sysref(False)
         result["configured"] = bool(mixer.get("configured"))
         result["mts_available"] = mts_available
         self.rfdc_sync_status = result
@@ -1988,8 +2093,9 @@ class T510FEngine:
         force_clock_reconfigure: bool = False,
         dac_source_mode: str = "constant_phasor",
         input_source_mode: str = "dac_loopback",
-        clock_ref: str = "tcxo_10mhz",
-        sync_mode: str = "free_run",
+        clock_ref: str = PRODUCTION_CLOCK_REF,
+        sync_mode: str = PRODUCTION_SYNC_MODE,
+        rfdc_mixer_sequence: str = "sysref_reset_before_pulse",
     ) -> dict[str, Any]:
         observe_center_hz = float(observe_center_hz)
         dac_signal_hz = float(dac_signal_hz)
@@ -2044,6 +2150,7 @@ class T510FEngine:
             mts_dac_tiles=mts_dac_tiles,
             mts_adc_ref_tile=mts_adc_ref_tile,
             mts_dac_ref_tile=mts_dac_ref_tile,
+            rfdc_mixer_sequence=str(rfdc_mixer_sequence),
         )
         self.rfdc_config = {
             "fs_adc": 245_760_000,
@@ -2092,6 +2199,7 @@ class T510FEngine:
             "adc_active_mask": int(adc_active_mask),
             "clock_ref": str(clock_ref),
             "sync_mode": str(sync_mode),
+            "rfdc_mixer_sequence": str(rfdc_mixer_sequence),
             "clock": dict(clock) if isinstance(clock, Mapping) else clock,
             "nco": nco,
             "tone": tone,
@@ -2618,6 +2726,8 @@ class T510FEngine:
         raw_mode = int(self.ctrl.read(self.regs.SCIENCE_OUTPUT_MODE))
         raw_block = int(self.ctrl.read(self.regs.SCIENCE_BLOCK_REASON))
         raw_multiflow = int(self.ctrl.read(self.regs.SCIENCE_TIME_MULTIFLOW_CONTROL))
+        raw_antialias = int(self.ctrl.read(self.regs.SCIENCE_ANTIALIAS_STATUS))
+        raw_antialias_coeff = int(self.ctrl.read(self.regs.SCIENCE_ANTIALIAS_COEFF_VERSION))
         bandwidth = self.SCIENCE_BANDWIDTH_BY_CODE.get(raw_bw & 0x3, 20)
         mode_name = self.SCIENCE_OUTPUT_MODE_NAMES.get(raw_mode & 0x7, f"UNKNOWN_{raw_mode & 0x7}")
         status = {
@@ -2644,6 +2754,11 @@ class T510FEngine:
             "time_multiflow_enable": raw_multiflow & 0x1,
             "time_multiflow_base_endpoint": (raw_multiflow >> 8) & 0x7,
             "time_multiflow_count": (raw_multiflow >> 16) & 0xF,
+            "science_antialias_status": raw_antialias,
+            "science_antialias_taps": raw_antialias & 0xFF,
+            "science_antialias_100m_active": (raw_antialias >> 8) & 0x1,
+            "science_antialias_100m_primed": (raw_antialias >> 9) & 0x1,
+            "science_antialias_coeff_version": raw_antialias_coeff,
             "force_dry_run": raw_control & 0x1,
             "cmac_enable": (raw_control >> 1) & 0x1,
             "live_requested": (raw_control >> 2) & 0x1,
@@ -2990,7 +3105,7 @@ class T510FEngine:
         cmac_enable: bool = True,
         diagnostic_ignore_link_gate: bool = False,
         clear_counters: bool = True,
-        sync_mode: str | None = "free_run",
+        sync_mode: str | None = PRODUCTION_SYNC_MODE,
         start: bool = True,
         settle_s: float = 0.05,
     ) -> dict[str, Any]:
@@ -3266,7 +3381,11 @@ class T510FEngine:
         cmac_enable: bool = True,
         diagnostic_ignore_link_gate: bool = False,
         clear_counters: bool = True,
-        sync_mode: str | None = "free_run",
+        clock_ref: str | None = PRODUCTION_CLOCK_REF,
+        sync_mode: str | None = PRODUCTION_SYNC_MODE,
+        force_clock_reconfigure: bool = False,
+        require_clock_lock: bool = True,
+        require_pps_lock: bool = True,
         start: bool = True,
         settle_s: float = 0.05,
     ) -> dict[str, Any]:
@@ -3303,8 +3422,9 @@ class T510FEngine:
         if not 1 <= int(input_mask) <= 0x00FF:
             raise ValueError("input_mask must select at least one of the low 8 RFDC lanes")
 
+        clock_result: dict[str, Any] = {"requested": clock_ref, "applied": False, "warning": None}
         sync_result: dict[str, Any] = {"requested": sync_mode, "applied": False, "warning": None}
-        if sync_mode is not None:
+        if sync_mode is not None or clock_ref is not None:
             try:
                 status = self.read_status()
                 if int(status.get("armed", 0)) or int(status.get("streaming", 0)) or int(status.get("arm_latched", 0)):
@@ -3312,10 +3432,34 @@ class T510FEngine:
                     time.sleep(max(float(settle_s), 0.0))
                     self.reset()
                     time.sleep(max(float(settle_s), 0.0))
-                self.set_sync_mode(str(sync_mode))
-                sync_result["applied"] = True
+                if clock_ref is not None:
+                    if bool(force_clock_reconfigure):
+                        clock_status = self.configure_clock(ref=str(clock_ref))
+                    else:
+                        self._write_sync_config(clock_ref=self.CLOCK_REFS[str(clock_ref)])
+                        self.clock_reference = str(clock_ref)
+                        clock_status = self.clock.read_status(include_registers=False)
+                        self.clock_status = dict(clock_status)
+                    status_after_clock_ref = self.read_status()
+                    if bool(require_clock_lock) and not int(status_after_clock_ref.get("ref_status_locked", 0)):
+                        raise RuntimeError(
+                            f"RFDC_CLOCK_LOCK_FAILED: {clock_ref} ref_status_locked=0 status={status_after_clock_ref}"
+                        )
+                    clock_result["applied"] = True
+                    clock_result["status"] = dict(clock_status) if isinstance(clock_status, Mapping) else clock_status
+                if sync_mode is not None:
+                    self.set_sync_mode(str(sync_mode))
+                    sync_result["applied"] = True
+                    if str(sync_mode).lower() == "external_pps" and bool(require_pps_lock):
+                        pps_wait = self.wait_for_pps_increment(timeout=2.0)
+                        sync_result["pps_wait"] = pps_wait
+                        if not bool(pps_wait.get("ok", False)):
+                            raise RuntimeError(f"EXTERNAL_PPS_NOT_SEEN: {pps_wait}")
             except Exception as exc:
-                sync_result["warning"] = f"{type(exc).__name__}: {exc}"
+                message = f"{type(exc).__name__}: {exc}"
+                sync_result["warning"] = message
+                clock_result["warning"] = message
+                raise
 
         active_input_mask = int(input_mask) & 0x00FF
         adc_active_mask = self.complex_input_mask_to_adc_active_mask(active_input_mask)
@@ -3470,6 +3614,7 @@ class T510FEngine:
             "cmac_enable": bool(cmac_enable),
             "diagnostic_ignore_link_gate": bool(diagnostic_ignore_link_gate),
             "clear_counters": bool(clear_counters),
+            "clock": clock_result,
             "sync": sync_result,
             "started": bool(start),
             "estimate": estimate,
@@ -3607,6 +3752,8 @@ class T510FEngine:
             raise ValueError("Stage 27h rejects TIME_SPEC at 200 MHz; validate 100 MHz full-rate convergence instead")
         if int(pfb_taps) != 0:
             raise ValueError("Stage 27h is FFT-only and requires pfb_taps=0")
+        if int(pfb_fft_shift) < 0 or int(pfb_fft_shift) > 0x0FFF:
+            raise ValueError("Stage 27h FFT-only XFFT scale schedule is 12-bit and must be in 0x000..0xfff")
         if int(spec_route_count) != 16 or int(spec_chan_count) != 256 or int(spec_time_count) != 1 or int(spec_chan0_stride) != 256:
             raise ValueError("Stage 27h full-rate SPEC requires 16 routes of 256 channels x 1 spectrum-time")
         start_requested = bool(kwargs.pop("start", True))
@@ -3670,6 +3817,62 @@ class T510FEngine:
         result["science_status"] = self.read_science_output_status()
         result["channelizer_status"] = self.read_channelizer_status()
         return result
+
+    def read_stage27i_diag_control(self) -> dict[str, Any]:
+        """Read the Stage 27i diagnostic injection controls.
+
+        These controls must remain disabled for Stage 27h production validation.
+        They exist only in the diagnostic bitstream used to split RFDC/ADC
+        front-end spur sources from downstream digital-path issues.
+        """
+        raw = int(self.ctrl.read(self.regs.STAGE27I_DIAG_CONTROL)) & 0xFFFF_FFFF
+        return {
+            "raw": raw,
+            "adc_force_zero": raw & 0x1,
+            "adc_force_hold": (raw >> 1) & 0x1,
+            "adc_channel_mask": (raw >> 8) & 0xFF,
+            "dac_gate": (raw >> 16) & 0x1,
+            "disabled": int(raw) == 0x0000_FF00,
+        }
+
+    def configure_stage27i_diag(
+        self,
+        *,
+        adc_force_zero: bool = False,
+        adc_force_hold: bool = False,
+        adc_channel_mask: int = 0xFF,
+        dac_gate: bool = False,
+    ) -> dict[str, Any]:
+        """Configure Stage 27i diagnostic muxes.
+
+        The default call disables all diagnostic injection and preserves all
+        eight RFDC logical channels.
+        """
+        mask = int(adc_channel_mask) & 0xFF
+        value = (
+            (0x1 if adc_force_zero else 0x0)
+            | (0x2 if adc_force_hold else 0x0)
+            | (mask << 8)
+            | (0x1_0000 if dac_gate else 0x0)
+        )
+        self.ctrl.write(self.regs.STAGE27I_DIAG_CONTROL, value)
+        time.sleep(0.01)
+        status = self.read_stage27i_diag_control()
+        status["requested"] = {
+            "adc_force_zero": bool(adc_force_zero),
+            "adc_force_hold": bool(adc_force_hold),
+            "adc_channel_mask": mask,
+            "dac_gate": bool(dac_gate),
+        }
+        return status
+
+    def disable_stage27i_diag(self) -> dict[str, Any]:
+        return self.configure_stage27i_diag()
+
+    def require_stage27i_diag_disabled(self) -> None:
+        diag = self.read_stage27i_diag_control()
+        if not bool(diag.get("disabled", False)):
+            raise RuntimeError(f"STAGE27I_DIAG_ENABLED raw=0x{int(diag.get('raw', 0)):08x}")
 
     def run_stage27f_science_validation(
         self,
@@ -3765,6 +3968,8 @@ class T510FEngine:
 
         errors: list[str] = []
         blockers: list[str] = []
+        if ready_before_measurement is not None and not bool(ready_before_measurement.get("ok", False)):
+            errors.append("MEASUREMENT_NOT_READY")
         if int(after.get("core_version", 0)) != int(expected_core_version):
             errors.append(
                 f"WRONG_CORE_VERSION expected 0x{int(expected_core_version):08x} got 0x{int(after.get('core_version', 0)):08x}"
@@ -3916,17 +4121,71 @@ class T510FEngine:
         )
         return result
 
+    def _wait_stage27h_measurement_ready(
+        self,
+        *,
+        expects_time: bool,
+        expects_spec: bool,
+        timeout_s: float,
+        poll_s: float = 0.05,
+    ) -> dict[str, Any]:
+        start = self.read_status()
+        start_time_packets = int(start.get("time_packet_count", 0))
+        start_spec_packets = int(start.get("spec_packet_count", 0))
+        deadline = time.monotonic() + max(float(timeout_s), 0.0)
+        last_status = start
+        last_tx = self.read_tx_status()
+        while time.monotonic() <= deadline:
+            status = self.read_status()
+            tx = self.read_tx_status()
+            time_delta = self._counter_delta(status.get("time_packet_count", 0), start_time_packets)
+            spec_delta = self._counter_delta(status.get("spec_packet_count", 0), start_spec_packets)
+            tx_ready = (
+                bool(int(tx.get("gt_locked", 0)))
+                and bool(int(tx.get("cmac_reset_done", 0)))
+                and bool(int(tx.get("cmac_tx_ready", 0)))
+                and bool(int(tx.get("cmac_enable", 0)))
+                and not bool(int(tx.get("tx_local_fault", 0)))
+                and not bool(int(tx.get("tx_remote_fault", 0)))
+                and not bool(int(tx.get("udp_dry_run_active", 1)))
+            )
+            packet_ready = (not expects_time or time_delta > 0) and (not expects_spec or spec_delta > 0)
+            if bool(int(status.get("streaming", 0))) and tx_ready and packet_ready:
+                return {
+                    "ok": True,
+                    "elapsed_s": max(float(timeout_s) - max(deadline - time.monotonic(), 0.0), 0.0),
+                    "time_packet_delta": int(time_delta),
+                    "spec_packet_delta": int(spec_delta),
+                    "status": status,
+                    "tx_status": tx,
+                }
+            last_status = status
+            last_tx = tx
+            time.sleep(max(float(poll_s), 0.001))
+        return {
+            "ok": False,
+            "timeout_s": float(timeout_s),
+            "time_packet_delta": int(self._counter_delta(last_status.get("time_packet_count", 0), start_time_packets)),
+            "spec_packet_delta": int(self._counter_delta(last_status.get("spec_packet_count", 0), start_spec_packets)),
+            "status": last_status,
+            "tx_status": last_tx,
+        }
+
     def run_stage27h_time_spec_fft_fullrate_validation(
         self,
         *,
         configure: bool = True,
-        expected_core_version: int = 0x0001_0026,
+        expected_core_version: int = 0x0001_002B,
         bandwidth_mhz: int | float | str = 100,
         output_mode: str | int = "time_spec",
         seconds: float = 10.0,
         min_time_pps: float = 470_000.0,
         min_spec_pps: float = 470_000.0,
         min_combined_t510_udp_payload_mbps: float = 63_000.0,
+        expected_clock_ref: str | None = PRODUCTION_CLOCK_REF,
+        expected_sync_mode: str | None = PRODUCTION_SYNC_MODE,
+        measurement_ready_timeout_s: float = 10.0,
+        require_antialias_100m: bool = True,
         **config_kwargs: Any,
     ) -> dict[str, Any]:
         """Stage 27h board-side gate for full-rate FFT-only TIME_SPEC 100 MHz."""
@@ -3935,15 +4194,26 @@ class T510FEngine:
         if mode_code == 3 and bandwidth == 200:
             raise ValueError("Stage 27h rejects TIME_SPEC at 200 MHz; validate 100 MHz full-rate convergence instead")
         config = None
+        start_requested = bool(config_kwargs.pop("start", True))
         if configure:
             config = self.configure_science_27h(
                 bandwidth_mhz=bandwidth,
                 output_mode=mode_name,
+                start=False,
                 **config_kwargs,
             )
             config_kwargs = {}
         expects_time = mode_code in (1, 3)
         expects_spec = mode_code in (2, 3)
+
+        ready_before_measurement = None
+        if start_requested:
+            self.start()
+            ready_before_measurement = self._wait_stage27h_measurement_ready(
+                expects_time=expects_time,
+                expects_spec=expects_spec,
+                timeout_s=float(measurement_ready_timeout_s),
+            )
 
         before = self.read_status()
         time.sleep(max(float(seconds), 0.0))
@@ -3994,10 +4264,49 @@ class T510FEngine:
             errors.append(
                 f"WRONG_CORE_VERSION expected 0x{int(expected_core_version):08x} got 0x{int(after.get('core_version', 0)):08x}"
             )
+        if expected_clock_ref is not None:
+            expected_ref_code = self.CLOCK_REFS[str(expected_clock_ref)]
+            actual_ref_code = int(after.get("configured_clock_ref", -1))
+            if actual_ref_code != expected_ref_code:
+                errors.append(
+                    f"WRONG_CLOCK_REF expected {expected_clock_ref}({expected_ref_code}) got {self._clock_ref_name(actual_ref_code)}({actual_ref_code})"
+                )
+        if expected_sync_mode is not None:
+            expected_sync_code = self.SYNC_MODES[str(expected_sync_mode).lower()]
+            actual_sync_code = int(after.get("configured_sync_mode", -1))
+            actual_active_code = int(after.get("active_sync_mode", -1))
+            if actual_sync_code != expected_sync_code:
+                errors.append(
+                    f"WRONG_SYNC_MODE expected {expected_sync_mode}({expected_sync_code}) got {self._sync_mode_name(actual_sync_code)}({actual_sync_code})"
+                )
+            if actual_active_code != expected_sync_code:
+                errors.append(
+                    f"WRONG_ACTIVE_SYNC_MODE expected {expected_sync_mode}({expected_sync_code}) got {self._sync_mode_name(actual_active_code)}({actual_active_code})"
+                )
+            if str(expected_sync_mode).lower() == "external_pps":
+                if not int(after.get("pps_recent", 0)):
+                    errors.append("EXTERNAL_PPS_NOT_RECENT")
+                if int(after.get("pps_count", 0)) <= 0:
+                    errors.append("EXTERNAL_PPS_COUNT_ZERO")
+        if int(after.get("core_version", 0)) >= 0x0001_0029 or int(expected_core_version) >= 0x0001_0029:
+            if int(after.get("stage27i_diag_control", 0)) != 0x0000_FF00:
+                errors.append(f"STAGE27I_DIAG_ENABLED raw=0x{int(after.get('stage27i_diag_control', 0)):08x}")
         if mode_code != 3:
             errors.append(f"STAGE27H_EXPECTS_TIME_SPEC mode={mode_name}")
         if bandwidth != 100:
             errors.append(f"STAGE27H_EXPECTS_100MHZ bandwidth_mhz={bandwidth}")
+        if bandwidth == 100 and require_antialias_100m:
+            if not int(science_after.get("science_antialias_100m_active", 0)):
+                errors.append("SCIENCE_100MHZ_ANTIALIAS_NOT_ACTIVE")
+            if not int(science_after.get("science_antialias_100m_primed", 0)):
+                errors.append("SCIENCE_100MHZ_ANTIALIAS_NOT_PRIMED")
+            if int(science_after.get("science_antialias_taps", 0)) != 41:
+                errors.append(f"SCIENCE_100MHZ_ANTIALIAS_TAPS_NOT_41 taps={int(science_after.get('science_antialias_taps', 0))}")
+            if int(science_after.get("science_antialias_coeff_version", 0)) != 0xAA10_0041:
+                errors.append(
+                    "SCIENCE_100MHZ_ANTIALIAS_COEFF_VERSION_MISMATCH "
+                    f"0x{int(science_after.get('science_antialias_coeff_version', 0)):08x}"
+                )
         for key, label in (
             ("gt_locked", "GT_NOT_LOCKED"),
             ("cmac_reset_done", "CMAC_RESET_NOT_DONE"),
@@ -4118,6 +4427,7 @@ class T510FEngine:
                 "combined_t510_udp_payload_mbps_target": 63_897.6,
             },
             "config": config,
+            "ready_before_measurement": ready_before_measurement,
             "before": before,
             "after": after,
             "tx_after": tx_after,
@@ -4574,32 +4884,58 @@ class T510FEngine:
         return routes
 
     def read_tx_status(self) -> dict[str, Any]:
-        raw = int(self.ctrl.read(self.regs.TX_STATUS))
+        preflight_raw = int(self.ctrl.read(self.regs.TX_STATUS))
         link_raw = int(self.ctrl.read(self.regs.TX_LINK_STATUS_FLAGS))
         selected_route = int(self.ctrl.read(self.regs.TX_SELECTED_ROUTE))
+        tx_control = int(self.ctrl.read(self.regs.TX_CONTROL))
+        link_up = link_raw & 0x1
+        cmac_reset_done = (link_raw >> 2) & 0x1
+        gt_locked = (link_raw >> 3) & 0x1
+        cmac_tx_ready = (link_raw >> 4) & 0x1
+        tx_local_fault = (link_raw >> 5) & 0x1
+        tx_remote_fault = (link_raw >> 6) & 0x1
+        force_dry_run = tx_control & 0x1
+        cmac_enable = (tx_control >> 1) & 0x1
+        frame_builder_enabled = (tx_control >> 2) & 0x1
+        stable_dry_run = int(
+            bool(force_dry_run)
+            or not bool(cmac_enable)
+            or not bool(frame_builder_enabled)
+            or not bool(link_up)
+            or not bool(cmac_reset_done)
+            or not bool(gt_locked)
+            or bool(tx_local_fault)
+            or bool(tx_remote_fault)
+        )
         status: dict[str, Any] = {
-            "tx_control": int(self.ctrl.read(self.regs.TX_CONTROL)),
-            "tx_status": raw,
+            "tx_control": tx_control,
+            "tx_status": preflight_raw,
+            "tx_preflight_status": preflight_raw,
             "tx_link_status_flags_raw": link_raw,
-            "qsfp_link_up": raw & 0x1,
-            "udp_dry_run_active": (raw >> 1) & 0x1,
-            "cmac_reset_done": (raw >> 2) & 0x1,
-            "gt_locked": (raw >> 3) & 0x1,
-            "cmac_tx_ready": (raw >> 4) & 0x1,
-            "tx_local_fault": (raw >> 5) & 0x1,
-            "tx_remote_fault": (raw >> 6) & 0x1,
-            "route_miss_sticky": (raw >> 7) & 0x1,
-            "route_error_sticky": (raw >> 8) & 0x1,
-            "frame_builder_enabled": (raw >> 9) & 0x1,
-            "force_dry_run": (raw >> 10) & 0x1,
-            "cmac_enable": (raw >> 11) & 0x1,
-            "qsfp_module_present": (raw >> 12) & 0x1,
-            "gt_refclk_seen": (raw >> 13) & 0x1,
-            "gt_tx_reset_done": (raw >> 14) & 0x1,
-            "gt_rx_reset_done": (raw >> 15) & 0x1,
-            "tx_underflow": (raw >> 16) & 0x1,
-            "tx_overflow": (raw >> 17) & 0x1,
-            "diagnostic_ignore_link_gate": (int(self.ctrl.read(self.regs.TX_CONTROL)) >> 4) & 0x1,
+            "tx_preflight_qsfp_link_up": preflight_raw & 0x1,
+            "tx_preflight_udp_dry_run_active": (preflight_raw >> 1) & 0x1,
+            "tx_preflight_cmac_reset_done": (preflight_raw >> 2) & 0x1,
+            "tx_preflight_gt_locked": (preflight_raw >> 3) & 0x1,
+            "tx_preflight_cmac_tx_ready": (preflight_raw >> 4) & 0x1,
+            "qsfp_link_up": link_up,
+            "udp_dry_run_active": stable_dry_run,
+            "cmac_reset_done": cmac_reset_done,
+            "gt_locked": gt_locked,
+            "cmac_tx_ready": cmac_tx_ready,
+            "tx_local_fault": tx_local_fault,
+            "tx_remote_fault": tx_remote_fault,
+            "route_miss_sticky": (preflight_raw >> 7) & 0x1,
+            "route_error_sticky": (preflight_raw >> 8) & 0x1,
+            "frame_builder_enabled": frame_builder_enabled,
+            "force_dry_run": force_dry_run,
+            "cmac_enable": cmac_enable,
+            "qsfp_module_present": (link_raw >> 12) & 0x1,
+            "gt_refclk_seen": (link_raw >> 13) & 0x1,
+            "gt_tx_reset_done": (link_raw >> 14) & 0x1,
+            "gt_rx_reset_done": (link_raw >> 15) & 0x1,
+            "tx_underflow": (link_raw >> 16) & 0x1,
+            "tx_overflow": (link_raw >> 17) & 0x1,
+            "diagnostic_ignore_link_gate": (tx_control >> 4) & 0x1,
             "cmac_rx_aligned": (link_raw >> 18) & 0x1,
             "cmac_rx_status": (link_raw >> 19) & 0x1,
             "cmac_rx_local_fault_detail": (link_raw >> 20) & 0x1,
@@ -4899,6 +5235,9 @@ class T510FEngine:
             "science_capability": self.regs.SCIENCE_CAPABILITY,
             "science_time_live_interval_beats": self.regs.SCIENCE_TIME_LIVE_INTERVAL_BEATS,
             "science_time_multiflow_control": self.regs.SCIENCE_TIME_MULTIFLOW_CONTROL,
+            "science_antialias_status": self.regs.SCIENCE_ANTIALIAS_STATUS,
+            "science_antialias_coeff_version": self.regs.SCIENCE_ANTIALIAS_COEFF_VERSION,
+            "stage27i_diag_control": self.regs.STAGE27I_DIAG_CONTROL,
             "dac_tx_witness_status": self.regs.DAC_TX_WITNESS_STATUS,
             "dac_tx_witness_capture_words": self.regs.DAC_TX_WITNESS_CAPTURE_WORDS,
             "dac_tx_witness_buffer_words": self.regs.DAC_TX_WITNESS_BUFFER_WORDS_REG,
@@ -5007,25 +5346,47 @@ class T510FEngine:
         status["udp_dry_run"] = (tx_flags >> 1) & 0x1
         tx_status = status["tx_status"]
         tx_link_raw = status["tx_link_status_flags"]
-        status["tx_qsfp_link_up"] = tx_status & 0x1
-        status["tx_udp_dry_run_active"] = (tx_status >> 1) & 0x1
-        status["tx_cmac_reset_done"] = (tx_status >> 2) & 0x1
-        status["tx_gt_locked"] = (tx_status >> 3) & 0x1
-        status["tx_cmac_tx_ready"] = (tx_status >> 4) & 0x1
-        status["tx_local_fault"] = (tx_status >> 5) & 0x1
-        status["tx_remote_fault"] = (tx_status >> 6) & 0x1
+        tx_control = status["tx_control"]
+        status["tx_preflight_status"] = tx_status
+        status["tx_preflight_qsfp_link_up"] = tx_status & 0x1
+        status["tx_preflight_udp_dry_run_active"] = (tx_status >> 1) & 0x1
+        status["tx_preflight_cmac_reset_done"] = (tx_status >> 2) & 0x1
+        status["tx_preflight_gt_locked"] = (tx_status >> 3) & 0x1
+        status["tx_preflight_cmac_tx_ready"] = (tx_status >> 4) & 0x1
+        status["tx_qsfp_link_up"] = tx_link_raw & 0x1
+        status["tx_cmac_reset_done"] = (tx_link_raw >> 2) & 0x1
+        status["tx_gt_locked"] = (tx_link_raw >> 3) & 0x1
+        status["tx_cmac_tx_ready"] = (tx_link_raw >> 4) & 0x1
+        status["tx_local_fault"] = (tx_link_raw >> 5) & 0x1
+        status["tx_remote_fault"] = (tx_link_raw >> 6) & 0x1
         status["tx_route_miss_sticky"] = (tx_status >> 7) & 0x1
         status["tx_route_error_sticky"] = (tx_status >> 8) & 0x1
-        status["tx_frame_builder_enabled"] = (tx_status >> 9) & 0x1
-        status["tx_force_dry_run"] = (tx_status >> 10) & 0x1
-        status["tx_cmac_enable"] = (tx_status >> 11) & 0x1
-        status["tx_qsfp_module_present"] = (tx_status >> 12) & 0x1
-        status["tx_gt_refclk_seen"] = (tx_status >> 13) & 0x1
-        status["tx_gt_tx_reset_done"] = (tx_status >> 14) & 0x1
-        status["tx_gt_rx_reset_done"] = (tx_status >> 15) & 0x1
-        status["tx_underflow"] = (tx_status >> 16) & 0x1
-        status["tx_overflow"] = (tx_status >> 17) & 0x1
-        status["tx_diagnostic_ignore_link_gate"] = (status["tx_control"] >> 4) & 0x1
+        status["tx_frame_builder_enabled"] = (tx_control >> 2) & 0x1
+        status["tx_force_dry_run"] = tx_control & 0x1
+        status["tx_cmac_enable"] = (tx_control >> 1) & 0x1
+        status["tx_qsfp_module_present"] = (tx_link_raw >> 12) & 0x1
+        status["tx_gt_refclk_seen"] = (tx_link_raw >> 13) & 0x1
+        status["tx_gt_tx_reset_done"] = (tx_link_raw >> 14) & 0x1
+        status["tx_gt_rx_reset_done"] = (tx_link_raw >> 15) & 0x1
+        status["tx_underflow"] = (tx_link_raw >> 16) & 0x1
+        status["tx_overflow"] = (tx_link_raw >> 17) & 0x1
+        status["tx_diagnostic_ignore_link_gate"] = (tx_control >> 4) & 0x1
+        status["tx_udp_dry_run_active"] = int(
+            bool(status["tx_force_dry_run"])
+            or not bool(status["tx_cmac_enable"])
+            or not bool(status["tx_frame_builder_enabled"])
+            or not bool(status["tx_qsfp_link_up"])
+            or not bool(status["tx_cmac_reset_done"])
+            or not bool(status["tx_gt_locked"])
+            or bool(status["tx_local_fault"])
+            or bool(status["tx_remote_fault"])
+        )
+        diag_control = status["stage27i_diag_control"]
+        status["stage27i_diag_adc_force_zero"] = diag_control & 0x1
+        status["stage27i_diag_adc_force_hold"] = (diag_control >> 1) & 0x1
+        status["stage27i_diag_adc_channel_mask"] = (diag_control >> 8) & 0xFF
+        status["stage27i_diag_dac_gate"] = (diag_control >> 16) & 0x1
+        status["stage27i_diag_disabled"] = 1 if int(diag_control) == 0x0000_FF00 else 0
         source_status = status["tx_cmac_source_status"]
         status["tx_cmac_mux_selected_source"] = source_status & 0x3
         status["tx_cmac_mux_selected_heartbeat"] = 1 if (source_status & 0x3) == 0 else 0
@@ -5192,6 +5553,12 @@ class T510FEngine:
         status["science_spec_ready"] = (science_status >> 3) & 0x1
         status["science_wide_tx_ready"] = (science_status >> 4) & 0x1
         status["science_cmac_live_ready"] = (science_status >> 5) & 0x1
+        status["science_antialias_100m_active_from_status"] = (science_status >> 10) & 0x1
+        status["science_antialias_100m_primed_from_status"] = (science_status >> 11) & 0x1
+        antialias_status = int(status.get("science_antialias_status", 0))
+        status["science_antialias_taps"] = antialias_status & 0xFF
+        status["science_antialias_100m_active"] = (antialias_status >> 8) & 0x1
+        status["science_antialias_100m_primed"] = (antialias_status >> 9) & 0x1
         status["science_block_reasons"] = self._science_block_names(status["science_block_reason"])
         return status
 

@@ -169,15 +169,18 @@ module t510_fengine_xfft_4096_8lane_streaming (
     wire [191:0] lane_m_axis_tuser;
     wire [7:0]  lane_m_axis_ovflo;
     logic [7:0] lane_cfg_done = 8'd0;
+    logic       lane_cfg_seen_valid = 1'b0;
     wire [7:0] lane_cfg_tvalid;
     wire [7:0] lane_cfg_fire;
     wire [7:0] lane_cfg_done_next;
+    wire       lane_cfg_new_transaction = s_axis_config_tvalid && !lane_cfg_seen_valid;
+    wire [7:0] lane_cfg_done_base = lane_cfg_new_transaction ? 8'd0 : lane_cfg_done;
     wire all_lane_data_valid = &lane_m_axis_tvalid;
     wire all_lane_status_valid = &lane_status_tvalid;
 
-    assign lane_cfg_tvalid = {8{s_axis_config_tvalid}} & ~lane_cfg_done;
+    assign lane_cfg_tvalid = {8{s_axis_config_tvalid}} & ~lane_cfg_done_base;
     assign lane_cfg_fire = lane_cfg_tvalid & lane_cfg_tready;
-    assign lane_cfg_done_next = lane_cfg_done | lane_cfg_fire;
+    assign lane_cfg_done_next = lane_cfg_done_base | lane_cfg_fire;
     assign s_axis_config_tready = s_axis_config_tvalid && (&lane_cfg_done_next);
     assign config_done_debug = lane_cfg_done_next;
     assign config_ready_debug = lane_cfg_tready;
@@ -189,8 +192,9 @@ module t510_fengine_xfft_4096_8lane_streaming (
 
     always_ff @(posedge aclk) begin
         if (!s_axis_config_tvalid) begin
-            lane_cfg_done <= 8'd0;
+            lane_cfg_seen_valid <= 1'b0;
         end else begin
+            lane_cfg_seen_valid <= 1'b1;
             lane_cfg_done <= lane_cfg_done_next;
         end
     end
@@ -198,11 +202,11 @@ module t510_fengine_xfft_4096_8lane_streaming (
     genvar lane;
     generate
         for (lane = 0; lane < 8; lane = lane + 1) begin : gen_lane_xfft
-            wire [23:0] lane_scale_schedule =
-                s_axis_config_tdata[(8 + lane*24) +: 24];
+            wire [11:0] lane_scale_schedule =
+                s_axis_config_tdata[(8 + lane*12) +: 12];
             wire [15:0] lane_config_tdata = {
                 3'd0,
-                lane_scale_schedule[11:0],
+                lane_scale_schedule,
                 s_axis_config_tdata[lane]
             };
             wire [23:0] lane_tuser;
@@ -247,14 +251,14 @@ module t510_fengine_xfft_4096_8lane_streaming (
     };
     assign m_axis_status_tvalid = all_lane_status_valid;
     assign m_axis_status_tdata = {
-        lane_status_tdata[7*8],
-        lane_status_tdata[6*8],
-        lane_status_tdata[5*8],
-        lane_status_tdata[4*8],
-        lane_status_tdata[3*8],
-        lane_status_tdata[2*8],
-        lane_status_tdata[1*8],
-        lane_status_tdata[0]
+        lane_status_tdata[7*8 +: 8],
+        lane_status_tdata[6*8 +: 8],
+        lane_status_tdata[5*8 +: 8],
+        lane_status_tdata[4*8 +: 8],
+        lane_status_tdata[3*8 +: 8],
+        lane_status_tdata[2*8 +: 8],
+        lane_status_tdata[1*8 +: 8],
+        lane_status_tdata[0*8 +: 8]
     };
     assign event_frame_started = lane_frame_started[0];
     assign event_tlast_unexpected = |lane_tlast_unexpected;
@@ -395,7 +399,8 @@ module feng_channelizer_4096 #(
         input_word[input_subidx*CELL_W +: CELL_W];
     wire [63:0] selected_input_sample0 =
         input_sample0 + {{(64-PACK_IDX_W){1'b0}}, input_subidx};
-    wire [23:0] xfft_scale_schedule = (cfg_fft_shift == 16'd0) ? 24'd0 : {8'h55, cfg_fft_shift};
+    wire [11:0] xfft_scale_schedule_12 = cfg_fft_shift[11:0];
+    wire [23:0] xfft_scale_schedule_24 = (cfg_fft_shift == 16'd0) ? 24'd0 : {8'h55, cfg_fft_shift};
     logic [2:0] input_frame_count;
     logic [TILE_BUFFERS-1:0] tile_valid;
     logic                    capture_buf_sel;
@@ -551,14 +556,25 @@ module feng_channelizer_4096 #(
     always_comb begin
         xfft_config_tdata = 256'd0;
         xfft_config_tdata[7:0] = 8'hff;
-        xfft_config_tdata[31:8] = xfft_scale_schedule;
-        xfft_config_tdata[55:32] = xfft_scale_schedule;
-        xfft_config_tdata[79:56] = xfft_scale_schedule;
-        xfft_config_tdata[103:80] = xfft_scale_schedule;
-        xfft_config_tdata[127:104] = xfft_scale_schedule;
-        xfft_config_tdata[151:128] = xfft_scale_schedule;
-        xfft_config_tdata[175:152] = xfft_scale_schedule;
-        xfft_config_tdata[199:176] = xfft_scale_schedule;
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+        xfft_config_tdata[19:8] = xfft_scale_schedule_12;
+        xfft_config_tdata[31:20] = xfft_scale_schedule_12;
+        xfft_config_tdata[43:32] = xfft_scale_schedule_12;
+        xfft_config_tdata[55:44] = xfft_scale_schedule_12;
+        xfft_config_tdata[67:56] = xfft_scale_schedule_12;
+        xfft_config_tdata[79:68] = xfft_scale_schedule_12;
+        xfft_config_tdata[91:80] = xfft_scale_schedule_12;
+        xfft_config_tdata[103:92] = xfft_scale_schedule_12;
+`else
+        xfft_config_tdata[31:8] = xfft_scale_schedule_24;
+        xfft_config_tdata[55:32] = xfft_scale_schedule_24;
+        xfft_config_tdata[79:56] = xfft_scale_schedule_24;
+        xfft_config_tdata[103:80] = xfft_scale_schedule_24;
+        xfft_config_tdata[127:104] = xfft_scale_schedule_24;
+        xfft_config_tdata[151:128] = xfft_scale_schedule_24;
+        xfft_config_tdata[175:152] = xfft_scale_schedule_24;
+        xfft_config_tdata[199:176] = xfft_scale_schedule_24;
+`endif
     end
 
 `ifdef T510_SIM_FFT_MODEL
@@ -1142,17 +1158,35 @@ module feng_channelizer_4096_streaming_27h #(
     localparam [FRAME_FIFO_AW:0] FRAME_FIFO_DEPTH_COUNT = FRAME_FIFO_DEPTH;
     localparam [FRAME_FIFO_AW:0] FRAME_FIFO_ZERO_COUNT = {(FRAME_FIFO_AW+1){1'b0}};
 
-    logic [DATA_W-1:0] input_word;
-    logic [63:0]       input_sample0;
-    logic [PACK_IDX_W-1:0] input_subidx;
-    logic              input_valid;
-    logic [11:0]       input_bin_idx;
+    logic [DATA_W-1:0] fill_word;
+    logic [63:0]       fill_frame_sample0;
+    logic [PACK_IDX_W-1:0] fill_subidx;
+    logic              fill_word_valid;
+    logic              fill_buf;
+    logic [1:0]        frame_ready;
+    logic [63:0]       frame_sample0_buf [0:1];
+    logic [11:0]       fill_bin_idx;
 
-    wire [CELL_W-1:0] selected_input_cell =
-        input_word[input_subidx*CELL_W +: CELL_W];
-    wire [63:0] selected_input_sample0 =
-        input_sample0 + {{(64-PACK_IDX_W){1'b0}}, input_subidx};
-    wire [23:0] xfft_scale_schedule = (cfg_fft_shift == 16'd0) ? 24'd0 : {8'h55, cfg_fft_shift};
+    logic              feed_active;
+    logic              feed_buf;
+    logic [12:0]       feed_read_addr;
+    logic [63:0]       feed_sample0;
+    logic              read_valid;
+    wire [CELL_W-1:0]  read_data;
+    logic [11:0]       read_idx;
+    logic              xfft_data_valid;
+    logic [CELL_W-1:0] xfft_data;
+    logic [11:0]       xfft_data_idx;
+
+    wire [CELL_W-1:0] frame_mem0_dout;
+    wire [CELL_W-1:0] frame_mem1_dout;
+    wire              frame_mem0_we = fill_word_valid && !fill_buf;
+    wire              frame_mem1_we = fill_word_valid && fill_buf;
+    assign read_data = feed_buf ? frame_mem1_dout : frame_mem0_dout;
+
+    wire [CELL_W-1:0] fill_cell =
+        fill_word[fill_subidx*CELL_W +: CELL_W];
+    wire [11:0] xfft_scale_schedule = cfg_fft_shift[11:0];
 
     logic [255:0] xfft_config_tdata;
     logic         xfft_config_tvalid;
@@ -1171,15 +1205,17 @@ module feng_channelizer_4096_streaming_27h #(
         (cfg_time_count == 16'd1);
     wire science_valid = config_valid && xfft_configured;
 
-    wire xfft_s_axis_tvalid = enable && config_valid && xfft_configured && input_valid;
+    wire xfft_s_axis_tvalid = enable && config_valid && xfft_configured && xfft_data_valid;
     wire xfft_s_axis_tready;
-    wire xfft_s_axis_tlast = (input_bin_idx == 12'd4095);
+    wire xfft_s_axis_tlast = (xfft_data_idx == 12'd4095);
     wire xfft_input_fire = xfft_s_axis_tvalid && xfft_s_axis_tready;
-    wire input_last_cell_fire = xfft_input_fire && (input_subidx == (CELLS_PER_BEAT - 1));
+    wire input_buffer_available = !frame_ready[fill_buf];
+    wire fill_last_cell = (fill_subidx == (CELLS_PER_BEAT - 1));
+    wire fill_last_frame_cell = fill_word_valid && fill_last_cell && (fill_bin_idx == 12'd4095);
     wire input_word_fire = s_axis_tvalid && s_axis_tready;
 
     assign s_axis_tready = enable && config_valid && xfft_configured &&
-                           (!input_valid || input_last_cell_fire);
+                           !fill_word_valid && input_buffer_available;
 
     wire [255:0] xfft_m_axis_tdata;
     wire [23:0]  xfft_m_axis_tuser;
@@ -1208,12 +1244,23 @@ module feng_channelizer_4096_streaming_27h #(
     logic [31:0]       packet_chan0_reg;
 
     wire [11:0] xfft_bin = xfft_m_axis_tuser[11:0];
+    wire [PACK_IDX_W-1:0] pack_slot = xfft_bin[PACK_IDX_W-1:0];
     wire output_fire = output_valid && m_axis_tready;
     wire output_slot_ready = !output_valid || m_axis_tready;
     assign xfft_m_axis_tready = output_slot_ready;
     assign xfft_m_axis_status_tready = 1'b1;
     wire xfft_output_fire = xfft_m_axis_tvalid && xfft_m_axis_tready;
-    wire pack_last_cell = (xfft_bin[1:0] == 2'd3);
+    wire xfft_data_can_load = !xfft_data_valid || xfft_input_fire;
+    wire read_issue = feed_active && xfft_data_can_load && (feed_read_addr < 13'd4096);
+    wire feed_last_read_issue = read_issue && (feed_read_addr == 13'd4095);
+    wire feed_done = xfft_input_fire && (xfft_data_idx == 12'd4095);
+    wire start_feed = enable && config_valid && xfft_configured &&
+                      !feed_active && !read_valid && !xfft_data_valid &&
+                      (frame_ready != 2'b00);
+    wire start_feed_buf = frame_ready[0] ? 1'b0 : 1'b1;
+    wire pack_first_cell = (pack_slot == {PACK_IDX_W{1'b0}});
+    wire pack_last_cell = (pack_slot == (CELLS_PER_BEAT - 1));
+    wire pack_slot_mismatch = xfft_output_fire && (pack_slot != pack_subidx);
 
     (* ram_style = "distributed" *) logic [63:0] frame_sample0_fifo [0:FRAME_FIFO_DEPTH-1];
     logic [FRAME_FIFO_AW-1:0] frame_fifo_wr_ptr;
@@ -1221,16 +1268,20 @@ module feng_channelizer_4096_streaming_27h #(
     logic [FRAME_FIFO_AW:0]   frame_fifo_count;
     wire frame_fifo_empty = (frame_fifo_count == FRAME_FIFO_ZERO_COUNT);
     wire frame_fifo_full = (frame_fifo_count == FRAME_FIFO_DEPTH_COUNT);
-    wire frame_sample0_enqueue = xfft_input_fire && (input_bin_idx == 12'd0);
+    wire frame_sample0_enqueue = xfft_input_fire && (xfft_data_idx == 12'd0);
     wire frame_sample0_dequeue = xfft_output_fire && xfft_m_axis_tlast;
     wire frame_sample0_push = frame_sample0_enqueue && (!frame_fifo_full || frame_sample0_dequeue);
     wire frame_sample0_pop = frame_sample0_dequeue && !frame_fifo_empty;
     wire [63:0] current_output_frame_sample0 =
-        !frame_fifo_empty ? frame_sample0_fifo[frame_fifo_rd_ptr] : selected_input_sample0;
+        !frame_fifo_empty ? frame_sample0_fifo[frame_fifo_rd_ptr] : feed_sample0;
 
     wire feng_busy =
-        input_valid ||
-        (input_bin_idx != 12'd0) ||
+        fill_word_valid ||
+        (fill_bin_idx != 12'd0) ||
+        feed_active ||
+        read_valid ||
+        xfft_data_valid ||
+        (frame_ready != 2'b00) ||
         output_valid ||
         (pack_subidx != {PACK_IDX_W{1'b0}}) ||
         xfft_config_tvalid;
@@ -1241,24 +1292,29 @@ module feng_channelizer_4096_streaming_27h #(
     assign packet_chan0 = packet_chan0_reg;
     assign packet_chan_count = 16'd256;
     assign packet_time_count = 16'd1;
-    assign input_fifo_level = 32'd0;
+    assign input_fifo_level = {18'd0, frame_ready, fill_bin_idx};
 
     always_comb begin
         xfft_config_tdata = 256'd0;
         xfft_config_tdata[7:0] = 8'hff;
-        xfft_config_tdata[31:8] = xfft_scale_schedule;
-        xfft_config_tdata[55:32] = xfft_scale_schedule;
-        xfft_config_tdata[79:56] = xfft_scale_schedule;
-        xfft_config_tdata[103:80] = xfft_scale_schedule;
-        xfft_config_tdata[127:104] = xfft_scale_schedule;
-        xfft_config_tdata[151:128] = xfft_scale_schedule;
-        xfft_config_tdata[175:152] = xfft_scale_schedule;
-        xfft_config_tdata[199:176] = xfft_scale_schedule;
+        xfft_config_tdata[19:8] = xfft_scale_schedule;
+        xfft_config_tdata[31:20] = xfft_scale_schedule;
+        xfft_config_tdata[43:32] = xfft_scale_schedule;
+        xfft_config_tdata[55:44] = xfft_scale_schedule;
+        xfft_config_tdata[67:56] = xfft_scale_schedule;
+        xfft_config_tdata[79:68] = xfft_scale_schedule;
+        xfft_config_tdata[91:80] = xfft_scale_schedule;
+        xfft_config_tdata[103:92] = xfft_scale_schedule;
     end
 
     always_comb begin
-        pack_word_next = pack_word;
-        pack_word_next[pack_subidx*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+        pack_word_next = pack_first_cell ? {DATA_W{1'b0}} : pack_word;
+        case (pack_slot)
+            2'd0: pack_word_next[0*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+            2'd1: pack_word_next[1*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+            2'd2: pack_word_next[2*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+            default: pack_word_next[3*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+        endcase
     end
 
 `ifdef T510_SIM_FFT_MODEL
@@ -1267,7 +1323,7 @@ module feng_channelizer_4096_streaming_27h #(
         .s_axis_config_tdata(xfft_config_tdata),
         .s_axis_config_tvalid(xfft_config_tvalid),
         .s_axis_config_tready(xfft_config_tready),
-        .s_axis_data_tdata(selected_input_cell),
+        .s_axis_data_tdata(xfft_data),
         .s_axis_data_tvalid(xfft_s_axis_tvalid),
         .s_axis_data_tready(xfft_s_axis_tready),
         .s_axis_data_tlast(xfft_s_axis_tlast),
@@ -1295,7 +1351,7 @@ module feng_channelizer_4096_streaming_27h #(
         .s_axis_config_tdata(xfft_config_tdata),
         .s_axis_config_tvalid(xfft_config_tvalid),
         .s_axis_config_tready(xfft_config_tready),
-        .s_axis_data_tdata(selected_input_cell),
+        .s_axis_data_tdata(xfft_data),
         .s_axis_data_tvalid(xfft_s_axis_tvalid),
         .s_axis_data_tready(xfft_s_axis_tready),
         .s_axis_data_tlast(xfft_s_axis_tlast),
@@ -1319,19 +1375,120 @@ module feng_channelizer_4096_streaming_27h #(
     );
 `endif
 
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(12),
+        .ADDR_WIDTH_B(12),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(CELL_W),
+        .CASCADE_HEIGHT(0),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(NCHAN * CELL_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(CELL_W),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(CELL_W),
+        .WRITE_MODE_B("read_first")
+    ) u_frame_mem0 (
+        .dbiterrb(),
+        .doutb(frame_mem0_dout),
+        .sbiterrb(),
+        .addra(fill_bin_idx[11:0]),
+        .addrb(feed_read_addr[11:0]),
+        .clka(clk),
+        .clkb(clk),
+        .dina(fill_cell),
+        .ena(1'b1),
+        .enb(read_issue),
+        .injectdbiterra(1'b0),
+        .injectsbiterra(1'b0),
+        .regceb(1'b1),
+        .rstb(!rst_n),
+        .sleep(1'b0),
+        .wea(frame_mem0_we)
+    );
+
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(12),
+        .ADDR_WIDTH_B(12),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(CELL_W),
+        .CASCADE_HEIGHT(0),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(NCHAN * CELL_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(CELL_W),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(CELL_W),
+        .WRITE_MODE_B("read_first")
+    ) u_frame_mem1 (
+        .dbiterrb(),
+        .doutb(frame_mem1_dout),
+        .sbiterrb(),
+        .addra(fill_bin_idx[11:0]),
+        .addrb(feed_read_addr[11:0]),
+        .clka(clk),
+        .clkb(clk),
+        .dina(fill_cell),
+        .ena(1'b1),
+        .enb(read_issue),
+        .injectdbiterra(1'b0),
+        .injectsbiterra(1'b0),
+        .regceb(1'b1),
+        .rstb(!rst_n),
+        .sleep(1'b0),
+        .wea(frame_mem1_we)
+    );
+
     always_ff @(posedge clk) begin
+        if (read_issue) begin
+            read_idx <= feed_read_addr[11:0];
+        end
         if (frame_sample0_push) begin
-            frame_sample0_fifo[frame_fifo_wr_ptr] <= selected_input_sample0;
+            frame_sample0_fifo[frame_fifo_wr_ptr] <= feed_sample0;
         end
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            input_word <= {DATA_W{1'b0}};
-            input_sample0 <= 64'd0;
-            input_subidx <= {PACK_IDX_W{1'b0}};
-            input_valid <= 1'b0;
-            input_bin_idx <= 12'd0;
+            fill_word <= {DATA_W{1'b0}};
+            fill_frame_sample0 <= 64'd0;
+            fill_subidx <= {PACK_IDX_W{1'b0}};
+            fill_word_valid <= 1'b0;
+            fill_buf <= 1'b0;
+            frame_ready <= 2'b00;
+            frame_sample0_buf[0] <= 64'd0;
+            frame_sample0_buf[1] <= 64'd0;
+            fill_bin_idx <= 12'd0;
+            feed_active <= 1'b0;
+            feed_buf <= 1'b0;
+            feed_read_addr <= 13'd0;
+            feed_sample0 <= 64'd0;
+            read_valid <= 1'b0;
+            xfft_data_valid <= 1'b0;
+            xfft_data <= {CELL_W{1'b0}};
+            xfft_data_idx <= 12'd0;
             xfft_config_tvalid <= 1'b0;
             xfft_configured <= 1'b0;
             pack_word <= {DATA_W{1'b0}};
@@ -1359,12 +1516,19 @@ module feng_channelizer_4096_streaming_27h #(
             peak_power <= 32'd0;
         end else begin
             if (!config_valid) begin
-                input_valid <= 1'b0;
-                input_subidx <= {PACK_IDX_W{1'b0}};
-                input_bin_idx <= 12'd0;
+                fill_word_valid <= 1'b0;
+                fill_subidx <= {PACK_IDX_W{1'b0}};
+                fill_bin_idx <= 12'd0;
+                frame_ready <= 2'b00;
+                feed_active <= 1'b0;
+                feed_read_addr <= 13'd0;
+                read_valid <= 1'b0;
+                xfft_data_valid <= 1'b0;
+                xfft_data_idx <= 12'd0;
                 xfft_config_tvalid <= 1'b0;
                 xfft_configured <= 1'b0;
                 pack_subidx <= {PACK_IDX_W{1'b0}};
+                pack_word <= {DATA_W{1'b0}};
                 output_valid <= 1'b0;
                 frame_fifo_wr_ptr <= {FRAME_FIFO_AW{1'b0}};
                 frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
@@ -1395,10 +1559,17 @@ module feng_channelizer_4096_streaming_27h #(
                 end
 
                 if (clear || !enable) begin
-                    input_valid <= 1'b0;
-                    input_subidx <= {PACK_IDX_W{1'b0}};
-                    input_bin_idx <= 12'd0;
+                    fill_word_valid <= 1'b0;
+                    fill_subidx <= {PACK_IDX_W{1'b0}};
+                    fill_bin_idx <= 12'd0;
+                    frame_ready <= 2'b00;
+                    feed_active <= 1'b0;
+                    feed_read_addr <= 13'd0;
+                    read_valid <= 1'b0;
+                    xfft_data_valid <= 1'b0;
+                    xfft_data_idx <= 12'd0;
                     pack_subidx <= {PACK_IDX_W{1'b0}};
+                    pack_word <= {DATA_W{1'b0}};
                     output_valid <= 1'b0;
                     frame_fifo_wr_ptr <= {FRAME_FIFO_AW{1'b0}};
                     frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
@@ -1424,24 +1595,61 @@ module feng_channelizer_4096_streaming_27h #(
                         output_valid <= 1'b0;
                     end
 
+                    if (!fill_word_valid && frame_ready[fill_buf] && !frame_ready[~fill_buf]) begin
+                        fill_buf <= ~fill_buf;
+                    end
                     if (input_word_fire) begin
-                        input_word <= s_axis_tdata;
-                        input_sample0 <= s_axis_sample0;
-                        input_valid <= 1'b1;
-                        input_subidx <= {PACK_IDX_W{1'b0}};
-                    end else if (input_last_cell_fire) begin
-                        input_valid <= 1'b0;
-                        input_subidx <= {PACK_IDX_W{1'b0}};
-                    end else if (xfft_input_fire) begin
-                        input_subidx <= input_subidx + {{(PACK_IDX_W-1){1'b0}}, 1'b1};
+                        fill_word <= s_axis_tdata;
+                        fill_word_valid <= 1'b1;
+                        fill_subidx <= {PACK_IDX_W{1'b0}};
+                        if (fill_bin_idx == 12'd0) begin
+                            fill_frame_sample0 <= s_axis_sample0;
+                        end
+                    end else if (fill_word_valid) begin
+                        if (fill_last_frame_cell) begin
+                            frame_ready[fill_buf] <= 1'b1;
+                            frame_sample0_buf[fill_buf] <= fill_frame_sample0;
+                            fill_bin_idx <= 12'd0;
+                            fill_subidx <= {PACK_IDX_W{1'b0}};
+                            fill_word_valid <= 1'b0;
+                            if (!frame_ready[~fill_buf]) begin
+                                fill_buf <= ~fill_buf;
+                            end
+                        end else begin
+                            fill_bin_idx <= fill_bin_idx + 12'd1;
+                            if (fill_last_cell) begin
+                                fill_subidx <= {PACK_IDX_W{1'b0}};
+                                fill_word_valid <= 1'b0;
+                            end else begin
+                                fill_subidx <= fill_subidx + {{(PACK_IDX_W-1){1'b0}}, 1'b1};
+                            end
+                        end
                     end
 
-                    if (xfft_input_fire) begin
-                        if (input_bin_idx == 12'd4095) begin
-                            input_bin_idx <= 12'd0;
-                        end else begin
-                            input_bin_idx <= input_bin_idx + 12'd1;
+                    if (start_feed) begin
+                        feed_active <= 1'b1;
+                        feed_buf <= start_feed_buf;
+                        feed_sample0 <= frame_sample0_buf[start_feed_buf];
+                        feed_read_addr <= 13'd0;
+                    end else if (read_issue) begin
+                        feed_read_addr <= feed_read_addr + 13'd1;
+                        if (feed_last_read_issue) begin
+                            feed_active <= 1'b0;
                         end
+                    end
+
+                    if (xfft_data_can_load) begin
+                        if (read_valid) begin
+                            xfft_data <= read_data;
+                            xfft_data_idx <= read_idx;
+                            xfft_data_valid <= 1'b1;
+                        end else if (xfft_input_fire) begin
+                            xfft_data_valid <= 1'b0;
+                        end
+                        read_valid <= read_issue;
+                    end
+                    if (feed_done) begin
+                        frame_ready[feed_buf] <= 1'b0;
                     end
 
                     if (xfft_output_fire) begin
@@ -1453,7 +1661,7 @@ module feng_channelizer_4096_streaming_27h #(
                             packet_chan0_reg <= {20'd0, xfft_bin[11:8], 8'd0};
                             pack_subidx <= {PACK_IDX_W{1'b0}};
                         end else begin
-                            pack_subidx <= pack_subidx + {{(PACK_IDX_W-1){1'b0}}, 1'b1};
+                            pack_subidx <= pack_slot + {{(PACK_IDX_W-1){1'b0}}, 1'b1};
                         end
                         if (xfft_m_axis_tlast) begin
                             frame_count <= frame_count + 32'd1;
@@ -1479,12 +1687,14 @@ module feng_channelizer_4096_streaming_27h #(
                     if (xfft_event_tlast_unexpected ||
                         xfft_event_tlast_missing ||
                         xfft_event_fft_overflow ||
+                        pack_slot_mismatch ||
                         (frame_sample0_enqueue && !frame_sample0_push)) begin
                         overflow_count <= overflow_count + 32'd1;
                     end
                     if (xfft_event_tlast_unexpected ||
                         xfft_event_tlast_missing ||
-                        xfft_event_fft_overflow) begin
+                        xfft_event_fft_overflow ||
+                        pack_slot_mismatch) begin
                         xfft_event_count <= xfft_event_count + 32'd1;
                     end
                     if (xfft_event_data_in_channel_halt) begin

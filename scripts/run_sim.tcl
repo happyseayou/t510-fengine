@@ -4,6 +4,7 @@ set repo_root [file normalize [file join $origin_dir ".."]]
 set rtl_files [list \
     [file join $repo_root rtl sync_fsm.sv] \
     [file join $repo_root rtl axis_stream_duplicator.sv] \
+    [file join $repo_root rtl science_decim2_halfband_aa.sv] \
     [file join $repo_root rtl science_rate_selector.sv] \
     [file join $repo_root rtl science_stream_decimator.sv] \
     [file join $repo_root rtl requantizer.sv] \

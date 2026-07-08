@@ -35,6 +35,12 @@ module t510_fengine_top (
     input  wire [255:0] s_axis_preview_tdata3,
     input  wire [63:0]  s_axis_preview_sample0,
     input  wire         s_axis_preview_tvalid,
+    input  wire [255:0] s_axis_raw_witness_tdata0,
+    input  wire [255:0] s_axis_raw_witness_tdata1,
+    input  wire [255:0] s_axis_raw_witness_tdata2,
+    input  wire [255:0] s_axis_raw_witness_tdata3,
+    input  wire [63:0]  s_axis_raw_witness_sample0,
+    input  wire         s_axis_raw_witness_tvalid,
     input  wire [31:0]  rfdc_status_flags,
     input  wire [63:0]  rfdc_sample_count,
     input  wire [31:0]  rfdc_dropped_count,
@@ -127,6 +133,10 @@ module t510_fengine_top (
     output wire         dac_tx_witness_clear_pulse,
     output wire [8:0]   dac_tx_witness_capture_words,
     output wire [9:0]   dac_tx_witness_rd_word,
+    output wire         diag_adc_force_zero,
+    output wire         diag_adc_force_hold,
+    output wire [7:0]   diag_adc_channel_mask,
+    output wire         diag_dac_gate,
     output wire         irq
 );
 
@@ -144,11 +154,16 @@ module t510_fengine_top (
     localparam integer TX_SPEC_ROUTES = 64;
     localparam bit CTRL_PRODUCTION_27H = 1'b0;
 `endif
+`ifdef T510_STAGE27I_RAW_WITNESS
+    localparam bit RFDC_RAW_WITNESS_COMPILED = 1'b1;
+`else
+    localparam bit RFDC_RAW_WITNESS_COMPILED = !CTRL_PRODUCTION_27H;
+`endif
     localparam integer TX_TIME_ROUTES = 8;
     localparam [2:0] SCIENCE_MODE_TIME_ONLY = 3'd1;
     localparam [2:0] SCIENCE_MODE_SPEC_ONLY = 3'd2;
     localparam [2:0] SCIENCE_MODE_TIME_SPEC = 3'd3;
-    localparam [15:0] FFT_ONLY_DEFAULT_SHIFT = 16'h0aab;
+    localparam [15:0] FFT_ONLY_DEFAULT_SHIFT = 16'h0556;
     integer tx_reset_idx;
 
     wire [15:0] ctrl_board_id;
@@ -248,6 +263,10 @@ module t510_fengine_top (
     wire        ctrl_time_multiflow_enable;
     wire [2:0]  ctrl_time_multiflow_base_endpoint;
     wire [3:0]  ctrl_time_multiflow_count;
+    wire        ctrl_diag_adc_force_zero;
+    wire        ctrl_diag_adc_force_hold;
+    wire [7:0]  ctrl_diag_adc_channel_mask;
+    wire        ctrl_diag_dac_gate;
 
     (* ASYNC_REG = "TRUE" *) logic [15:0] board_id_meta;
     (* ASYNC_REG = "TRUE" *) logic [15:0] board_id;
@@ -429,6 +448,9 @@ module t510_fengine_top (
     wire         science_tready;
     wire [31:0]  science_output_beat_count;
     wire [31:0]  science_dropped_beat_count;
+    wire         science_aa100_active;
+    wire         science_aa100_primed;
+    wire [31:0]  science_aa100_coeff_version;
 
     wire [SCIENCE_DATA_W-1:0] spec_tdata;
     wire [31:0]  spec_tuser;
@@ -509,6 +531,7 @@ module t510_fengine_top (
     wire [15:0] pfb_taps_data;
     wire [15:0] pfb_fft_shift_data;
     wire [31:0] pfb_status_data;
+    wire [31:0] spec_product_status_flags;
     wire [1:0] ctrl_science_bandwidth_mode_cfg;
     wire [2:0] ctrl_science_output_mode_cfg;
     wire [31:0] ctrl_time_live_interval_beats;
@@ -1311,6 +1334,10 @@ module t510_fengine_top (
     assign dac_tone_phase_inject_vec = ctrl_dac_tone_phase_inject_vec;
     assign dac_tone_mode_vec = ctrl_dac_tone_mode_vec;
     assign dac_phase_epoch = ctrl_dac_phase_epoch;
+    assign diag_adc_force_zero = ctrl_diag_adc_force_zero;
+    assign diag_adc_force_hold = ctrl_diag_adc_force_hold;
+    assign diag_adc_channel_mask = ctrl_diag_adc_channel_mask;
+    assign diag_dac_gate = ctrl_diag_dac_gate;
     assign spec_input_sample0 = spec_sample0;
     assign time_input_sample0 = time_sample0_sideband;
     assign time_tready = time_live_full_rate_data ? wide_time_tready : legacy_time_tready;
@@ -1976,6 +2003,9 @@ module t510_fengine_top (
         .m_axis_tvalid(science_tvalid),
         .m_axis_tlast(science_tlast),
         .m_axis_tready(science_tready),
+        .aa100_active(science_aa100_active),
+        .aa100_primed(science_aa100_primed),
+        .aa100_coeff_version(science_aa100_coeff_version),
         .output_beat_count(science_output_beat_count),
         .dropped_beat_count(science_dropped_beat_count)
     );
@@ -2077,19 +2107,14 @@ module t510_fengine_top (
         .ctrl_event_dac_phase_epoch(preview_event_dac_phase_epoch_ctrl)
     );
 
-`ifdef T510_STAGE27H_PRODUCTION_ONLY
-    assign rfdc_axis_raw_witness_rd_data_ctrl = 32'd0;
-    assign rfdc_axis_raw_witness_armed_ctrl = 1'b0;
-    assign rfdc_axis_raw_witness_valid_ctrl = 1'b0;
-    assign rfdc_axis_raw_witness_capturing_ctrl = 1'b0;
-    assign rfdc_axis_raw_witness_overflow_ctrl = 1'b0;
-    assign rfdc_axis_raw_witness_tvalid_seen_ctrl = 1'b0;
-    assign rfdc_axis_raw_witness_beat_count_ctrl = 9'd0;
-    assign rfdc_axis_raw_witness_channel_select_ctrl = 3'd0;
-    assign rfdc_axis_raw_witness_sample0_ctrl = 64'd0;
-    assign rfdc_axis_raw_witness_rfdc_flags_ctrl = 32'd0;
-    assign rfdc_axis_raw_witness_valid_mask_ctrl = 16'd0;
+`ifdef T510_STAGE27I_RAW_WITNESS
+`define T510_INCLUDE_RFDC_AXIS_RAW_WITNESS_CAPTURE
+`elsif T510_STAGE27H_PRODUCTION_ONLY
 `else
+`define T510_INCLUDE_RFDC_AXIS_RAW_WITNESS_CAPTURE
+`endif
+
+`ifdef T510_INCLUDE_RFDC_AXIS_RAW_WITNESS_CAPTURE
     rfdc_axis_raw_witness_capture #(
         .CAPTURE_BEATS(256)
     ) u_rfdc_axis_raw_witness_capture (
@@ -2101,12 +2126,12 @@ module t510_fengine_top (
         .clear_pulse_ctrl(ctrl_rfdc_axis_raw_witness_clear_pulse),
         .channel_select_ctrl(ctrl_rfdc_axis_raw_witness_channel_select),
         .capture_beats_ctrl(ctrl_rfdc_axis_raw_witness_capture_beats),
-        .s_axis_adc_tdata0(s_axis_preview_tdata0),
-        .s_axis_adc_tdata1(s_axis_preview_tdata1),
-        .s_axis_adc_tdata2(s_axis_preview_tdata2),
-        .s_axis_adc_tdata3(s_axis_preview_tdata3),
-        .s_axis_adc_sample0(s_axis_preview_sample0),
-        .s_axis_adc_tvalid(s_axis_preview_tvalid),
+        .s_axis_adc_tdata0(s_axis_raw_witness_tdata0),
+        .s_axis_adc_tdata1(s_axis_raw_witness_tdata1),
+        .s_axis_adc_tdata2(s_axis_raw_witness_tdata2),
+        .s_axis_adc_tdata3(s_axis_raw_witness_tdata3),
+        .s_axis_adc_sample0(s_axis_raw_witness_sample0),
+        .s_axis_adc_tvalid(s_axis_raw_witness_tvalid),
         .rfdc_status_flags(rfdc_status_flags),
         .rfdc_current_valid_mask(rfdc_current_valid_mask),
         .ctrl_rd_word(ctrl_rfdc_axis_raw_witness_rd_word),
@@ -2122,6 +2147,21 @@ module t510_fengine_top (
         .ctrl_rfdc_flags(rfdc_axis_raw_witness_rfdc_flags_ctrl),
         .ctrl_valid_mask(rfdc_axis_raw_witness_valid_mask_ctrl)
     );
+`else
+    assign rfdc_axis_raw_witness_rd_data_ctrl = 32'd0;
+    assign rfdc_axis_raw_witness_armed_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_valid_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_capturing_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_overflow_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_tvalid_seen_ctrl = 1'b0;
+    assign rfdc_axis_raw_witness_beat_count_ctrl = 9'd0;
+    assign rfdc_axis_raw_witness_channel_select_ctrl = 3'd0;
+    assign rfdc_axis_raw_witness_sample0_ctrl = 64'd0;
+    assign rfdc_axis_raw_witness_rfdc_flags_ctrl = 32'd0;
+    assign rfdc_axis_raw_witness_valid_mask_ctrl = 16'd0;
+`endif
+`ifdef T510_INCLUDE_RFDC_AXIS_RAW_WITNESS_CAPTURE
+`undef T510_INCLUDE_RFDC_AXIS_RAW_WITNESS_CAPTURE
 `endif
 
     axis_stream_duplicator #(
@@ -2369,6 +2409,13 @@ module t510_fengine_top (
     );
 `endif
 
+    assign spec_product_status_flags = {
+        22'd0,
+        science_aa100_active && (science_bandwidth_mode == 2'd1),
+        pfb_status_data[8],
+        pfb_status_data[7:0]
+    };
+
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
     assign legacy_pfb_spec_tready = 1'b0;
     assign spec_axis_tdata = 64'd0;
@@ -2406,7 +2453,7 @@ module t510_fengine_top (
         .spec_taps(pfb_taps_data),
         .spec_fft_shift(pfb_fft_shift_data),
         .spec_sample_rate_hz(sample_rate_hz),
-        .spec_status_flags(pfb_status_data),
+        .spec_status_flags(spec_product_status_flags),
         .chan_split(chan_split),
         .s_axis_tdata(pfb_spec_tdata),
         .s_axis_sample0(pfb_spec_sample0),
@@ -2456,7 +2503,7 @@ module t510_fengine_top (
         .spec_taps(pfb_taps_data),
         .spec_fft_shift(pfb_fft_shift_data),
         .spec_sample_rate_hz(sample_rate_hz),
-        .spec_status_flags(pfb_status_data),
+        .spec_status_flags(spec_product_status_flags),
         .chan_split(chan_split),
         .src_mac(src_mac),
         .src_ip(src_ip),
@@ -2964,7 +3011,7 @@ module t510_fengine_top (
         .dst_ip(tx_qsfp_test_dst_ip_cmac),
         .src_udp_port(tx_qsfp_test_src_port_cmac),
         .dst_udp_port(tx_qsfp_test_dst_port_cmac),
-        .core_version(32'h0001_0026),
+        .core_version(32'h0001_0028),
         .board_id(ctrl_board_id_cmac),
         .status_flags(tx_link_status_flags_cmac),
         .sample_count(rfdc_sample_count_cmac),
@@ -3054,7 +3101,8 @@ module t510_fengine_top (
         .N_TX_ENDPOINTS(TX_ENDPOINTS),
         .N_SPEC_ROUTES(TX_SPEC_ROUTES),
         .N_TIME_ROUTES(TX_TIME_ROUTES),
-        .PRODUCTION_27H(CTRL_PRODUCTION_27H)
+        .PRODUCTION_27H(CTRL_PRODUCTION_27H),
+        .RAW_WITNESS_DIAGNOSTIC(RFDC_RAW_WITNESS_COMPILED)
     ) u_feng_ctrl_axi (
         .s_axi_aclk(ctrl_clk),
         .s_axi_aresetn(ctrl_rst_n),
@@ -3198,6 +3246,9 @@ module t510_fengine_top (
         .pfb_input_fifo_level(pfb_input_fifo_level_ctrl),
         .pfb_peak_chan(pfb_peak_chan_ctrl),
         .pfb_peak_power(pfb_peak_power_ctrl),
+        .science_aa100_active(science_aa100_active),
+        .science_aa100_primed(science_aa100_primed),
+        .science_aa100_coeff_version(science_aa100_coeff_version),
         .debug_busy(debug_busy_ctrl),
         .debug_done(debug_done_ctrl),
         .debug_error(debug_error_ctrl),
@@ -3284,6 +3335,10 @@ module t510_fengine_top (
         .tx_time_route_input_mask_vec(ctrl_tx_time_route_input_mask_vec),
         .tx_time_route_endpoint_vec(ctrl_tx_time_route_endpoint_vec),
         .rfdc_active_mask(ctrl_rfdc_active_mask),
+        .diag_adc_force_zero(ctrl_diag_adc_force_zero),
+        .diag_adc_force_hold(ctrl_diag_adc_force_hold),
+        .diag_adc_channel_mask(ctrl_diag_adc_channel_mask),
+        .diag_dac_gate(ctrl_diag_dac_gate),
         .debug_capture_start_pulse(ctrl_debug_capture_start_pulse),
         .debug_capture_clear_pulse(ctrl_debug_capture_clear_pulse),
         .debug_time_rd_addr(ctrl_debug_time_rd_addr),

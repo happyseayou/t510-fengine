@@ -590,6 +590,10 @@ fn per_flow_detected_consensus(flows: &[FlowStats]) -> Option<u32> {
     consensus
 }
 
+fn spectrum_preview_enabled(config: &DisplayConfig) -> bool {
+    !config.paused
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ApiState {
     config: DisplayConfig,
@@ -2885,7 +2889,7 @@ impl ReceiverRuntime {
             false
         };
 
-        let display_enabled = self.stats.spectrum_websocket_clients > 0 && !self.config.paused;
+        let display_enabled = spectrum_preview_enabled(&self.config);
         let should_decode = if display_enabled {
             self.shared
                 .lock()
@@ -3410,7 +3414,7 @@ impl FanoutWorkerRuntime {
             false
         };
 
-        let display_enabled = self.spectrum_websocket_clients > 0 && !self.config.paused;
+        let display_enabled = spectrum_preview_enabled(&self.config);
         let should_decode = display_enabled && self.spectrum_gate.should_decode(&header, self.spectrum_interval);
         if should_decode {
             match t510_time_rx::decode_spectrum_snapshot(udp_payload, &header, src_port, dst_port, gap_before) {
@@ -4561,6 +4565,9 @@ mod tests {
         let config = DisplayConfig::default();
         assert_eq!(config.bandwidth_mhz, 100);
         assert_eq!(config.bandwidth_mode(), BandwidthMode::Mhz100);
+        assert_eq!(config.center_mhz, 100.0);
+        assert_eq!(config.expected_mhz, 60.010);
+        assert_eq!(config.dac_mhz, 60.010);
 
         let mut invalid = config.clone();
         invalid.bandwidth_mhz = 1234;
@@ -4571,6 +4578,14 @@ mod tests {
         args.initial_bandwidth_mhz = 1234;
         let stats = ReceiverStats::new(&args);
         assert_eq!(stats.selected_bandwidth_mhz, 100);
+    }
+
+    #[test]
+    fn spectrum_preview_runs_without_websocket_clients() {
+        let mut config = DisplayConfig::default();
+        assert!(spectrum_preview_enabled(&config));
+        config.paused = true;
+        assert!(!spectrum_preview_enabled(&config));
     }
 
     #[test]
@@ -5519,10 +5534,10 @@ pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regul
       <section class="group">
         <h2>Production Preview</h2>
         <label class="field"><span>Bandwidth</span><select id="bandwidth"><option value="100" selected>100 MHz</option><option value="20">20 MHz</option><option value="200">200 MHz</option></select></label>
-        <label class="field"><span>Center MHz</span><input id="center" type="number" step="0.5" value="200"></label>
+        <label class="field"><span>Center MHz</span><input id="center" type="number" step="0.5" value="100"></label>
         <div class="row">
-          <label class="field"><span>Expected</span><input id="expected" type="number" step="0.5" value="200"></label>
-          <label class="field"><span>DAC</span><input id="dac" type="number" step="0.5" value="200"></label>
+          <label class="field"><span>Expected</span><input id="expected" type="number" step="0.001" value="60.010"></label>
+          <label class="field"><span>DAC</span><input id="dac" type="number" step="0.001" value="60.010"></label>
         </div>
         <div class="row">
           <label class="field"><span>Window us</span><input id="timeWindow" type="number" step="0.05" value="0.25"></label>
@@ -5589,7 +5604,7 @@ function currentPhaseRef(){
 function collectConfig(){
   const phase_deg_by_channel=[]; let channel_mask=0;
   for(let i=0;i<8;i++){phase_deg_by_channel.push(n(`ph${i}`,0)); if(document.getElementById(`ch${i}`).checked) channel_mask|=(1<<i);}
-  return {bandwidth_mhz:Number(document.getElementById('bandwidth').value),center_mhz:n('center',200),expected_mhz:n('expected',200),dac_mhz:n('dac',200),waveform_view_mode:document.getElementById('waveMode').value,phase_deg_by_channel,channel_mask,time_window_us:n('timeWindow',0.25),display_points:Number(document.getElementById('points').value),vertical_scale:Math.max(1,n('yscale',512)),paused:document.getElementById('pause').checked};
+  return {bandwidth_mhz:Number(document.getElementById('bandwidth').value),center_mhz:n('center',100),expected_mhz:n('expected',60.010),dac_mhz:n('dac',60.010),waveform_view_mode:document.getElementById('waveMode').value,phase_deg_by_channel,channel_mask,time_window_us:n('timeWindow',0.25),display_points:Number(document.getElementById('points').value),vertical_scale:Math.max(1,n('yscale',512)),paused:document.getElementById('pause').checked};
 }
 async function applyConfig(){
   applying=true;
@@ -5806,10 +5821,21 @@ function selectedPowerSeries(current){
 }
 function specFreqMhz(current,bin){
   const bins=Math.max(1,current?.bins||current?.nchan||4096);
-  const sr=(current?.sampleRateHz||0)>0?current.sampleRateHz:((config?.bandwidth_mhz||0)>0?(config.bandwidth_mhz*1e6):100e6);
+  const sr=spectrumSampleRateHz(current);
   const center=config?.center_mhz||0;
   const signed=(bin<bins/2?bin:bin-bins)*sr/bins/1e6;
   return center+signed;
+}
+function sampleRateForBandwidthMhz(mhz){
+  const v=Number(mhz);
+  if(v===20)return RAW/8;
+  if(v===100)return RAW/2;
+  if(v===200)return RAW;
+  return Number.isFinite(v)&&v>0?v*1e6:RAW/2;
+}
+function spectrumSampleRateHz(current){
+  const headerRate=Number(current?.sampleRateHz);
+  return Number.isFinite(headerRate)&&headerRate>0?headerRate:sampleRateForBandwidthMhz(config?.bandwidth_mhz||100);
 }
 function targetRfMhz(){
   const expected=Number(config?.expected_mhz);
@@ -5821,13 +5847,15 @@ function targetSpecBin(current){
   const target=targetRfMhz();
   if(!current||!Number.isFinite(target))return null;
   const bins=Math.max(1,current.bins||current.nchan||4096);
-  const sr=(current.sampleRateHz||0)>0?current.sampleRateHz:((config?.bandwidth_mhz||0)>0?config.bandwidth_mhz*1e6:100e6);
+  const sr=spectrumSampleRateHz(current);
   const center=Number(config?.center_mhz)||0;
   const binHz=sr/bins;
   if(!(binHz>0))return null;
-  let idx=Math.round(((target-center)*1e6)/binHz);
-  idx=((idx%bins)+bins)%bins;
-  return {idx,targetMhz:target,binMhz:specFreqMhz(current,idx),sampleRateHz:sr};
+  const signedBin=Math.round(((target-center)*1e6)/binHz);
+  let idx=((signedBin%bins)+bins)%bins;
+  const alignedMhz=center+(signedBin*binHz/1e6);
+  const binErrorKhz=((target-center)*1e6-signedBin*binHz)/1e3;
+  return {idx,signedBin,targetMhz:target,binMhz:specFreqMhz(current,idx),alignedMhz,sampleRateHz:sr,binWidthKhz:binHz/1e3,binErrorKhz};
 }
 function shiftedIndex(current,idx){
   const bins=Math.max(1,current?.bins||4096);
@@ -5937,11 +5965,11 @@ function updatePhaseHistory(current){
     powerDb[input]=lane.power?lane.power[target.idx]:NaN;
   }
   const now=performance.now()/1000;
-  phaseHistory.push({t:now,bin:target.idx,targetMhz:target.targetMhz,binMhz:target.binMhz,ref,relRad,relDeg,phaseRad,amp,powerDb,snrDb:snr,targetPowerDb:targetPower,noiseDb:noise,coverage,blockCount});
+  phaseHistory.push({t:now,bin:target.idx,targetMhz:target.targetMhz,binMhz:target.binMhz,binErrorKhz:target.binErrorKhz,ref,relRad,relDeg,phaseRad,amp,powerDb,snrDb:snr,targetPowerDb:targetPower,noiseDb:noise,coverage,blockCount});
   const cutoff=now-PHASE_HISTORY_SECONDS;
   while(phaseHistory.length&&phaseHistory[0].t<cutoff)phaseHistory.shift();
   while(phaseHistory.length>PHASE_HISTORY_MAX_POINTS)phaseHistory.shift();
-  phaseHistoryStatus=`target bin ${target.idx} ${fmt(target.binMhz,3)}MHz SNR ${fmt(snr,1)}dB`;
+  phaseHistoryStatus=`target bin ${target.idx} ${fmt(target.binMhz,3)}MHz err ${fmt(target.binErrorKhz,2)}kHz SNR ${fmt(snr,1)}dB`;
 }
 function peakLaneMetrics(current,peak){
   if(!current||!peak)return [];
@@ -6011,17 +6039,36 @@ function drawSeries(ctx,size,seriesList,yMin,yMax){
   }
 }
 function drawSeriesWithX(ctx,size,seriesList,xMin,xMax,yMin,yMax){
+  drawPeakPreservedSeriesWithX(ctx,size,seriesList,xMin,xMax,yMin,yMax);
+}
+function drawPeakPreservedSeriesWithX(ctx,size,seriesList,xMin,xMax,yMin,yMax){
   const ySpan=Math.max(yMax-yMin,1e-9), xSpan=Math.max(xMax-xMin,1e-9);
+  const width=Math.max(1,Math.floor(size.w));
   for(const item of seriesList){
     const series=item.series||[], xs=item.x||[];
+    const colY=new Float32Array(width);
+    const colX=new Float32Array(width);
+    const seen=new Uint8Array(width);
+    for(let px=0;px<width;px++){colY[px]=-Infinity;colX[px]=px+0.5;}
+    const n=Math.min(series.length,xs.length);
+    for(let i=0;i<n;i++){
+      const value=series[i], xValue=xs[i];
+      if(!Number.isFinite(value)||!Number.isFinite(xValue))continue;
+      const px=Math.floor((xValue-xMin)/xSpan*width);
+      if(px<0||px>=width)continue;
+      if(!seen[px]||value>colY[px]){
+        colY[px]=value;
+        colX[px]=(xValue-xMin)/xSpan*size.w;
+        seen[px]=1;
+      }
+    }
     ctx.strokeStyle=item.color;ctx.lineWidth=item.width||1.2;ctx.beginPath();
-    let started=false, n=Math.min(series.length,xs.length);
-    const stride=Math.max(1,Math.floor(n/Math.max(1,size.w*1.5)));
-    for(let i=0;i<n;i+=stride){
-      if(!Number.isFinite(series[i])||!Number.isFinite(xs[i])){started=false;continue;}
-      const x=(xs[i]-xMin)/xSpan*size.w;
-      const norm=(series[i]-yMin)/ySpan;
+    let started=false;
+    for(let px=0;px<width;px++){
+      if(!seen[px]){started=false;continue;}
+      const norm=(colY[px]-yMin)/ySpan;
       const y=size.h - Math.max(0,Math.min(1,norm))*size.h;
+      const x=Math.max(0,Math.min(size.w,colX[px]));
       if(!started){ctx.moveTo(x,y);started=true;}else{ctx.lineTo(x,y);}
     }
     ctx.stroke();
@@ -6039,13 +6086,21 @@ function drawWaterfallCanvas(ctx,size,rows){
   let min=Infinity,max=-Infinity;
   for(const row of rows){for(const v of row){if(Number.isFinite(v)){if(v<min)min=v;if(v>max)max=v;}}}
   if(!Number.isFinite(min)||!Number.isFinite(max)||max<=min){min=0;max=1;}
+  const width=Math.max(1,Math.floor(size.w));
   const rowH=size.h/rows.length;
   for(let r=0;r<rows.length;r++){
     const row=rows[r], y=size.h-(r+1)*rowH;
-    const bins=row.length, stride=Math.max(1,Math.floor(bins/size.w));
-    for(let x=0;x<size.w;x++){
-      const idx=Math.min(bins-1,Math.floor(x*stride));
-      const norm=Math.max(0,Math.min(1,(row[idx]-min)/(max-min)));
+    const bins=row.length;
+    for(let x=0;x<width;x++){
+      const start=Math.min(bins-1,Math.floor(x*bins/width));
+      const end=Math.min(bins,Math.max(start+1,Math.floor((x+1)*bins/width)));
+      let pooled=-Infinity;
+      for(let idx=start;idx<end;idx++){
+        const value=row[idx];
+        if(Number.isFinite(value)&&value>pooled)pooled=value;
+      }
+      if(!Number.isFinite(pooled))pooled=min;
+      const norm=Math.max(0,Math.min(1,(pooled-min)/(max-min)));
       const red=Math.floor(25+210*norm), green=Math.floor(45+160*Math.sqrt(norm)), blue=Math.floor(70+90*(1-norm));
       ctx.fillStyle=`rgb(${red},${green},${blue})`;
       ctx.fillRect(x,y,1,Math.ceil(rowH)+1);
@@ -6162,11 +6217,11 @@ function drawSpectrum(){
   const freq=shiftedFreqSeries(current);
   const xMin=freq.length?freq[0]:(config?.center_mhz||0)-50, xMax=freq.length?freq[freq.length-1]:(config?.center_mhz||0)+50;
   const peak=measuredPeak(current), target=targetSpecBin(current), expected=target?target.targetMhz:(config?.expected_mhz||config?.dac_mhz||NaN);
-  drawSeriesWithX(amp.ctx,amp.size,current.lanes.map(l=>({x:freq,series:shiftedSeries(current,l.amplitude),color:colors[l.input%colors.length]})),xMin,xMax,0,ampMax);
+  drawPeakPreservedSeriesWithX(amp.ctx,amp.size,current.lanes.map(l=>({x:freq,series:shiftedSeries(current,l.amplitude),color:colors[l.input%colors.length]})),xMin,xMax,0,ampMax);
   drawPhaseHistory(phase.ctx,phase.size);
   const selectedPower=selectedPowerSeries(current);
   const shiftedPower=selectedPower?shiftedSeries(current,selectedPower):null;
-  drawSeriesWithX(power.ctx,power.size,[{x:freq,series:shiftedPower||[],color:'#6ee7a8',width:1.4}],xMin,xMax,pMin,pMax);
+  drawPeakPreservedSeriesWithX(power.ctx,power.size,[{x:freq,series:shiftedPower||[],color:'#6ee7a8',width:1.4}],xMin,xMax,pMin,pMax);
   for(const p of [amp,power]){drawVerticalMarker(p.ctx,p.size,expected,xMin,xMax,'#f4c76b','target');if(peak)drawVerticalMarker(p.ctx,p.size,peak.rfMhz,xMin,xMax,'#ff7b7b','peak');}
   if(selectedPower&&selectedPower.length){
     waterfallRows.push(new Float32Array(shiftedPower));
@@ -6174,14 +6229,15 @@ function drawSpectrum(){
   }
   drawWaterfallCanvas(waterfall.ctx,waterfall.size,waterfallRows);
   const fftOnly=((current.specFlags||0)&0x100)!==0 && (current.pfbTaps||0)===0;
-  drawAxisLabels(amp.ctx,amp.size,`amp |X| ${fftOnly?'FFT-only':'layout check'}`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
+  const aa100=((current.specFlags||0)&0x200)!==0;
+  drawAxisLabels(amp.ctx,amp.size,`amp |X| ${fftOnly?'FFT-only':'layout check'} ${aa100?'AA100 active':''}`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
   const latestPhase=phaseHistory.length?phaseHistory[phaseHistory.length-1]:null;
-  drawAxisLabels(phase.ctx,phase.size,`relative phase vs CH${currentPhaseRef()} deg / ${PHASE_HISTORY_SECONDS}s`,latestPhase?`bin ${latestPhase.bin} ${fmt(latestPhase.binMhz,3)} MHz SNR ${fmt(latestPhase.snrDb,1)}dB`:phaseHistoryStatus);
+  drawAxisLabels(phase.ctx,phase.size,`relative phase vs CH${currentPhaseRef()} deg / ${PHASE_HISTORY_SECONDS}s`,latestPhase?`bin ${latestPhase.bin} ${fmt(latestPhase.binMhz,3)} MHz err ${fmt(latestPhase.binErrorKhz,2)} kHz SNR ${fmt(latestPhase.snrDb,1)}dB`:phaseHistoryStatus);
   const complete=(current.coverageBlocks||0)>=(current.blockCount||16);
-  drawAxisLabels(power.ctx,power.size,`power dB ${complete?'complete':'partial'} ${current.coverageBlocks||0}/${current.blockCount||16} blocks`,peak?`peak ${fmt(peak.rfMhz,3)} MHz CH0 phase ${fmt(peak.ch0Phase,2)} rad`:`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
-  drawAxisLabels(waterfall.ctx,waterfall.size,`waterfall ${specLane.value==='avg'?'avg':('input '+specLane.value)} power history`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
+  drawAxisLabels(power.ctx,power.size,`power dB peak-preserved ${complete?'complete':'partial'} ${current.coverageBlocks||0}/${current.blockCount||16} blocks`,peak?`peak ${fmt(peak.rfMhz,3)} MHz CH0 phase ${fmt(peak.ch0Phase,2)} rad`:`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
+  drawAxisLabels(waterfall.ctx,waterfall.size,`waterfall max-pool ${specLane.value==='avg'?'avg':('input '+specLane.value)} power history`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
   const laneMetrics=peakLaneMetrics(current,peak);
-  document.getElementById('specPlotStatus').textContent=`${complete?'complete':'partial'} 4096 bins coverage ${current.coverageBlocks||0}/${current.blockCount||16}${target?` target ${fmt(target.targetMhz,3)}MHz bin ${target.idx}`:''}${peak?` peak ${fmt(peak.rfMhz,3)}MHz bin ${peak.idx} power ${fmt(peak.powerDb,1)}dB`:''} phase ref CH${currentPhaseRef()} history ${phaseHistory.length}`;
+  document.getElementById('specPlotStatus').textContent=`${complete?'complete':'partial'} 4096 bins coverage ${current.coverageBlocks||0}/${current.blockCount||16}${aa100?' AA100 active':' AA100 off'}${target?` target ${fmt(target.targetMhz,3)}MHz bin ${target.idx} err ${fmt(target.binErrorKhz,2)}kHz width ${fmt(target.binWidthKhz,2)}kHz`:''}${peak?` peak ${fmt(peak.rfMhz,3)}MHz bin ${peak.idx} power ${fmt(peak.powerDb,1)}dB`:''} phase ref CH${currentPhaseRef()} history ${phaseHistory.length} display peak-preserved/max-pool`;
   if(latestPhase){
     document.getElementById('channelStats').innerHTML=Array.from({length:8},(_,i)=>metric(`SPEC CH${i}`,`amp ${fmt(latestPhase.amp[i],0)} ph ${fmt(latestPhase.phaseRad[i]*180/Math.PI,1)}deg rel ${fmt(latestPhase.relDeg[i],1)}deg`)).join('');
   }else if(laneMetrics.length){

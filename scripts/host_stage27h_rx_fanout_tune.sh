@@ -15,8 +15,8 @@ FANOUT_GROUP="0x279"
 NETDEV_BUDGET=1000
 NETDEV_BUDGET_USECS=8000
 NETDEV_MAX_BACKLOG=250000
-RX_USECS=1
-RX_FRAMES=16
+RX_USECS=32
+RX_FRAMES=128
 
 usage() {
   cat <<'EOF'
@@ -30,7 +30,7 @@ Defaults:
   - applies RX/TX ring 8192
   - applies CPU performance governor when cpupower is available
   - applies netdev budget/backlog tuning
-  - applies RX coalescing rx-usecs=1 rx-frames=16
+  - applies RX coalescing rx-usecs=32 rx-frames=128
   - installs raw PREROUTING drop for UDP dst ports 4300..4323 so AF_PACKET
     receives the production stream without the normal UDP stack generating
     UdpNoPorts/ICMP work for the same packets
@@ -42,8 +42,8 @@ Optional:
   --no-governor        skip CPU governor update
   --no-coalesce        skip ethtool -C update
   --no-raw-drop        skip raw PREROUTING UDP drop
-  --rx-usecs N         RX coalescing usecs, default 1
-  --rx-frames N        RX coalescing frames, default 16
+  --rx-usecs N         RX coalescing usecs, default 32
+  --rx-frames N        RX coalescing frames, default 128
   --netdev-budget N    net.core.netdev_budget, default 1000
   --netdev-usecs N     net.core.netdev_budget_usecs, default 8000
   --netdev-backlog N   net.core.netdev_max_backlog, default 250000

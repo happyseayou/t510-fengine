@@ -50,6 +50,9 @@ module rfdc_adc_axis_adapter (
     output wire         m33_axis_tready,
     input  wire         m33_axis_tvalid,
     input  wire [15:0]  active_port_mask,
+    input  wire         diag_force_zero,
+    input  wire         diag_force_hold,
+    input  wire [7:0]   diag_channel_mask,
     output wire [1023:0] m_axis_tdata,
     output wire [31:0]  m_axis_tuser,
     output wire [63:0]  m_axis_sample0,
@@ -62,6 +65,12 @@ module rfdc_adc_axis_adapter (
     output wire [255:0] m_preview_tdata3,
     output wire [63:0]  m_preview_sample0,
     output wire         m_preview_tvalid,
+    output wire [255:0] m_raw_preview_tdata0,
+    output wire [255:0] m_raw_preview_tdata1,
+    output wire [255:0] m_raw_preview_tdata2,
+    output wire [255:0] m_raw_preview_tdata3,
+    output wire [63:0]  m_raw_preview_sample0,
+    output wire         m_raw_preview_tvalid,
     output wire         all_adc_valid,
     output wire [15:0]  current_valid_mask,
     output logic [15:0] seen_valid_mask,
@@ -70,6 +79,7 @@ module rfdc_adc_axis_adapter (
 );
 
     wire [15:0] effective_active_mask = (active_port_mask == 16'd0) ? 16'hffff : active_port_mask;
+    wire [7:0] effective_diag_channel_mask = diag_channel_mask;
     wire [15:0] port_valid_mask = {
         m33_axis_tvalid, m32_axis_tvalid, m31_axis_tvalid, m30_axis_tvalid,
         m23_axis_tvalid, m22_axis_tvalid, m21_axis_tvalid, m20_axis_tvalid,
@@ -101,6 +111,33 @@ module rfdc_adc_axis_adapter (
     assign m32_axis_tready = 1'b1;
     assign m33_axis_tready = 1'b1;
 
+    wire [255:0] raw_preview_tdata0;
+    wire [255:0] raw_preview_tdata1;
+    wire [255:0] raw_preview_tdata2;
+    wire [255:0] raw_preview_tdata3;
+    wire [255:0] masked_preview_tdata0;
+    wire [255:0] masked_preview_tdata1;
+    wire [255:0] masked_preview_tdata2;
+    wire [255:0] masked_preview_tdata3;
+    wire [255:0] diag_preview_tdata0;
+    wire [255:0] diag_preview_tdata1;
+    wire [255:0] diag_preview_tdata2;
+    wire [255:0] diag_preview_tdata3;
+    wire [255:0] diag_channel_word_mask = {
+        {32{effective_diag_channel_mask[7]}},
+        {32{effective_diag_channel_mask[6]}},
+        {32{effective_diag_channel_mask[5]}},
+        {32{effective_diag_channel_mask[4]}},
+        {32{effective_diag_channel_mask[3]}},
+        {32{effective_diag_channel_mask[2]}},
+        {32{effective_diag_channel_mask[1]}},
+        {32{effective_diag_channel_mask[0]}}
+    };
+    logic [255:0] hold_preview_tdata0;
+    logic [255:0] hold_preview_tdata1;
+    logic [255:0] hold_preview_tdata2;
+    logic [255:0] hold_preview_tdata3;
+
     assign m_axis_tdata = {
         m_preview_tdata3,
         m_preview_tdata2,
@@ -128,57 +165,85 @@ module rfdc_adc_axis_adapter (
         end
     endfunction
 
-    assign m_preview_tdata0 = {
+    assign raw_preview_tdata0 = {
         adc_complex_word(m32_axis_tdata[15:0], m33_axis_tdata[15:0], effective_active_mask[14], effective_active_mask[15]),
         adc_complex_word(m30_axis_tdata[15:0], m31_axis_tdata[15:0], effective_active_mask[12], effective_active_mask[13]),
         adc_complex_word(m22_axis_tdata[15:0], m23_axis_tdata[15:0], effective_active_mask[10], effective_active_mask[11]),
-        adc_complex_word(m20_axis_tdata[15:0], m21_axis_tdata[15:0], effective_active_mask[8],  effective_active_mask[9]),
-        adc_complex_word(m12_axis_tdata[15:0], m13_axis_tdata[15:0], effective_active_mask[6],  effective_active_mask[7]),
-        adc_complex_word(m10_axis_tdata[15:0], m11_axis_tdata[15:0], effective_active_mask[4],  effective_active_mask[5]),
-        adc_complex_word(m02_axis_tdata[15:0], m03_axis_tdata[15:0], effective_active_mask[2],  effective_active_mask[3]),
-        adc_complex_word(m00_axis_tdata[15:0], m01_axis_tdata[15:0], effective_active_mask[0],  effective_active_mask[1])
+        adc_complex_word(m20_axis_tdata[15:0], m21_axis_tdata[15:0], effective_active_mask[8], effective_active_mask[9]),
+        adc_complex_word(m12_axis_tdata[15:0], m13_axis_tdata[15:0], effective_active_mask[6], effective_active_mask[7]),
+        adc_complex_word(m10_axis_tdata[15:0], m11_axis_tdata[15:0], effective_active_mask[4], effective_active_mask[5]),
+        adc_complex_word(m02_axis_tdata[15:0], m03_axis_tdata[15:0], effective_active_mask[2], effective_active_mask[3]),
+        adc_complex_word(m00_axis_tdata[15:0], m01_axis_tdata[15:0], effective_active_mask[0], effective_active_mask[1])
     };
-    assign m_preview_tdata1 = {
+    assign raw_preview_tdata1 = {
         adc_complex_word(m32_axis_tdata[31:16], m33_axis_tdata[31:16], effective_active_mask[14], effective_active_mask[15]),
         adc_complex_word(m30_axis_tdata[31:16], m31_axis_tdata[31:16], effective_active_mask[12], effective_active_mask[13]),
         adc_complex_word(m22_axis_tdata[31:16], m23_axis_tdata[31:16], effective_active_mask[10], effective_active_mask[11]),
-        adc_complex_word(m20_axis_tdata[31:16], m21_axis_tdata[31:16], effective_active_mask[8],  effective_active_mask[9]),
-        adc_complex_word(m12_axis_tdata[31:16], m13_axis_tdata[31:16], effective_active_mask[6],  effective_active_mask[7]),
-        adc_complex_word(m10_axis_tdata[31:16], m11_axis_tdata[31:16], effective_active_mask[4],  effective_active_mask[5]),
-        adc_complex_word(m02_axis_tdata[31:16], m03_axis_tdata[31:16], effective_active_mask[2],  effective_active_mask[3]),
-        adc_complex_word(m00_axis_tdata[31:16], m01_axis_tdata[31:16], effective_active_mask[0],  effective_active_mask[1])
+        adc_complex_word(m20_axis_tdata[31:16], m21_axis_tdata[31:16], effective_active_mask[8], effective_active_mask[9]),
+        adc_complex_word(m12_axis_tdata[31:16], m13_axis_tdata[31:16], effective_active_mask[6], effective_active_mask[7]),
+        adc_complex_word(m10_axis_tdata[31:16], m11_axis_tdata[31:16], effective_active_mask[4], effective_active_mask[5]),
+        adc_complex_word(m02_axis_tdata[31:16], m03_axis_tdata[31:16], effective_active_mask[2], effective_active_mask[3]),
+        adc_complex_word(m00_axis_tdata[31:16], m01_axis_tdata[31:16], effective_active_mask[0], effective_active_mask[1])
     };
-    assign m_preview_tdata2 = {
+    assign raw_preview_tdata2 = {
         adc_complex_word(m32_axis_tdata[47:32], m33_axis_tdata[47:32], effective_active_mask[14], effective_active_mask[15]),
         adc_complex_word(m30_axis_tdata[47:32], m31_axis_tdata[47:32], effective_active_mask[12], effective_active_mask[13]),
         adc_complex_word(m22_axis_tdata[47:32], m23_axis_tdata[47:32], effective_active_mask[10], effective_active_mask[11]),
-        adc_complex_word(m20_axis_tdata[47:32], m21_axis_tdata[47:32], effective_active_mask[8],  effective_active_mask[9]),
-        adc_complex_word(m12_axis_tdata[47:32], m13_axis_tdata[47:32], effective_active_mask[6],  effective_active_mask[7]),
-        adc_complex_word(m10_axis_tdata[47:32], m11_axis_tdata[47:32], effective_active_mask[4],  effective_active_mask[5]),
-        adc_complex_word(m02_axis_tdata[47:32], m03_axis_tdata[47:32], effective_active_mask[2],  effective_active_mask[3]),
-        adc_complex_word(m00_axis_tdata[47:32], m01_axis_tdata[47:32], effective_active_mask[0],  effective_active_mask[1])
+        adc_complex_word(m20_axis_tdata[47:32], m21_axis_tdata[47:32], effective_active_mask[8], effective_active_mask[9]),
+        adc_complex_word(m12_axis_tdata[47:32], m13_axis_tdata[47:32], effective_active_mask[6], effective_active_mask[7]),
+        adc_complex_word(m10_axis_tdata[47:32], m11_axis_tdata[47:32], effective_active_mask[4], effective_active_mask[5]),
+        adc_complex_word(m02_axis_tdata[47:32], m03_axis_tdata[47:32], effective_active_mask[2], effective_active_mask[3]),
+        adc_complex_word(m00_axis_tdata[47:32], m01_axis_tdata[47:32], effective_active_mask[0], effective_active_mask[1])
     };
-    assign m_preview_tdata3 = {
+    assign raw_preview_tdata3 = {
         adc_complex_word(m32_axis_tdata[63:48], m33_axis_tdata[63:48], effective_active_mask[14], effective_active_mask[15]),
         adc_complex_word(m30_axis_tdata[63:48], m31_axis_tdata[63:48], effective_active_mask[12], effective_active_mask[13]),
         adc_complex_word(m22_axis_tdata[63:48], m23_axis_tdata[63:48], effective_active_mask[10], effective_active_mask[11]),
-        adc_complex_word(m20_axis_tdata[63:48], m21_axis_tdata[63:48], effective_active_mask[8],  effective_active_mask[9]),
-        adc_complex_word(m12_axis_tdata[63:48], m13_axis_tdata[63:48], effective_active_mask[6],  effective_active_mask[7]),
-        adc_complex_word(m10_axis_tdata[63:48], m11_axis_tdata[63:48], effective_active_mask[4],  effective_active_mask[5]),
-        adc_complex_word(m02_axis_tdata[63:48], m03_axis_tdata[63:48], effective_active_mask[2],  effective_active_mask[3]),
-        adc_complex_word(m00_axis_tdata[63:48], m01_axis_tdata[63:48], effective_active_mask[0],  effective_active_mask[1])
+        adc_complex_word(m20_axis_tdata[63:48], m21_axis_tdata[63:48], effective_active_mask[8], effective_active_mask[9]),
+        adc_complex_word(m12_axis_tdata[63:48], m13_axis_tdata[63:48], effective_active_mask[6], effective_active_mask[7]),
+        adc_complex_word(m10_axis_tdata[63:48], m11_axis_tdata[63:48], effective_active_mask[4], effective_active_mask[5]),
+        adc_complex_word(m02_axis_tdata[63:48], m03_axis_tdata[63:48], effective_active_mask[2], effective_active_mask[3]),
+        adc_complex_word(m00_axis_tdata[63:48], m01_axis_tdata[63:48], effective_active_mask[0], effective_active_mask[1])
     };
+    assign masked_preview_tdata0 = raw_preview_tdata0 & diag_channel_word_mask;
+    assign masked_preview_tdata1 = raw_preview_tdata1 & diag_channel_word_mask;
+    assign masked_preview_tdata2 = raw_preview_tdata2 & diag_channel_word_mask;
+    assign masked_preview_tdata3 = raw_preview_tdata3 & diag_channel_word_mask;
+    assign diag_preview_tdata0 = diag_force_zero ? 256'd0 : masked_preview_tdata0;
+    assign diag_preview_tdata1 = diag_force_zero ? 256'd0 : masked_preview_tdata1;
+    assign diag_preview_tdata2 = diag_force_zero ? 256'd0 : masked_preview_tdata2;
+    assign diag_preview_tdata3 = diag_force_zero ? 256'd0 : masked_preview_tdata3;
+    assign m_preview_tdata0 = diag_force_hold ? hold_preview_tdata0 : diag_preview_tdata0;
+    assign m_preview_tdata1 = diag_force_hold ? hold_preview_tdata1 : diag_preview_tdata1;
+    assign m_preview_tdata2 = diag_force_hold ? hold_preview_tdata2 : diag_preview_tdata2;
+    assign m_preview_tdata3 = diag_force_hold ? hold_preview_tdata3 : diag_preview_tdata3;
     assign m_preview_sample0 = m_axis_sample0;
     assign m_preview_tvalid = sample_valid;
+    assign m_raw_preview_tdata0 = raw_preview_tdata0;
+    assign m_raw_preview_tdata1 = raw_preview_tdata1;
+    assign m_raw_preview_tdata2 = raw_preview_tdata2;
+    assign m_raw_preview_tdata3 = raw_preview_tdata3;
+    assign m_raw_preview_sample0 = m_axis_sample0;
+    assign m_raw_preview_tvalid = sample_valid;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             sample_count  <= 64'd0;
             dropped_count <= 32'd0;
             seen_valid_mask <= 16'd0;
+            hold_preview_tdata0 <= 256'd0;
+            hold_preview_tdata1 <= 256'd0;
+            hold_preview_tdata2 <= 256'd0;
+            hold_preview_tdata3 <= 256'd0;
         end else if (sample_valid) begin
             sample_count <= sample_count + 64'd1;
             seen_valid_mask <= seen_valid_mask | port_valid_mask;
+            if (!diag_force_hold) begin
+                hold_preview_tdata0 <= diag_preview_tdata0;
+                hold_preview_tdata1 <= diag_preview_tdata1;
+                hold_preview_tdata2 <= diag_preview_tdata2;
+                hold_preview_tdata3 <= diag_preview_tdata3;
+            end
             if (!m_axis_tready) begin
                 dropped_count <= dropped_count + 32'd1;
             end

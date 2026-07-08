@@ -2,13 +2,22 @@ set repo_root [file normalize [file join [file dirname [info script]] ..]]
 set report_dir [file join $repo_root reports board]
 file mkdir $report_dir
 
-set stage_name stage27h_write_bitstream
+if {[info exists ::env(T510_WRITE_STAGE_NAME)] && $::env(T510_WRITE_STAGE_NAME) ne ""} {
+    set stage_name $::env(T510_WRITE_STAGE_NAME)
+} else {
+    set stage_name stage27h_write_bitstream
+}
+if {[info exists ::env(T510_TIMING_STAGE_NAME)] && $::env(T510_TIMING_STAGE_NAME) ne ""} {
+    set timing_stage_name $::env(T510_TIMING_STAGE_NAME)
+} else {
+    set timing_stage_name stage27h_timing_closure_iter
+}
 set pre_timing_rpt [file join $report_dir ${stage_name}_pre_bit_timing_summary.rpt]
 set post_timing_rpt [file join $report_dir ${stage_name}_post_bit_timing_summary.rpt]
 set route_status_rpt [file join $report_dir ${stage_name}_route_status.rpt]
 set bit_sha_file [file join $report_dir ${stage_name}_sha256.txt]
-set timing_post_phys_dcp [file join $report_dir stage27h_timing_closure_iter_post_phys_latest.dcp]
-set timing_post_phys_ok [file join $report_dir stage27h_timing_closure_iter_post_phys_latest.ok]
+set timing_post_phys_dcp [file join $report_dir ${timing_stage_name}_post_phys_latest.dcp]
+set timing_post_phys_ok [file join $report_dir ${timing_stage_name}_post_phys_latest.ok]
 
 proc stage27h_best_slack {delay_type} {
     set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -quiet]
@@ -81,11 +90,28 @@ proc stage27h_export_checkpoint_overlay {repo_root top_name bit_src bit_sha_file
 
 open_project [file join $repo_root demo-ant.xpr]
 set ::T510_STAGE27H_PRODUCTION_ONLY 1
+set ::T510_STAGE27I_RAW_WITNESS [expr {[info exists ::env(T510_STAGE27I_RAW_WITNESS)] && $::env(T510_STAGE27I_RAW_WITNESS) ne "" && $::env(T510_STAGE27I_RAW_WITNESS) ne "0"}]
+set ::T510_STAGE27I_ANTI_ALIAS [expr {[info exists ::env(T510_STAGE27I_ANTI_ALIAS)] && $::env(T510_STAGE27I_ANTI_ALIAS) ne "" && $::env(T510_STAGE27I_ANTI_ALIAS) ne "0"}]
 source [file join $repo_root scripts setup_project.tcl]
 
 set sources_1 [get_filesets sources_1]
 set sources_1_defines [get_property verilog_define $sources_1]
+set cleaned_sources_1_defines [list]
+foreach define $sources_1_defines {
+    if {$define ni {T510_STAGE27H_PRODUCTION_ONLY T510_STAGE27I_RAW_WITNESS T510_STAGE27I_ANTI_ALIAS}} {
+        lappend cleaned_sources_1_defines $define
+    }
+}
+set sources_1_defines $cleaned_sources_1_defines
 lappend sources_1_defines T510_STAGE27H_PRODUCTION_ONLY
+if {$::T510_STAGE27I_RAW_WITNESS} {
+    lappend sources_1_defines T510_STAGE27I_RAW_WITNESS
+    puts "STAGE27H_WRITE_BITSTREAM: Stage 27i raw-lane witness diagnostic define enabled"
+}
+if {$::T510_STAGE27I_ANTI_ALIAS} {
+    lappend sources_1_defines T510_STAGE27I_ANTI_ALIAS
+    puts "STAGE27H_WRITE_BITSTREAM: Stage 27i 100MHz anti-alias define enabled"
+}
 set_property verilog_define $sources_1_defines $sources_1
 set project_top_name [get_property TOP $sources_1]
 if {$project_top_name eq ""} {

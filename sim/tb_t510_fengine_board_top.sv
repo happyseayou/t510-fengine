@@ -57,13 +57,23 @@ module tb_t510_fengine_board_top;
         `TB_CHECK(pl_led3, "sync error LED asserted before PPS")
 
         timeout = 0;
+        while (dut.test_sample_counter == 64'd0 && timeout < 5000) begin
+            @(posedge pl_clk_p);
+            timeout = timeout + 1;
+        end
+        `TB_CHECK(dut.test_sample_counter > 64'd0, "test ADC source accepted")
+`ifdef T510_STAGE27H_PRODUCTION_ONLY
+        `TB_CHECK(!dut.tx_activity_latched, "production top stays quiet before explicit science start")
+        `TB_CHECK_EQ(dut.tx_word_count, 32'd0, "production top has no default dry-run TX")
+`else
+        timeout = 0;
         while (!dut.tx_activity_latched && timeout < 5000) begin
             @(posedge pl_clk_p);
             timeout = timeout + 1;
         end
         `TB_CHECK(dut.tx_activity_latched, "TX activity latched internally")
         `TB_CHECK(dut.tx_word_count > 32'd0, "TX word count increments")
-        `TB_CHECK(dut.test_sample_counter > 64'd0, "test ADC source accepted")
+`endif
 
         pulse_pps();
         repeat (8) @(posedge pl_clk_p);

@@ -17,11 +17,14 @@ if {![file exists [file join $repo_root rtl pl_mts_sync_clk.v]]} {
 }
 
 set t510_stage27h_production_only [expr {[info exists ::T510_STAGE27H_PRODUCTION_ONLY] && $::T510_STAGE27H_PRODUCTION_ONLY}]
+set t510_stage27i_raw_witness [expr {[info exists ::T510_STAGE27I_RAW_WITNESS] && $::T510_STAGE27I_RAW_WITNESS}]
+set t510_stage27i_anti_alias [expr {[info exists ::T510_STAGE27I_ANTI_ALIAS] && $::T510_STAGE27I_ANTI_ALIAS}]
 
 set rtl_files [list \
     [file join $repo_root rtl pl_mts_sync_clk.v] \
     [file join $repo_root rtl sync_fsm.sv] \
     [file join $repo_root rtl axis_stream_duplicator.sv] \
+    [file join $repo_root rtl science_decim2_halfband_aa.sv] \
     [file join $repo_root rtl science_rate_selector.sv] \
     [file join $repo_root rtl science_stream_decimator.sv] \
     [file join $repo_root rtl requantizer.sv] \
@@ -72,9 +75,11 @@ if {$t510_stage27h_production_only} {
         [file join $repo_root rtl tx_header_capture.sv] \
         [file join $repo_root rtl tx_payload_witness_capture.sv] \
         [file join $repo_root rtl dac_tx_witness_capture.sv] \
-        [file join $repo_root rtl rfdc_axis_raw_witness_capture.sv] \
         [file join $repo_root rtl fft_debug_observer.sv] \
     ]
+    if {!$t510_stage27i_raw_witness} {
+        lappend stage27h_archived_bringup_rtl [file join $repo_root rtl rfdc_axis_raw_witness_capture.sv]
+    }
     set filtered_rtl_files [list]
     foreach f $rtl_files {
         if {[lsearch -exact $stage27h_archived_bringup_rtl $f] < 0} {

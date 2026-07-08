@@ -16,6 +16,11 @@ module tb_feng_ctrl_axi;
     localparam integer TB_TX_ENDPOINTS = 72;
     localparam integer TB_SPEC_ROUTES = 64;
 `endif
+`ifdef T510_STAGE27I_RAW_WITNESS
+    localparam bit TB_RAW_WITNESS_DIAGNOSTIC = 1'b1;
+`else
+    localparam bit TB_RAW_WITNESS_DIAGNOSTIC = 1'b0;
+`endif
 
     logic [31:0] s_axi_awaddr = 32'd0;
     logic        s_axi_awvalid = 1'b0;
@@ -224,6 +229,8 @@ module tb_feng_ctrl_axi;
     wire [31:0] dac_phase_epoch;
     wire [1:0]  science_bandwidth_mode_cfg;
     wire [2:0]  science_output_mode_cfg;
+    wire        science_aa100_active_tb = (science_bandwidth_mode_cfg == 2'd1);
+    wire        science_aa100_primed_tb = (science_bandwidth_mode_cfg == 2'd1);
     wire [31:0] time_live_interval_beats;
     wire        time_ddr_ring_enable;
     wire        time_ddr_ring_clear_pulse;
@@ -238,6 +245,10 @@ module tb_feng_ctrl_axi;
     wire        preview_audit_freeze_on_event;
     wire [15:0] preview_audit_event_threshold;
     wire [7:0]  preview_event_rd_addr;
+    wire        diag_adc_force_zero;
+    wire        diag_adc_force_hold;
+    wire [7:0]  diag_adc_channel_mask;
+    wire        diag_dac_gate;
 
     assign tx_header_capture_rd_data = 32'hca00_0000 | {27'd0, tx_header_capture_rd_word};
     assign tx_frame_capture_rd_data = 32'hfb00_0000 | {27'd0, tx_frame_capture_rd_word};
@@ -252,7 +263,8 @@ module tb_feng_ctrl_axi;
     feng_ctrl_axi #(
         .N_TX_ENDPOINTS(TB_TX_ENDPOINTS),
         .N_SPEC_ROUTES(TB_SPEC_ROUTES),
-        .PRODUCTION_27H(TB_PRODUCTION_27H)
+        .PRODUCTION_27H(TB_PRODUCTION_27H),
+        .RAW_WITNESS_DIAGNOSTIC(TB_RAW_WITNESS_DIAGNOSTIC)
     ) dut (
         .s_axi_aclk(clk),
         .s_axi_aresetn(rst_n),
@@ -396,6 +408,9 @@ module tb_feng_ctrl_axi;
         .pfb_input_fifo_level(pfb_input_fifo_level),
         .pfb_peak_chan(pfb_peak_chan),
         .pfb_peak_power(pfb_peak_power),
+        .science_aa100_active(science_aa100_active_tb),
+        .science_aa100_primed(science_aa100_primed_tb),
+        .science_aa100_coeff_version(32'hAA10_0041),
         .debug_busy(1'b0),
         .debug_done(1'b1),
         .debug_error(1'b0),
@@ -534,7 +549,11 @@ module tb_feng_ctrl_axi;
         .time_multiflow_base_endpoint(time_multiflow_base_endpoint),
         .time_multiflow_count(time_multiflow_count),
         .science_bandwidth_mode_cfg(science_bandwidth_mode_cfg),
-        .science_output_mode_cfg(science_output_mode_cfg)
+        .science_output_mode_cfg(science_output_mode_cfg),
+        .diag_adc_force_zero(diag_adc_force_zero),
+        .diag_adc_force_hold(diag_adc_force_hold),
+        .diag_adc_channel_mask(diag_adc_channel_mask),
+        .diag_dac_gate(diag_dac_gate)
     );
 
     task automatic reset_dut;
@@ -950,7 +969,15 @@ module tb_feng_ctrl_axi;
         reset_dut();
 
         axi_read(16'h0000, rd);
-        `TB_CHECK_EQ(rd, 32'h0001_0026, "CORE_VERSION")
+`ifdef T510_STAGE27I_ANTI_ALIAS
+        `TB_CHECK_EQ(rd, 32'h0001_002b, "CORE_VERSION 100MHz anti-alias candidate")
+`else
+        if (TB_RAW_WITNESS_DIAGNOSTIC) begin
+            `TB_CHECK_EQ(rd, 32'h0001_002a, "CORE_VERSION raw witness diagnostic")
+        end else begin
+            `TB_CHECK_EQ(rd, 32'h0001_0029, "CORE_VERSION")
+        end
+`endif
         axi_read(16'h0008, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default MODE")
         axi_read(16'h0114, rd);
@@ -988,7 +1015,11 @@ module tb_feng_ctrl_axi;
         axi_read(16'hd000, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0001, "default science control forces dry-run")
         axi_read(16'hd004, rd);
+`ifdef T510_STAGE27I_ANTI_ALIAS
+        `TB_CHECK_EQ(rd, 32'h0000_0d10, "default science status is 100MHz/OFF with anti-alias active and primed inputs")
+`else
         `TB_CHECK_EQ(rd, 32'h0000_0110, "default science status is 100MHz/OFF without F-engine valid")
+`endif
         axi_read(16'hd008, rd);
         `TB_CHECK_EQ(rd, 32'd1, "default science bandwidth is 100MHz")
         `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd1, "default science bandwidth output")
@@ -1004,7 +1035,11 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(rd[4], 1'b0, "RFDC science bus truncation block is cleared")
         `TB_CHECK_EQ(rd[11], 1'b0, "science rate drop block is clear by default")
         axi_read(16'hd020, rd);
+`ifdef T510_STAGE27I_ANTI_ALIAS
+        `TB_CHECK_EQ(rd, 32'h0000_0707, "science capability word with 100MHz anti-alias")
+`else
         `TB_CHECK_EQ(rd, 32'h0000_0307, "science capability word")
+`endif
         axi_read(16'hd024, rd);
         `TB_CHECK_EQ(rd, 32'd7680, "default TIME live interval beats")
         `TB_CHECK_EQ(time_live_interval_beats, 32'd7680, "default TIME live interval output")
@@ -1033,6 +1068,30 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(time_multiflow_enable, 1'b0, "default TIME multiflow enable output")
         `TB_CHECK_EQ(time_multiflow_base_endpoint, 3'd0, "default TIME multiflow base endpoint")
         `TB_CHECK_EQ(time_multiflow_count, 4'd1, "default TIME multiflow count")
+        axi_read(16'hd054, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0329, "Stage 27i 100MHz anti-alias status active primed 41 taps")
+        axi_read(16'hd058, rd);
+        `TB_CHECK_EQ(rd, 32'haa10_0041, "Stage 27i 100MHz anti-alias coefficient version")
+        axi_read(16'hd060, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_ff00, "default Stage 27i diagnostic controls disabled")
+        `TB_CHECK_EQ(diag_adc_force_zero, 1'b0, "default ADC force-zero disabled")
+        `TB_CHECK_EQ(diag_adc_force_hold, 1'b0, "default ADC force-hold disabled")
+        `TB_CHECK_EQ(diag_adc_channel_mask, 8'hff, "default ADC diagnostic channel mask")
+        `TB_CHECK_EQ(diag_dac_gate, 1'b0, "default DAC diagnostic gate disabled")
+        axi_write(16'hd060, 32'h0001_0103);
+        axi_read(16'hd060, rd);
+        `TB_CHECK_EQ(rd, 32'h0001_0103, "Stage 27i diagnostic control write/readback")
+        `TB_CHECK_EQ(diag_adc_force_zero, 1'b1, "ADC force-zero output")
+        `TB_CHECK_EQ(diag_adc_force_hold, 1'b1, "ADC force-hold output")
+        `TB_CHECK_EQ(diag_adc_channel_mask, 8'h01, "ADC diagnostic channel mask output")
+        `TB_CHECK_EQ(diag_dac_gate, 1'b1, "DAC diagnostic gate output")
+        axi_write(16'hd060, 32'h0000_ff00);
+        axi_read(16'hd060, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_ff00, "Stage 27i diagnostic controls restored disabled")
+        `TB_CHECK_EQ(diag_adc_force_zero, 1'b0, "ADC force-zero restored disabled")
+        `TB_CHECK_EQ(diag_adc_force_hold, 1'b0, "ADC force-hold restored disabled")
+        `TB_CHECK_EQ(diag_adc_channel_mask, 8'hff, "ADC diagnostic channel mask restored")
+        `TB_CHECK_EQ(diag_dac_gate, 1'b0, "DAC diagnostic gate restored disabled")
         axi_write(16'hd050, 32'h0008_0001);
         axi_read(16'hd050, rd);
         `TB_CHECK_EQ(rd, 32'h0008_0001, "TIME multiflow 8-flow readback")
@@ -1140,19 +1199,39 @@ module tb_feng_ctrl_axi;
             `TB_CHECK_EQ(dac_tx_witness_capture_words, 9'd256, "production DAC TX witness capture words no-op")
             expect_no_dac_tx_witness_pulses();
 
-            axi_read(16'he204, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness status archived")
-            axi_read(16'he20c, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness beats archived")
-            axi_read(16'he210, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness sample0 archived")
-            axi_read(16'he800, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness buffer archived")
-            axi_write(16'he208, 32'd5);
-            `TB_CHECK_EQ(rfdc_axis_raw_witness_channel_select_ctrl, 3'd0, "production RFDC AXIS raw witness channel no-op")
-            axi_write(16'he20c, 32'd32);
-            `TB_CHECK_EQ(rfdc_axis_raw_witness_capture_beats, 9'd256, "production RFDC AXIS raw witness beats no-op")
-            expect_no_rfdc_axis_raw_witness_pulses();
+            if (TB_RAW_WITNESS_DIAGNOSTIC) begin
+                axi_read(16'he204, rd);
+                `TB_CHECK_EQ(rd, 32'h0300_0412, "27i RFDC AXIS raw witness status")
+                axi_read(16'he20c, rd);
+                `TB_CHECK_EQ(rd, 32'd256, "27i RFDC AXIS raw witness capture beats")
+                axi_read(16'he210, rd);
+                `TB_CHECK_EQ(rd, 32'h0000_0200, "27i RFDC AXIS raw witness sample0 low")
+                axi_read(16'he214, rd);
+                `TB_CHECK_EQ(rd, 32'h0000_0001, "27i RFDC AXIS raw witness sample0 high")
+                axi_read(16'he21c, rd);
+                `TB_CHECK_EQ(rd, 32'd16, "27i RFDC AXIS raw witness word count")
+                axi_read(16'he800, rd);
+                `TB_CHECK_EQ(rd, 32'he800_0000, "27i RFDC AXIS raw witness buffer read")
+                axi_write(16'he208, 32'd5);
+                `TB_CHECK_EQ(rfdc_axis_raw_witness_channel_select_ctrl, 3'd5, "27i RFDC AXIS raw witness channel output")
+                axi_write(16'he20c, 32'd32);
+                `TB_CHECK_EQ(rfdc_axis_raw_witness_capture_beats, 9'd32, "27i RFDC AXIS raw witness beats output")
+                expect_rfdc_axis_raw_witness_pulses();
+            end else begin
+                axi_read(16'he204, rd);
+                `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness status archived")
+                axi_read(16'he20c, rd);
+                `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness beats archived")
+                axi_read(16'he210, rd);
+                `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness sample0 archived")
+                axi_read(16'he800, rd);
+                `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness buffer archived")
+                axi_write(16'he208, 32'd5);
+                `TB_CHECK_EQ(rfdc_axis_raw_witness_channel_select_ctrl, 3'd0, "production RFDC AXIS raw witness channel no-op")
+                axi_write(16'he20c, 32'd32);
+                `TB_CHECK_EQ(rfdc_axis_raw_witness_capture_beats, 9'd256, "production RFDC AXIS raw witness beats no-op")
+                expect_no_rfdc_axis_raw_witness_pulses();
+            end
         end else begin
             axi_read(16'h0794, rd);
             `TB_CHECK_EQ(rd, 32'h0004_1003, "TX payload witness status")
@@ -1376,7 +1455,11 @@ module tb_feng_ctrl_axi;
             `TB_CHECK_EQ(rd, 32'd8, "PFB time count readback")
         end
         axi_read(16'h0910, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_5556, "PFB FFT shift readback")
+        if (TB_PRODUCTION_27H) begin
+            `TB_CHECK_EQ(rd, 32'h0000_0556, "production FFT-only 12-bit XFFT scale schedule readback")
+        end else begin
+            `TB_CHECK_EQ(rd, 32'h0000_5556, "PFB FFT shift readback")
+        end
         if (TB_PRODUCTION_27H) begin
             axi_read(32'h0001_3064, rd);
             `TB_CHECK_EQ(rd, 32'd0, "production endpoint bulk window archived")

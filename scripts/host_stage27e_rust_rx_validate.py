@@ -180,6 +180,11 @@ def main() -> int:
     parser.add_argument("--bandwidth-mhz", type=int, choices=(20, 100, 200), required=True)
     parser.add_argument("--seconds", type=float, default=8.0)
     parser.add_argument("--poll-interval", type=float, default=0.5)
+    parser.add_argument(
+        "--collect-samples",
+        action="store_true",
+        help="Fetch and store intermediate /api/state samples. Disabled by default because full state polling can perturb 60Gbps+ receive.",
+    )
     parser.add_argument("--time-flow-count", type=int, default=8)
     parser.add_argument("--spec-flow-count", type=int, default=8)
     parser.add_argument("--expected-flow-count", type=int)
@@ -228,17 +233,19 @@ def main() -> int:
     samples: list[dict[str, Any]] = []
     deadline = time.monotonic() + max(float(args.seconds), 0.1)
     while time.monotonic() < deadline:
-        time.sleep(max(float(args.poll_interval), 0.05))
-        try:
-            state = _fetch_json(state_url, timeout=2.0)
-            samples.append(_state_stats(state))
-        except Exception as exc:  # noqa: BLE001 - command-line diagnostic payload
-            samples.append({"sample_error": f"{type(exc).__name__}: {exc}"})
+        sleep_s = min(max(float(args.poll_interval), 0.05), max(deadline - time.monotonic(), 0.05))
+        time.sleep(sleep_s)
+        if args.collect_samples:
+            try:
+                state = _fetch_json(state_url, timeout=2.0)
+                samples.append(_state_stats(state))
+            except Exception as exc:  # noqa: BLE001 - command-line diagnostic payload
+                samples.append({"sample_error": f"{type(exc).__name__}: {exc}"})
 
-    state_after = _fetch_json(state_url, timeout=2.0)
-    stats_after = _state_stats(state_after)
     kernel_after = _kernel_counters(args.interface)
     ethtool_after = _ethtool_stats(args.interface)
+    state_after = _fetch_json(state_url, timeout=2.0)
+    stats_after = _state_stats(state_after)
     kernel_delta = _delta(kernel_after, kernel_before)
     ethtool_delta = _delta(ethtool_after, ethtool_before)
 
@@ -248,6 +255,7 @@ def main() -> int:
     ring_drops_delta = _counter_delta(stats_after, stats_before, "ring_drops")
     worker_ring_drops_delta = _counter_delta(stats_after, stats_before, "worker_ring_drops")
     kernel_drops_delta = _counter_delta(stats_after, stats_before, "kernel_drops")
+    app_drops_delta = _counter_delta(stats_after, stats_before, "app_drops")
     seq_gaps_delta = _counter_delta(stats_after, stats_before, "seq_gaps")
     frame_gaps_delta = _counter_delta(stats_after, stats_before, "frame_gaps")
     sample0_gaps_delta = _counter_delta(stats_after, stats_before, "sample0_gaps")
@@ -276,8 +284,15 @@ def main() -> int:
         if _flow_delta(stats_after, stats_before, flow_id, "spec_packets") < int(args.min_flow_packets)
     ]
 
+    # Linux netdev rx_dropped on mlx5 can include driver accounting such as
+    # MPWQE filler/drop-to-stack effects even when AF_PACKET/fanout sees a
+    # complete no-gap stream. Keep it in the report, but gate production on
+    # AF_PACKET drops, sequence/frame gaps, and explicit NIC drop/error
+    # counters. Ethtool rx_*discard counters are hard failures because they
+    # mean the NIC/driver discarded received packets before the application
+    # could account for a complete no-gap flow.
+    netdev_rx_dropped_delta = int(kernel_delta.get("rx_dropped", 0))
     nic_error_delta = 0
-    nic_error_delta += int(kernel_delta.get("rx_dropped", 0))
     nic_error_delta += int(kernel_delta.get("rx_errors", 0))
     nic_error_delta += int(kernel_delta.get("rx_missed_errors", 0))
     nic_error_delta += int(kernel_delta.get("rx_crc_errors", 0))
@@ -285,6 +300,7 @@ def main() -> int:
         ethtool_delta,
         (
             r"rx.*drop",
+            r"rx.*discard",
             r"rx.*miss",
             r"rx.*error",
             r"rx.*crc",
@@ -360,10 +376,11 @@ def main() -> int:
         )
     if parse_errors_delta:
         errors.append(f"PARSE_ERRORS delta={parse_errors_delta}")
-    if ring_drops_delta or worker_ring_drops_delta or kernel_drops_delta:
+    if ring_drops_delta or worker_ring_drops_delta or kernel_drops_delta or app_drops_delta:
         errors.append(
             "RING_OR_KERNEL_DROPS "
-            f"ring={ring_drops_delta} worker_ring={worker_ring_drops_delta} kernel={kernel_drops_delta}"
+            f"ring={ring_drops_delta} worker_ring={worker_ring_drops_delta} "
+            f"kernel={kernel_drops_delta} app={app_drops_delta}"
         )
     if nic_error_delta:
         errors.append(f"NIC_DROP_OR_ERROR_COUNTERS delta_sum={nic_error_delta}")
@@ -394,7 +411,7 @@ def main() -> int:
 
     if backend != "fanout" or fanout_mode != "port" or active_worker_count < min_active_workers:
         classification = f"BLOCK_STAGE{stage_upper}_FANOUT_NOT_DISTRIBUTING"
-    elif nic_error_delta or ring_drops_delta or worker_ring_drops_delta or kernel_drops_delta:
+    elif nic_error_delta or ring_drops_delta or worker_ring_drops_delta or kernel_drops_delta or app_drops_delta:
         classification = f"BLOCK_STAGE{stage_upper}_NIC_DROP_ERROR"
     elif (
         seq_gaps_delta
@@ -458,7 +475,9 @@ def main() -> int:
             "ring_drops": ring_drops_delta,
             "worker_ring_drops": worker_ring_drops_delta,
             "kernel_drops": kernel_drops_delta,
+            "app_drops": app_drops_delta,
             "nic_error_delta_sum": nic_error_delta,
+            "netdev_rx_dropped_advisory": netdev_rx_dropped_delta,
         },
         "preview_delta": {
             "waveform_updates": waveform_updates_delta,

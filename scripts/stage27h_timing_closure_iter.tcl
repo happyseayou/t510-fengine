@@ -2,7 +2,11 @@ set repo_root [file normalize [file join [file dirname [info script]] ..]]
 set report_dir [file join $repo_root reports board]
 file mkdir $report_dir
 
-set stage_name stage27h_timing_closure_iter
+if {[info exists ::env(T510_TIMING_STAGE_NAME)] && $::env(T510_TIMING_STAGE_NAME) ne ""} {
+    set stage_name $::env(T510_TIMING_STAGE_NAME)
+} else {
+    set stage_name stage27h_timing_closure_iter
+}
 set synth_timing_rpt [file join $report_dir ${stage_name}_synth_timing_summary.rpt]
 set synth_util_rpt [file join $report_dir ${stage_name}_synth_utilization.rpt]
 set impl_timing_rpt [file join $report_dir ${stage_name}_impl_timing_summary.rpt]
@@ -52,11 +56,28 @@ open_project [file join $repo_root demo-ant.xpr]
 set ::T510_STAGE27H_STREAMING_XFFT 1
 source [file join $repo_root scripts stage27f_create_fengine_xfft_ip.tcl]
 set ::T510_STAGE27H_PRODUCTION_ONLY 1
+set ::T510_STAGE27I_RAW_WITNESS [expr {[info exists ::env(T510_STAGE27I_RAW_WITNESS)] && $::env(T510_STAGE27I_RAW_WITNESS) ne "" && $::env(T510_STAGE27I_RAW_WITNESS) ne "0"}]
+set ::T510_STAGE27I_ANTI_ALIAS [expr {[info exists ::env(T510_STAGE27I_ANTI_ALIAS)] && $::env(T510_STAGE27I_ANTI_ALIAS) ne "" && $::env(T510_STAGE27I_ANTI_ALIAS) ne "0"}]
 source [file join $repo_root scripts setup_project.tcl]
 
 set sources_1 [get_filesets sources_1]
 set sources_1_defines [get_property verilog_define $sources_1]
+set cleaned_sources_1_defines [list]
+foreach define $sources_1_defines {
+    if {$define ni {T510_STAGE27H_PRODUCTION_ONLY T510_STAGE27I_RAW_WITNESS T510_STAGE27I_ANTI_ALIAS}} {
+        lappend cleaned_sources_1_defines $define
+    }
+}
+set sources_1_defines $cleaned_sources_1_defines
 lappend sources_1_defines T510_STAGE27H_PRODUCTION_ONLY
+if {$::T510_STAGE27I_RAW_WITNESS} {
+    lappend sources_1_defines T510_STAGE27I_RAW_WITNESS
+    puts "STAGE27H_TIMING_CLOSURE: Stage 27i raw-lane witness diagnostic define enabled"
+}
+if {$::T510_STAGE27I_ANTI_ALIAS} {
+    lappend sources_1_defines T510_STAGE27I_ANTI_ALIAS
+    puts "STAGE27H_TIMING_CLOSURE: Stage 27i 100MHz anti-alias define enabled"
+}
 set_property verilog_define $sources_1_defines $sources_1
 
 if {![file exists [file join $repo_root demo-ant.runs t510_cmac_usplus_0_synth_1 t510_cmac_usplus_0.dcp]]} {

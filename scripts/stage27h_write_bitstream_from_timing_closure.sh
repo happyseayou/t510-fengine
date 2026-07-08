@@ -7,10 +7,11 @@ LOCAL_LOCALE="${LOCAL_LOCALE:-${HOME}/.local/share/locale}"
 REPORT_DIR="${REPO_ROOT}/reports/board"
 mkdir -p "${REPORT_DIR}"
 
-PIDFILE="${REPORT_DIR}/stage27h_write_bitstream_vivado.pid"
-LOG="${REPORT_DIR}/stage27h_write_bitstream_vivado.log"
-JOU="${REPORT_DIR}/stage27h_write_bitstream_vivado.jou"
-OUT="${REPORT_DIR}/stage27h_write_bitstream_nohup.out"
+STAGE_NAME="${T510_WRITE_STAGE_NAME:-stage27h_write_bitstream}"
+PIDFILE="${REPORT_DIR}/${STAGE_NAME}_vivado.pid"
+LOG="${REPORT_DIR}/${STAGE_NAME}_vivado.log"
+JOU="${REPORT_DIR}/${STAGE_NAME}_vivado.jou"
+OUT="${REPORT_DIR}/${STAGE_NAME}_nohup.out"
 
 if [[ -f "${PIDFILE}" ]]; then
   old_pid="$(cat "${PIDFILE}" 2>/dev/null || true)"
@@ -50,7 +51,8 @@ pid="$(cat "${PIDFILE}")"
 ps -o pid,ppid,pgid,sid,etimes,stat,cmd -p "${pid}"
 
 cat <<EOF
-Stage 27h write-bitstream run started.
+Stage 27h/27i write-bitstream run started.
+  stage: ${STAGE_NAME}
   pid: ${pid}
   log: ${LOG}
   journal: ${JOU}
