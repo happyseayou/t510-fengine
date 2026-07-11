@@ -1161,11 +1161,11 @@ module feng_channelizer_4096_streaming_27h #(
     logic [DATA_W-1:0] fill_word;
     logic [63:0]       fill_frame_sample0;
     logic [PACK_IDX_W-1:0] fill_subidx;
-    logic              fill_word_valid;
+    (* max_fanout = 64 *) logic fill_word_valid;
     logic              fill_buf;
     logic [1:0]        frame_ready;
     logic [63:0]       frame_sample0_buf [0:1];
-    logic [11:0]       fill_bin_idx;
+    (* max_fanout = 64 *) logic [11:0] fill_bin_idx;
 
     logic              feed_active;
     logic              feed_buf;
@@ -1205,9 +1205,11 @@ module feng_channelizer_4096_streaming_27h #(
         (cfg_time_count == 16'd1);
     wire science_valid = config_valid && xfft_configured;
 
-    wire xfft_s_axis_tvalid = enable && config_valid && xfft_configured && xfft_data_valid;
+    wire xfft_s_axis_tvalid;
     wire xfft_s_axis_tready;
-    wire xfft_s_axis_tlast = (xfft_data_idx == 12'd4095);
+    wire xfft_s_axis_tlast;
+    assign xfft_s_axis_tvalid = enable && config_valid && xfft_configured && xfft_data_valid;
+    assign xfft_s_axis_tlast = (xfft_data_idx == 12'd4095);
     wire xfft_input_fire = xfft_s_axis_tvalid && xfft_s_axis_tready;
     wire input_buffer_available = !frame_ready[fill_buf];
     wire fill_last_cell = (fill_subidx == (CELLS_PER_BEAT - 1));
@@ -1747,6 +1749,1183 @@ module feng_channelizer_4096_streaming_27h #(
 endmodule
 `endif
 
+`ifdef T510_STAGE27J_PFB
+module t510_pfb_mult_16x18_pipe2 (
+    input  wire                clk,
+    input  wire                rst_n,
+    input  wire                ce,
+    input  wire signed [15:0]  sample,
+    input  wire signed [17:0]  coeff,
+    output wire signed [35:0]  product
+);
+
+    wire [29:0] dsp_a = {{14{sample[15]}}, sample};
+    wire [47:0] dsp_p;
+
+    DSP48E2 #(
+        .ACASCREG(1),
+        .ADREG(0),
+        .ALUMODEREG(0),
+        .AREG(1),
+        .BCASCREG(1),
+        .BREG(1),
+        .CARRYINREG(0),
+        .CARRYINSELREG(0),
+        .CREG(0),
+        .DREG(0),
+        .INMODEREG(0),
+        .MREG(0),
+        .OPMODEREG(0),
+        .PREG(1),
+        .USE_MULT("MULTIPLY"),
+        .USE_SIMD("ONE48")
+    ) u_dsp48e2 (
+        .ACOUT(),
+        .BCOUT(),
+        .CARRYCASCOUT(),
+        .CARRYOUT(),
+        .MULTSIGNOUT(),
+        .OVERFLOW(),
+        .P(dsp_p),
+        .PATTERNBDETECT(),
+        .PATTERNDETECT(),
+        .PCOUT(),
+        .UNDERFLOW(),
+        .XOROUT(),
+        .A(dsp_a),
+        .ACIN(30'd0),
+        .ALUMODE(4'b0000),
+        .B(coeff),
+        .BCIN(18'd0),
+        .C(48'd0),
+        .CARRYCASCIN(1'b0),
+        .CARRYIN(1'b0),
+        .CARRYINSEL(3'b000),
+        .CEA1(ce),
+        .CEA2(ce),
+        .CEAD(1'b0),
+        .CEALUMODE(1'b0),
+        .CEB1(ce),
+        .CEB2(ce),
+        .CEC(1'b0),
+        .CECARRYIN(1'b0),
+        .CECTRL(1'b0),
+        .CED(1'b0),
+        .CEINMODE(1'b0),
+        .CEM(1'b0),
+        .CEP(ce),
+        .CLK(clk),
+        .D(27'd0),
+        .INMODE(5'b00000),
+        .MULTSIGNIN(1'b0),
+        .OPMODE(9'b000000101),
+        .PCIN(48'd0),
+        .RSTA(!rst_n),
+        .RSTALLCARRYIN(1'b0),
+        .RSTALUMODE(1'b0),
+        .RSTB(!rst_n),
+        .RSTC(1'b0),
+        .RSTCTRL(1'b0),
+        .RSTD(1'b0),
+        .RSTINMODE(1'b0),
+        .RSTM(1'b0),
+        .RSTP(!rst_n)
+    );
+
+    assign product = dsp_p[35:0];
+
+endmodule
+
+module feng_channelizer_4096_streaming_27j #(
+    parameter integer DATA_W = 1024,
+    parameter integer NINPUT = 8,
+    parameter integer NCHAN  = 4096
+) (
+    input  wire                 clk,
+    input  wire                 rst_n,
+    input  wire                 enable,
+    input  wire                 clear,
+    input  wire [15:0]          cfg_taps,
+    input  wire [15:0]          cfg_fft_shift,
+    input  wire [31:0]          cfg_chan0,
+    input  wire [15:0]          cfg_chan_count,
+    input  wire [15:0]          cfg_time_count,
+    input  wire                 coeff_load_start,
+    input  wire                 coeff_commit,
+    input  wire                 coeff_abort,
+    input  wire                 coeff_write,
+    input  wire [3:0]           coeff_requested_taps,
+    input  wire [13:0]          coeff_index,
+    input  wire signed [17:0]   coeff_data,
+    input  wire [31:0]          coeff_id,
+    output wire [31:0]          coeff_status,
+    output logic [31:0]         coeff_loaded_count,
+    output logic [31:0]         coeff_active_id,
+    output logic [31:0]         coeff_active_checksum,
+    output logic [31:0]         coeff_error_count,
+    input  wire [DATA_W-1:0]    s_axis_tdata,
+    input  wire [63:0]          s_axis_sample0,
+    input  wire                 s_axis_tvalid,
+    output wire                 s_axis_tready,
+    output wire [DATA_W-1:0]    m_axis_tdata,
+    output wire [63:0]          m_axis_sample0,
+    output wire                 m_axis_tvalid,
+    input  wire                 m_axis_tready,
+    output wire [31:0]          status,
+    output logic [31:0]         frame_count,
+    output logic [31:0]         overflow_count,
+    output logic [31:0]         data_halt_count,
+    output logic [31:0]         xfft_event_count,
+    output logic [31:0]         tile_overflow_count,
+    output logic [31:0]         xfft_tlast_unexpected_count,
+    output logic [31:0]         xfft_tlast_missing_count,
+    output logic [31:0]         xfft_fft_overflow_count,
+    output logic [31:0]         xfft_data_out_halt_count,
+    output logic [31:0]         xfft_status_halt_count,
+    output logic [31:0]         capture_backpressure_count,
+    output logic [31:0]         frame_sample0_overflow_count,
+    output wire [31:0]          input_fifo_level,
+    output logic [31:0]         peak_chan,
+    output logic [31:0]         peak_power,
+    output wire [31:0]          packet_chan0,
+    output wire [15:0]          packet_chan_count,
+    output wire [15:0]          packet_time_count
+);
+
+    localparam integer CELL_W = NINPUT * 32;
+    localparam integer CELLS_PER_BEAT = DATA_W / CELL_W;
+    localparam integer PACK_IDX_W = (CELLS_PER_BEAT <= 1) ? 1 : $clog2(CELLS_PER_BEAT);
+    localparam integer FRAME_FIFO_DEPTH = 16;
+    localparam integer FRAME_FIFO_AW = 4;
+    localparam [FRAME_FIFO_AW:0] FRAME_FIFO_DEPTH_COUNT = FRAME_FIFO_DEPTH;
+    localparam [FRAME_FIFO_AW:0] FRAME_FIFO_ZERO_COUNT = {(FRAME_FIFO_AW+1){1'b0}};
+
+    logic [DATA_W-1:0] fill_word;
+    logic [63:0]       fill_frame_sample0;
+    logic [PACK_IDX_W-1:0] fill_subidx;
+    logic              fill_word_valid;
+    logic [1:0]        fill_buf;
+    logic [11:0]       fill_bin_idx;
+    logic [2:0]        valid_frame_count;
+    logic [1:0]        win0_buf;
+    logic [1:0]        win1_buf;
+    logic [1:0]        win2_buf;
+    logic [1:0]        win3_buf;
+    logic [1:0]        new_frame_buf;
+    logic              new_frame_ready;
+    logic              shift_pending;
+    logic [63:0]       frame_sample0_buf [0:3];
+
+    logic              feed_active;
+    logic [12:0]       feed_read_addr;
+    logic [63:0]       feed_sample0;
+    (* max_fanout = 64 *) logic read_cmd_valid;
+    (* max_fanout = 64 *) logic [11:0] read_cmd_idx;
+    logic              read_valid;
+    logic [11:0]       read_idx;
+    logic              read_dout_valid;
+    logic [11:0]       read_dout_idx;
+    logic [CELL_W-1:0] xfft_q_head_data;
+    logic [CELL_W-1:0] xfft_q_tail_data;
+    logic [11:0]       xfft_q_head_idx;
+    logic [11:0]       xfft_q_tail_idx;
+    (* max_fanout = 64 *) logic [1:0] xfft_q_count;
+    localparam integer PFB_COMPONENTS = NINPUT * 2;
+    logic              pfb_r0_valid;
+    logic [11:0]       pfb_r0_idx;
+    logic [1:0]        pfb_r0_w0;
+    logic [1:0]        pfb_r0_w1;
+    logic [1:0]        pfb_r0_w2;
+    logic [1:0]        pfb_r0_w3;
+    logic [CELL_W-1:0] pfb_r0_dout [0:3];
+    logic signed [17:0] pfb_r0_c0;
+    logic signed [17:0] pfb_r0_c1;
+    logic signed [17:0] pfb_r0_c2;
+    logic signed [17:0] pfb_r0_c3;
+    logic              pfb_s0_valid;
+    logic              pfb_mul_valid;
+    logic              pfb_s1_valid;
+    logic              pfb_s2_valid;
+    logic              pfb_s3_valid;
+    logic              pfb_s4_valid;
+    logic [11:0]       pfb_s0_idx;
+    logic [11:0]       pfb_mul_idx;
+    logic [11:0]       pfb_s1_idx;
+    logic [11:0]       pfb_s2_idx;
+    logic [11:0]       pfb_s3_idx;
+    logic [11:0]       pfb_s4_idx;
+    logic [CELL_W-1:0] pfb_s0_d0;
+    logic [CELL_W-1:0] pfb_s0_d1;
+    logic [CELL_W-1:0] pfb_s0_d2;
+    logic [CELL_W-1:0] pfb_s0_d3;
+    logic signed [17:0] pfb_s0_c0;
+    logic signed [17:0] pfb_s0_c1;
+    logic signed [17:0] pfb_s0_c2;
+    logic signed [17:0] pfb_s0_c3;
+    wire signed [35:0] pfb_s1_prod [0:PFB_COMPONENTS-1][0:3];
+    logic signed [36:0] pfb_s2_sum01 [0:PFB_COMPONENTS-1];
+    logic signed [36:0] pfb_s2_sum23 [0:PFB_COMPONENTS-1];
+    logic signed [37:0] pfb_s3_acc [0:PFB_COMPONENTS-1];
+    logic [CELL_W-1:0] pfb_s4_cell;
+
+    wire [CELL_W-1:0] fill_cell = fill_word[fill_subidx*CELL_W +: CELL_W];
+    wire input_word_fire = s_axis_tvalid && s_axis_tready;
+    wire fill_last_cell = (fill_subidx == (CELLS_PER_BEAT - 1));
+    wire fill_last_frame_cell = fill_word_valid && fill_last_cell && (fill_bin_idx == 12'd4095);
+    wire input_buffer_available =
+        (valid_frame_count < 3'd4) ||
+        feed_active ||
+        shift_pending;
+
+    logic [255:0] xfft_config_tdata;
+    logic         xfft_config_tvalid;
+    wire          xfft_config_tready;
+    logic         xfft_configured;
+    wire [11:0]  xfft_scale_schedule = cfg_fft_shift[11:0];
+
+    logic [CELL_W-1:0] frame_dout [0:3];
+    wire frame_we0 = fill_word_valid && (fill_buf == 2'd0);
+    wire frame_we1 = fill_word_valid && (fill_buf == 2'd1);
+    wire frame_we2 = fill_word_valid && (fill_buf == 2'd2);
+    wire frame_we3 = fill_word_valid && (fill_buf == 2'd3);
+
+    logic signed [17:0] coeff_dout [0:1][0:3];
+    logic [1:0] coeff_read_tap;
+    logic       active_bank;
+    logic       shadow_bank;
+    logic       coeff_loading;
+    logic       coeff_shadow_full;
+    logic       coeff_active_valid;
+    logic       coeff_commit_pending;
+    logic       coeff_command_error;
+    logic [3:0] coeff_active_taps;
+    logic [31:0] coeff_shadow_checksum;
+    logic [31:0] coeff_shadow_id;
+    wire [1:0] coeff_write_tap = coeff_index[13:12];
+    wire [11:0] coeff_write_phase = coeff_index[11:0];
+    wire coeff_write_bank0_t0 = coeff_write && coeff_loading && (shadow_bank == 1'b0) && (coeff_write_tap == 2'd0);
+    wire coeff_write_bank0_t1 = coeff_write && coeff_loading && (shadow_bank == 1'b0) && (coeff_write_tap == 2'd1);
+    wire coeff_write_bank0_t2 = coeff_write && coeff_loading && (shadow_bank == 1'b0) && (coeff_write_tap == 2'd2);
+    wire coeff_write_bank0_t3 = coeff_write && coeff_loading && (shadow_bank == 1'b0) && (coeff_write_tap == 2'd3);
+    wire coeff_write_bank1_t0 = coeff_write && coeff_loading && (shadow_bank == 1'b1) && (coeff_write_tap == 2'd0);
+    wire coeff_write_bank1_t1 = coeff_write && coeff_loading && (shadow_bank == 1'b1) && (coeff_write_tap == 2'd1);
+    wire coeff_write_bank1_t2 = coeff_write && coeff_loading && (shadow_bank == 1'b1) && (coeff_write_tap == 2'd2);
+    wire coeff_write_bank1_t3 = coeff_write && coeff_loading && (shadow_bank == 1'b1) && (coeff_write_tap == 2'd3);
+
+    wire config_valid =
+        (DATA_W >= CELL_W) &&
+        ((DATA_W % CELL_W) == 0) &&
+        (CELLS_PER_BEAT == 4) &&
+        (NINPUT == 8) &&
+        (NCHAN == 4096) &&
+        (cfg_taps == 16'd4) &&
+        coeff_active_valid &&
+        (coeff_active_taps == 4'd4) &&
+        (cfg_chan0 == 32'd0) &&
+        (cfg_chan_count == 16'd256) &&
+        (cfg_time_count == 16'd1);
+    wire science_valid = config_valid && xfft_configured;
+
+    assign s_axis_tready = enable && config_valid && xfft_configured &&
+                           !fill_word_valid && input_buffer_available &&
+                           !new_frame_ready;
+
+    wire [255:0] xfft_m_axis_tdata;
+    wire [23:0]  xfft_m_axis_tuser;
+    wire         xfft_m_axis_tvalid;
+    wire         xfft_m_axis_tready;
+    wire         xfft_m_axis_tlast;
+    wire [7:0]   xfft_m_axis_status_tdata;
+    wire         xfft_m_axis_status_tvalid;
+    wire         xfft_m_axis_status_tready;
+    wire         xfft_s_axis_tvalid;
+    wire         xfft_s_axis_tready;
+    wire         xfft_s_axis_tlast;
+    wire         xfft_event_frame_started;
+    wire         xfft_event_tlast_unexpected;
+    wire         xfft_event_tlast_missing;
+    wire         xfft_event_fft_overflow;
+    wire         xfft_event_status_channel_halt;
+    wire         xfft_event_data_in_channel_halt;
+    wire         xfft_event_data_out_channel_halt;
+    wire [7:0]   xfft_config_done_debug;
+    wire [7:0]   xfft_config_ready_debug;
+
+    logic [DATA_W-1:0] pack_word;
+    logic [DATA_W-1:0] pack_word_next;
+    logic [PACK_IDX_W-1:0] pack_subidx;
+    logic [DATA_W-1:0] output_word;
+    logic [63:0]       output_sample0;
+    logic              output_valid;
+    logic [31:0]       packet_chan0_reg;
+
+    wire [11:0] xfft_bin = xfft_m_axis_tuser[11:0];
+    wire [PACK_IDX_W-1:0] pack_slot = xfft_bin[PACK_IDX_W-1:0];
+    wire output_fire = output_valid && m_axis_tready;
+    wire output_slot_ready = !output_valid;
+    assign xfft_m_axis_tready = output_slot_ready;
+    assign xfft_m_axis_status_tready = 1'b1;
+    wire xfft_output_fire = xfft_m_axis_tvalid && xfft_m_axis_tready;
+    wire xfft_q_empty = (xfft_q_count == 2'd0);
+    wire xfft_q_full = (xfft_q_count == 2'd2);
+    (* max_fanout = 64 *) wire pfb_pipe_advance = !xfft_q_full;
+    wire xfft_data_valid = !xfft_q_empty;
+    wire [CELL_W-1:0] xfft_data = xfft_q_head_data;
+    wire [11:0] xfft_data_idx = xfft_q_head_idx;
+    wire xfft_q_push = pfb_pipe_advance && pfb_s4_valid;
+    wire read_issue = feed_active && pfb_pipe_advance && (feed_read_addr < 13'd4096);
+    wire feed_last_read_issue = read_issue && (feed_read_addr == 13'd4095);
+    assign xfft_s_axis_tvalid = enable && config_valid && xfft_configured && xfft_data_valid;
+    assign xfft_s_axis_tlast = (xfft_data_idx == 12'd4095);
+    wire xfft_input_fire = xfft_s_axis_tvalid && xfft_s_axis_tready;
+    wire xfft_q_pop = xfft_input_fire;
+    wire feed_done = xfft_input_fire && (xfft_data_idx == 12'd4095);
+    wire pfb_pipe_busy = read_cmd_valid ||
+                         read_valid ||
+                         read_dout_valid ||
+                         pfb_r0_valid ||
+                         pfb_s0_valid ||
+                         pfb_mul_valid ||
+                         pfb_s1_valid ||
+                         pfb_s2_valid ||
+                         pfb_s3_valid ||
+                         pfb_s4_valid;
+    wire start_feed = enable && config_valid && xfft_configured &&
+                      !feed_active && !pfb_pipe_busy && !xfft_data_valid &&
+                      !new_frame_ready && !shift_pending &&
+                      (valid_frame_count == 3'd4);
+    wire pack_first_cell = (pack_slot == {PACK_IDX_W{1'b0}});
+    wire pack_last_cell = (pack_slot == (CELLS_PER_BEAT - 1));
+    wire pack_slot_mismatch = xfft_output_fire && (pack_slot != pack_subidx);
+
+    (* ram_style = "distributed" *) logic [63:0] frame_sample0_fifo [0:FRAME_FIFO_DEPTH-1];
+    logic [FRAME_FIFO_AW-1:0] frame_fifo_wr_ptr;
+    logic [FRAME_FIFO_AW-1:0] frame_fifo_rd_ptr;
+    logic [FRAME_FIFO_AW:0]   frame_fifo_count;
+    wire frame_fifo_empty = (frame_fifo_count == FRAME_FIFO_ZERO_COUNT);
+    wire frame_fifo_full = (frame_fifo_count == FRAME_FIFO_DEPTH_COUNT);
+    wire frame_sample0_enqueue = xfft_input_fire && (xfft_data_idx == 12'd0);
+    wire frame_sample0_dequeue = xfft_output_fire && xfft_m_axis_tlast;
+    wire frame_sample0_push = frame_sample0_enqueue && (!frame_fifo_full || frame_sample0_dequeue);
+    wire frame_sample0_pop = frame_sample0_dequeue && !frame_fifo_empty;
+    wire [63:0] current_output_frame_sample0 =
+        !frame_fifo_empty ? frame_sample0_fifo[frame_fifo_rd_ptr] : feed_sample0;
+
+    wire feng_busy =
+        fill_word_valid ||
+        (fill_bin_idx != 12'd0) ||
+        feed_active ||
+        read_cmd_valid ||
+        read_valid ||
+        read_dout_valid ||
+        pfb_r0_valid ||
+        pfb_s0_valid ||
+        pfb_mul_valid ||
+        pfb_s1_valid ||
+        pfb_s2_valid ||
+        pfb_s3_valid ||
+        pfb_s4_valid ||
+        xfft_data_valid ||
+        (valid_frame_count != 3'd0) ||
+        output_valid ||
+        (pack_subidx != {PACK_IDX_W{1'b0}}) ||
+        xfft_config_tvalid;
+
+    assign m_axis_tdata = output_word;
+    assign m_axis_sample0 = output_sample0;
+    assign m_axis_tvalid = output_valid;
+    assign packet_chan0 = packet_chan0_reg;
+    assign packet_chan_count = 16'd256;
+    assign packet_time_count = 16'd1;
+    assign input_fifo_level = {15'd0, new_frame_ready, shift_pending, valid_frame_count, fill_bin_idx};
+    assign coeff_status = {
+        20'd0,
+        coeff_active_taps,
+        shadow_bank,
+        active_bank,
+        coeff_command_error,
+        coeff_loading || coeff_commit_pending,
+        coeff_commit_pending,
+        coeff_shadow_full,
+        coeff_loading,
+        coeff_active_valid
+    };
+
+    function automatic signed [15:0] round_sat_q17_38(input logic signed [37:0] acc);
+        logic signed [38:0] extended;
+        logic signed [38:0] scaled;
+        begin
+            extended = {acc[37], acc};
+            if (extended < 0) begin
+                scaled = -(((-extended) + 39'sd65536) >>> 17);
+            end else begin
+                scaled = (extended + 39'sd65536) >>> 17;
+            end
+            if (scaled > 39'sd32767) begin
+                round_sat_q17_38 = 16'sd32767;
+            end else if (scaled < -39'sd32768) begin
+                round_sat_q17_38 = -16'sd32768;
+            end else begin
+                round_sat_q17_38 = scaled[15:0];
+            end
+        end
+    endfunction
+
+    function automatic signed [15:0] pfb_component(
+        input logic [CELL_W-1:0] sample_cell,
+        input integer comp_idx
+    );
+        integer bit_lsb;
+        begin
+            bit_lsb = (comp_idx / 2) * 32 + (comp_idx % 2) * 16;
+            pfb_component = sample_cell[bit_lsb +: 16];
+        end
+    endfunction
+
+    integer pfb_comp_idx;
+    integer pfb_lane_idx;
+
+    always_comb begin
+        xfft_config_tdata = 256'd0;
+        xfft_config_tdata[7:0] = 8'hff;
+        xfft_config_tdata[19:8] = xfft_scale_schedule;
+        xfft_config_tdata[31:20] = xfft_scale_schedule;
+        xfft_config_tdata[43:32] = xfft_scale_schedule;
+        xfft_config_tdata[55:44] = xfft_scale_schedule;
+        xfft_config_tdata[67:56] = xfft_scale_schedule;
+        xfft_config_tdata[79:68] = xfft_scale_schedule;
+        xfft_config_tdata[91:80] = xfft_scale_schedule;
+        xfft_config_tdata[103:92] = xfft_scale_schedule;
+    end
+
+    always_comb begin
+        pack_word_next = pack_first_cell ? {DATA_W{1'b0}} : pack_word;
+        case (pack_slot)
+            2'd0: pack_word_next[0*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+            2'd1: pack_word_next[1*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+            2'd2: pack_word_next[2*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+            default: pack_word_next[3*CELL_W +: CELL_W] = xfft_m_axis_tdata;
+        endcase
+    end
+
+    genvar frame_mem_idx;
+    generate
+        for (frame_mem_idx = 0; frame_mem_idx < 4; frame_mem_idx = frame_mem_idx + 1) begin : gen_frame_mem
+            wire frame_we =
+                (frame_mem_idx == 0) ? frame_we0 :
+                (frame_mem_idx == 1) ? frame_we1 :
+                (frame_mem_idx == 2) ? frame_we2 : frame_we3;
+            xpm_memory_sdpram #(
+                .ADDR_WIDTH_A(12),
+                .ADDR_WIDTH_B(12),
+                .AUTO_SLEEP_TIME(0),
+                .BYTE_WRITE_WIDTH_A(CELL_W),
+                .CASCADE_HEIGHT(0),
+                .CLOCKING_MODE("common_clock"),
+                .ECC_MODE("no_ecc"),
+                .MEMORY_INIT_FILE("none"),
+                .MEMORY_INIT_PARAM("0"),
+                .MEMORY_OPTIMIZATION("true"),
+                .MEMORY_PRIMITIVE("block"),
+                .MEMORY_SIZE(NCHAN * CELL_W),
+                .MESSAGE_CONTROL(0),
+                .READ_DATA_WIDTH_B(CELL_W),
+                .READ_LATENCY_B(2),
+                .READ_RESET_VALUE_B("0"),
+                .RST_MODE_A("SYNC"),
+                .RST_MODE_B("SYNC"),
+                .USE_EMBEDDED_CONSTRAINT(0),
+                .USE_MEM_INIT(0),
+                .WAKEUP_TIME("disable_sleep"),
+                .WRITE_DATA_WIDTH_A(CELL_W),
+                .WRITE_MODE_B("read_first")
+            ) u_frame_mem (
+                .dbiterrb(),
+                .doutb(frame_dout[frame_mem_idx]),
+                .sbiterrb(),
+                .addra(fill_bin_idx),
+                .addrb(read_cmd_idx),
+                .clka(clk),
+                .clkb(clk),
+                .dina(fill_cell),
+                .ena(1'b1),
+                .enb(read_cmd_valid && pfb_pipe_advance),
+                .injectdbiterra(1'b0),
+                .injectsbiterra(1'b0),
+                .regceb(pfb_pipe_advance),
+                .rstb(!rst_n),
+                .sleep(1'b0),
+                .wea(frame_we)
+            );
+        end
+    endgenerate
+
+    genvar coeff_bank_idx;
+    genvar coeff_tap_idx;
+    generate
+        for (coeff_bank_idx = 0; coeff_bank_idx < 2; coeff_bank_idx = coeff_bank_idx + 1) begin : gen_coeff_bank
+            for (coeff_tap_idx = 0; coeff_tap_idx < 4; coeff_tap_idx = coeff_tap_idx + 1) begin : gen_coeff_tap
+                wire coeff_we =
+                    (coeff_bank_idx == 0 && coeff_tap_idx == 0) ? coeff_write_bank0_t0 :
+                    (coeff_bank_idx == 0 && coeff_tap_idx == 1) ? coeff_write_bank0_t1 :
+                    (coeff_bank_idx == 0 && coeff_tap_idx == 2) ? coeff_write_bank0_t2 :
+                    (coeff_bank_idx == 0 && coeff_tap_idx == 3) ? coeff_write_bank0_t3 :
+                    (coeff_bank_idx == 1 && coeff_tap_idx == 0) ? coeff_write_bank1_t0 :
+                    (coeff_bank_idx == 1 && coeff_tap_idx == 1) ? coeff_write_bank1_t1 :
+                    (coeff_bank_idx == 1 && coeff_tap_idx == 2) ? coeff_write_bank1_t2 :
+                    coeff_write_bank1_t3;
+                xpm_memory_sdpram #(
+                    .ADDR_WIDTH_A(12),
+                    .ADDR_WIDTH_B(12),
+                    .AUTO_SLEEP_TIME(0),
+                    .BYTE_WRITE_WIDTH_A(18),
+                    .CASCADE_HEIGHT(0),
+                    .CLOCKING_MODE("common_clock"),
+                    .ECC_MODE("no_ecc"),
+                    .MEMORY_INIT_FILE("none"),
+                    .MEMORY_INIT_PARAM("0"),
+                    .MEMORY_OPTIMIZATION("true"),
+                    .MEMORY_PRIMITIVE("block"),
+                    .MEMORY_SIZE(NCHAN * 18),
+                    .MESSAGE_CONTROL(0),
+                    .READ_DATA_WIDTH_B(18),
+                    .READ_LATENCY_B(2),
+                    .READ_RESET_VALUE_B("0"),
+                    .RST_MODE_A("SYNC"),
+                    .RST_MODE_B("SYNC"),
+                    .USE_EMBEDDED_CONSTRAINT(0),
+                    .USE_MEM_INIT(0),
+                    .WAKEUP_TIME("disable_sleep"),
+                    .WRITE_DATA_WIDTH_A(18),
+                    .WRITE_MODE_B("read_first")
+                ) u_coeff_mem (
+                    .dbiterrb(),
+                    .doutb(coeff_dout[coeff_bank_idx][coeff_tap_idx]),
+                    .sbiterrb(),
+                    .addra(coeff_write_phase),
+                    .addrb(read_cmd_idx),
+                    .clka(clk),
+                    .clkb(clk),
+                    .dina(coeff_data),
+                    .ena(1'b1),
+                    .enb(read_cmd_valid && pfb_pipe_advance),
+                    .injectdbiterra(1'b0),
+                    .injectsbiterra(1'b0),
+                    .regceb(pfb_pipe_advance),
+                    .rstb(!rst_n),
+                    .sleep(1'b0),
+                    .wea(coeff_we)
+                );
+            end
+        end
+    endgenerate
+
+    genvar pfb_mul_comp_idx;
+    genvar pfb_mul_tap_idx;
+    generate
+        for (pfb_mul_comp_idx = 0;
+             pfb_mul_comp_idx < PFB_COMPONENTS;
+             pfb_mul_comp_idx = pfb_mul_comp_idx + 1) begin : gen_pfb_mul_comp
+            localparam integer SAMPLE_LSB =
+                (pfb_mul_comp_idx / 2) * 32 + (pfb_mul_comp_idx % 2) * 16;
+            for (pfb_mul_tap_idx = 0;
+                 pfb_mul_tap_idx < 4;
+                 pfb_mul_tap_idx = pfb_mul_tap_idx + 1) begin : gen_pfb_mul_tap
+                wire signed [15:0] mul_sample =
+                    (pfb_mul_tap_idx == 0) ? $signed(pfb_s0_d0[SAMPLE_LSB +: 16]) :
+                    (pfb_mul_tap_idx == 1) ? $signed(pfb_s0_d1[SAMPLE_LSB +: 16]) :
+                    (pfb_mul_tap_idx == 2) ? $signed(pfb_s0_d2[SAMPLE_LSB +: 16]) :
+                                             $signed(pfb_s0_d3[SAMPLE_LSB +: 16]);
+                wire signed [17:0] mul_coeff =
+                    (pfb_mul_tap_idx == 0) ? pfb_s0_c0 :
+                    (pfb_mul_tap_idx == 1) ? pfb_s0_c1 :
+                    (pfb_mul_tap_idx == 2) ? pfb_s0_c2 : pfb_s0_c3;
+
+                t510_pfb_mult_16x18_pipe2 u_pfb_mult (
+                    .clk(clk),
+                    .rst_n(rst_n),
+                    .ce(pfb_pipe_advance),
+                    .sample(mul_sample),
+                    .coeff(mul_coeff),
+                    .product(pfb_s1_prod[pfb_mul_comp_idx][pfb_mul_tap_idx])
+                );
+            end
+        end
+    endgenerate
+
+`ifdef T510_SIM_FFT_MODEL
+    t510_fengine_xfft_4096_sim_model u_fengine_xfft_4096 (
+        .aclk(clk),
+        .s_axis_config_tdata(xfft_config_tdata),
+        .s_axis_config_tvalid(xfft_config_tvalid),
+        .s_axis_config_tready(xfft_config_tready),
+        .s_axis_data_tdata(xfft_data),
+        .s_axis_data_tvalid(xfft_s_axis_tvalid),
+        .s_axis_data_tready(xfft_s_axis_tready),
+        .s_axis_data_tlast(xfft_s_axis_tlast),
+        .m_axis_data_tdata(xfft_m_axis_tdata),
+        .m_axis_data_tuser(xfft_m_axis_tuser),
+        .m_axis_data_tvalid(xfft_m_axis_tvalid),
+        .m_axis_data_tready(xfft_m_axis_tready),
+        .m_axis_data_tlast(xfft_m_axis_tlast),
+        .m_axis_status_tdata(xfft_m_axis_status_tdata),
+        .m_axis_status_tvalid(xfft_m_axis_status_tvalid),
+        .m_axis_status_tready(xfft_m_axis_status_tready),
+        .event_frame_started(xfft_event_frame_started),
+        .event_tlast_unexpected(xfft_event_tlast_unexpected),
+        .event_tlast_missing(xfft_event_tlast_missing),
+        .event_fft_overflow(xfft_event_fft_overflow),
+        .event_status_channel_halt(xfft_event_status_channel_halt),
+        .event_data_in_channel_halt(xfft_event_data_in_channel_halt),
+        .event_data_out_channel_halt(xfft_event_data_out_channel_halt)
+    );
+    assign xfft_config_done_debug = xfft_configured ? 8'hff : 8'h00;
+    assign xfft_config_ready_debug = {8{xfft_config_tready}};
+`else
+    t510_fengine_xfft_4096_8lane_streaming u_fengine_xfft_4096 (
+        .aclk(clk),
+        .s_axis_config_tdata(xfft_config_tdata),
+        .s_axis_config_tvalid(xfft_config_tvalid),
+        .s_axis_config_tready(xfft_config_tready),
+        .s_axis_data_tdata(xfft_data),
+        .s_axis_data_tvalid(xfft_s_axis_tvalid),
+        .s_axis_data_tready(xfft_s_axis_tready),
+        .s_axis_data_tlast(xfft_s_axis_tlast),
+        .m_axis_data_tdata(xfft_m_axis_tdata),
+        .m_axis_data_tuser(xfft_m_axis_tuser),
+        .m_axis_data_tvalid(xfft_m_axis_tvalid),
+        .m_axis_data_tready(xfft_m_axis_tready),
+        .m_axis_data_tlast(xfft_m_axis_tlast),
+        .m_axis_status_tdata(xfft_m_axis_status_tdata),
+        .m_axis_status_tvalid(xfft_m_axis_status_tvalid),
+        .m_axis_status_tready(xfft_m_axis_status_tready),
+        .event_frame_started(xfft_event_frame_started),
+        .event_tlast_unexpected(xfft_event_tlast_unexpected),
+        .event_tlast_missing(xfft_event_tlast_missing),
+        .event_fft_overflow(xfft_event_fft_overflow),
+        .event_status_channel_halt(xfft_event_status_channel_halt),
+        .event_data_in_channel_halt(xfft_event_data_in_channel_halt),
+        .event_data_out_channel_halt(xfft_event_data_out_channel_halt),
+        .config_done_debug(xfft_config_done_debug),
+        .config_ready_debug(xfft_config_ready_debug)
+    );
+`endif
+
+    always_ff @(posedge clk) begin
+        if (frame_sample0_push) begin
+            frame_sample0_fifo[frame_fifo_wr_ptr] <= feed_sample0;
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            fill_word <= {DATA_W{1'b0}};
+            fill_frame_sample0 <= 64'd0;
+            fill_subidx <= {PACK_IDX_W{1'b0}};
+            fill_word_valid <= 1'b0;
+            fill_buf <= 2'd0;
+            fill_bin_idx <= 12'd0;
+            valid_frame_count <= 3'd0;
+            win0_buf <= 2'd0;
+            win1_buf <= 2'd1;
+            win2_buf <= 2'd2;
+            win3_buf <= 2'd3;
+            new_frame_buf <= 2'd0;
+            new_frame_ready <= 1'b0;
+            shift_pending <= 1'b0;
+            frame_sample0_buf[0] <= 64'd0;
+            frame_sample0_buf[1] <= 64'd0;
+            frame_sample0_buf[2] <= 64'd0;
+            frame_sample0_buf[3] <= 64'd0;
+            feed_active <= 1'b0;
+            feed_read_addr <= 13'd0;
+            feed_sample0 <= 64'd0;
+            read_cmd_valid <= 1'b0;
+            read_cmd_idx <= 12'd0;
+            read_valid <= 1'b0;
+            read_idx <= 12'd0;
+            read_dout_valid <= 1'b0;
+            read_dout_idx <= 12'd0;
+            pfb_r0_valid <= 1'b0;
+            pfb_r0_idx <= 12'd0;
+            pfb_r0_w0 <= 2'd0;
+            pfb_r0_w1 <= 2'd1;
+            pfb_r0_w2 <= 2'd2;
+            pfb_r0_w3 <= 2'd3;
+            pfb_r0_dout[0] <= {CELL_W{1'b0}};
+            pfb_r0_dout[1] <= {CELL_W{1'b0}};
+            pfb_r0_dout[2] <= {CELL_W{1'b0}};
+            pfb_r0_dout[3] <= {CELL_W{1'b0}};
+            pfb_r0_c0 <= 18'sd0;
+            pfb_r0_c1 <= 18'sd0;
+            pfb_r0_c2 <= 18'sd0;
+            pfb_r0_c3 <= 18'sd0;
+            pfb_s0_valid <= 1'b0;
+            pfb_mul_valid <= 1'b0;
+            pfb_s1_valid <= 1'b0;
+            pfb_s2_valid <= 1'b0;
+            pfb_s3_valid <= 1'b0;
+            pfb_s4_valid <= 1'b0;
+            pfb_s0_idx <= 12'd0;
+            pfb_mul_idx <= 12'd0;
+            pfb_s1_idx <= 12'd0;
+            pfb_s2_idx <= 12'd0;
+            pfb_s3_idx <= 12'd0;
+            pfb_s4_idx <= 12'd0;
+            pfb_s0_d0 <= {CELL_W{1'b0}};
+            pfb_s0_d1 <= {CELL_W{1'b0}};
+            pfb_s0_d2 <= {CELL_W{1'b0}};
+            pfb_s0_d3 <= {CELL_W{1'b0}};
+            pfb_s0_c0 <= 18'sd0;
+            pfb_s0_c1 <= 18'sd0;
+            pfb_s0_c2 <= 18'sd0;
+            pfb_s0_c3 <= 18'sd0;
+            pfb_s4_cell <= {CELL_W{1'b0}};
+            xfft_q_head_data <= {CELL_W{1'b0}};
+            xfft_q_tail_data <= {CELL_W{1'b0}};
+            xfft_q_head_idx <= 12'd0;
+            xfft_q_tail_idx <= 12'd0;
+            xfft_q_count <= 2'd0;
+            xfft_config_tvalid <= 1'b0;
+            xfft_configured <= 1'b0;
+            pack_word <= {DATA_W{1'b0}};
+            pack_subidx <= {PACK_IDX_W{1'b0}};
+            output_word <= {DATA_W{1'b0}};
+            output_sample0 <= 64'd0;
+            output_valid <= 1'b0;
+            packet_chan0_reg <= 32'd0;
+            frame_fifo_wr_ptr <= {FRAME_FIFO_AW{1'b0}};
+            frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
+            frame_fifo_count <= FRAME_FIFO_ZERO_COUNT;
+            frame_count <= 32'd0;
+            overflow_count <= 32'd0;
+            data_halt_count <= 32'd0;
+            xfft_event_count <= 32'd0;
+            tile_overflow_count <= 32'd0;
+            xfft_tlast_unexpected_count <= 32'd0;
+            xfft_tlast_missing_count <= 32'd0;
+            xfft_fft_overflow_count <= 32'd0;
+            xfft_data_out_halt_count <= 32'd0;
+            xfft_status_halt_count <= 32'd0;
+            capture_backpressure_count <= 32'd0;
+            frame_sample0_overflow_count <= 32'd0;
+            peak_chan <= 32'd0;
+            peak_power <= 32'd0;
+            active_bank <= 1'b0;
+            shadow_bank <= 1'b1;
+            coeff_loading <= 1'b0;
+            coeff_shadow_full <= 1'b0;
+            coeff_active_valid <= 1'b0;
+            coeff_commit_pending <= 1'b0;
+            coeff_command_error <= 1'b0;
+            coeff_active_taps <= 4'd0;
+            coeff_loaded_count <= 32'd0;
+            coeff_shadow_checksum <= 32'd0;
+            coeff_shadow_id <= 32'd0;
+            coeff_active_id <= 32'd0;
+            coeff_active_checksum <= 32'd0;
+            coeff_error_count <= 32'd0;
+        end else begin
+            if (coeff_load_start) begin
+                if (enable || (coeff_requested_taps != 4'd4)) begin
+                    coeff_command_error <= 1'b1;
+                    coeff_error_count <= coeff_error_count + 32'd1;
+                end else begin
+                    coeff_loading <= 1'b1;
+                    coeff_shadow_full <= 1'b0;
+                    coeff_commit_pending <= 1'b0;
+                    coeff_command_error <= 1'b0;
+                    shadow_bank <= ~active_bank;
+                    coeff_loaded_count <= 32'd0;
+                    coeff_shadow_checksum <= 32'd0;
+                    coeff_shadow_id <= coeff_id;
+                end
+            end
+            if (coeff_abort) begin
+                coeff_loading <= 1'b0;
+                coeff_shadow_full <= 1'b0;
+                coeff_commit_pending <= 1'b0;
+            end
+            if (coeff_write) begin
+                if (!coeff_loading) begin
+                    coeff_command_error <= 1'b1;
+                    coeff_error_count <= coeff_error_count + 32'd1;
+                end else begin
+                    coeff_loaded_count <= coeff_loaded_count + 32'd1;
+                    coeff_shadow_checksum <= coeff_shadow_checksum + {{14{coeff_data[17]}}, coeff_data};
+                    if (coeff_loaded_count == 32'd16383) begin
+                        coeff_shadow_full <= 1'b1;
+                    end
+                end
+            end
+            if (coeff_commit) begin
+                if (enable || !coeff_shadow_full) begin
+                    coeff_commit_pending <= enable;
+                    coeff_command_error <= 1'b1;
+                    coeff_error_count <= coeff_error_count + 32'd1;
+                end else begin
+                    active_bank <= shadow_bank;
+                    coeff_active_valid <= 1'b1;
+                    coeff_active_taps <= 4'd4;
+                    coeff_active_id <= coeff_shadow_id;
+                    coeff_active_checksum <= coeff_shadow_checksum;
+                    coeff_loading <= 1'b0;
+                    coeff_shadow_full <= 1'b0;
+                    coeff_commit_pending <= 1'b0;
+                    coeff_command_error <= 1'b0;
+                end
+            end
+
+            if (!config_valid) begin
+                fill_word_valid <= 1'b0;
+                fill_subidx <= {PACK_IDX_W{1'b0}};
+                fill_bin_idx <= 12'd0;
+                valid_frame_count <= 3'd0;
+                feed_active <= 1'b0;
+                feed_read_addr <= 13'd0;
+                read_cmd_valid <= 1'b0;
+                read_cmd_idx <= 12'd0;
+                read_valid <= 1'b0;
+                read_dout_valid <= 1'b0;
+                pfb_r0_valid <= 1'b0;
+                pfb_s0_valid <= 1'b0;
+                pfb_mul_valid <= 1'b0;
+                pfb_s1_valid <= 1'b0;
+                pfb_s2_valid <= 1'b0;
+                pfb_s3_valid <= 1'b0;
+                pfb_s4_valid <= 1'b0;
+                xfft_q_count <= 2'd0;
+                xfft_config_tvalid <= 1'b0;
+                xfft_configured <= 1'b0;
+                pack_subidx <= {PACK_IDX_W{1'b0}};
+                pack_word <= {DATA_W{1'b0}};
+                output_valid <= 1'b0;
+                frame_fifo_wr_ptr <= {FRAME_FIFO_AW{1'b0}};
+                frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
+                frame_fifo_count <= FRAME_FIFO_ZERO_COUNT;
+            end else begin
+                if (!xfft_configured && !xfft_config_tvalid) begin
+                    xfft_config_tvalid <= 1'b1;
+                end
+                if (xfft_config_tvalid && xfft_config_tready) begin
+                    xfft_config_tvalid <= 1'b0;
+                    xfft_configured <= 1'b1;
+                end
+
+                if (clear || !enable) begin
+                    fill_word_valid <= 1'b0;
+                    fill_subidx <= {PACK_IDX_W{1'b0}};
+                    fill_bin_idx <= 12'd0;
+                    valid_frame_count <= 3'd0;
+                    fill_buf <= 2'd0;
+                    win0_buf <= 2'd0;
+                    win1_buf <= 2'd1;
+                    win2_buf <= 2'd2;
+                    win3_buf <= 2'd3;
+                    new_frame_ready <= 1'b0;
+                    shift_pending <= 1'b0;
+                    feed_active <= 1'b0;
+                    feed_read_addr <= 13'd0;
+                    read_cmd_valid <= 1'b0;
+                    read_cmd_idx <= 12'd0;
+                    read_valid <= 1'b0;
+                    read_dout_valid <= 1'b0;
+                    pfb_r0_valid <= 1'b0;
+                    pfb_s0_valid <= 1'b0;
+                    pfb_mul_valid <= 1'b0;
+                    pfb_s1_valid <= 1'b0;
+                    pfb_s2_valid <= 1'b0;
+                    pfb_s3_valid <= 1'b0;
+                    pfb_s4_valid <= 1'b0;
+                    xfft_q_count <= 2'd0;
+                    pack_subidx <= {PACK_IDX_W{1'b0}};
+                    pack_word <= {DATA_W{1'b0}};
+                    output_valid <= 1'b0;
+                    frame_fifo_wr_ptr <= {FRAME_FIFO_AW{1'b0}};
+                    frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
+                    frame_fifo_count <= FRAME_FIFO_ZERO_COUNT;
+                    if (clear) begin
+                        frame_count <= 32'd0;
+                        overflow_count <= 32'd0;
+                        data_halt_count <= 32'd0;
+                        xfft_event_count <= 32'd0;
+                        tile_overflow_count <= 32'd0;
+                        xfft_tlast_unexpected_count <= 32'd0;
+                        xfft_tlast_missing_count <= 32'd0;
+                        xfft_fft_overflow_count <= 32'd0;
+                        xfft_data_out_halt_count <= 32'd0;
+                        xfft_status_halt_count <= 32'd0;
+                        capture_backpressure_count <= 32'd0;
+                        frame_sample0_overflow_count <= 32'd0;
+                        peak_chan <= 32'd0;
+                        peak_power <= 32'd0;
+                    end
+                end else begin
+                    if (start_feed) begin
+                        feed_active <= 1'b1;
+                        feed_sample0 <= frame_sample0_buf[win0_buf];
+                        feed_read_addr <= 13'd0;
+                        fill_buf <= win0_buf;
+                    end else if (read_issue) begin
+                        feed_read_addr <= feed_read_addr + 13'd1;
+                        if (feed_last_read_issue) begin
+                            feed_active <= 1'b0;
+                        end
+                    end
+
+                    if (output_fire && !(xfft_output_fire && pack_last_cell)) begin
+                        output_valid <= 1'b0;
+                    end
+
+                    if (input_word_fire) begin
+                        fill_word <= s_axis_tdata;
+                        fill_word_valid <= 1'b1;
+                        fill_subidx <= {PACK_IDX_W{1'b0}};
+                        if (fill_bin_idx == 12'd0) begin
+                            fill_frame_sample0 <= s_axis_sample0;
+                        end
+                    end else if (fill_word_valid) begin
+                        if (fill_last_frame_cell) begin
+                            frame_sample0_buf[fill_buf] <= fill_frame_sample0;
+                            fill_bin_idx <= 12'd0;
+                            fill_subidx <= {PACK_IDX_W{1'b0}};
+                            fill_word_valid <= 1'b0;
+                            if (valid_frame_count < 3'd4) begin
+                                case (valid_frame_count)
+                                    3'd0: win0_buf <= fill_buf;
+                                    3'd1: win1_buf <= fill_buf;
+                                    3'd2: win2_buf <= fill_buf;
+                                    default: win3_buf <= fill_buf;
+                                endcase
+                                valid_frame_count <= valid_frame_count + 3'd1;
+                                fill_buf <= fill_buf + 2'd1;
+                            end else if (shift_pending) begin
+                                win0_buf <= win1_buf;
+                                win1_buf <= win2_buf;
+                                win2_buf <= win3_buf;
+                                win3_buf <= fill_buf;
+                                shift_pending <= 1'b0;
+                                new_frame_ready <= 1'b0;
+                            end else begin
+                                new_frame_buf <= fill_buf;
+                                new_frame_ready <= 1'b1;
+                            end
+                        end else begin
+                            fill_bin_idx <= fill_bin_idx + 12'd1;
+                            if (fill_last_cell) begin
+                                fill_subidx <= {PACK_IDX_W{1'b0}};
+                                fill_word_valid <= 1'b0;
+                            end else begin
+                                fill_subidx <= fill_subidx + {{(PACK_IDX_W-1){1'b0}}, 1'b1};
+                            end
+                        end
+	                    end
+
+	                    unique case ({xfft_q_push, xfft_q_pop})
+	                        2'b10: begin
+	                            if (xfft_q_empty) begin
+	                                xfft_q_head_data <= pfb_s4_cell;
+	                                xfft_q_head_idx <= pfb_s4_idx;
+	                            end else begin
+	                                xfft_q_tail_data <= pfb_s4_cell;
+	                                xfft_q_tail_idx <= pfb_s4_idx;
+	                            end
+	                            xfft_q_count <= xfft_q_count + 2'd1;
+	                        end
+	                        2'b01: begin
+	                            if (xfft_q_full) begin
+	                                xfft_q_head_data <= xfft_q_tail_data;
+	                                xfft_q_head_idx <= xfft_q_tail_idx;
+	                            end
+	                            xfft_q_count <= xfft_q_count - 2'd1;
+	                        end
+	                        2'b11: begin
+	                            xfft_q_head_data <= pfb_s4_cell;
+	                            xfft_q_head_idx <= pfb_s4_idx;
+	                        end
+	                        default: xfft_q_count <= xfft_q_count;
+	                    endcase
+
+	                    if (pfb_pipe_advance) begin
+	                        read_cmd_valid <= read_issue;
+	                        if (read_issue) begin
+	                            read_cmd_idx <= feed_read_addr[11:0];
+	                        end
+	                        read_valid <= read_cmd_valid;
+	                        read_idx <= read_cmd_idx;
+	                        read_dout_valid <= read_valid;
+	                        read_dout_idx <= read_idx;
+
+	                        pfb_r0_valid <= read_dout_valid;
+	                        pfb_r0_idx <= read_dout_idx;
+	                        pfb_r0_w0 <= win0_buf;
+	                        pfb_r0_w1 <= win1_buf;
+	                        pfb_r0_w2 <= win2_buf;
+	                        pfb_r0_w3 <= win3_buf;
+	                        pfb_r0_dout[0] <= frame_dout[0];
+	                        pfb_r0_dout[1] <= frame_dout[1];
+	                        pfb_r0_dout[2] <= frame_dout[2];
+	                        pfb_r0_dout[3] <= frame_dout[3];
+	                        pfb_r0_c0 <= active_bank ? coeff_dout[1][0] : coeff_dout[0][0];
+	                        pfb_r0_c1 <= active_bank ? coeff_dout[1][1] : coeff_dout[0][1];
+	                        pfb_r0_c2 <= active_bank ? coeff_dout[1][2] : coeff_dout[0][2];
+	                        pfb_r0_c3 <= active_bank ? coeff_dout[1][3] : coeff_dout[0][3];
+
+	                        pfb_s0_valid <= pfb_r0_valid;
+	                        pfb_s0_idx <= pfb_r0_idx;
+	                        pfb_s0_d0 <= pfb_r0_dout[pfb_r0_w0];
+	                        pfb_s0_d1 <= pfb_r0_dout[pfb_r0_w1];
+	                        pfb_s0_d2 <= pfb_r0_dout[pfb_r0_w2];
+	                        pfb_s0_d3 <= pfb_r0_dout[pfb_r0_w3];
+	                        pfb_s0_c0 <= pfb_r0_c0;
+	                        pfb_s0_c1 <= pfb_r0_c1;
+	                        pfb_s0_c2 <= pfb_r0_c2;
+	                        pfb_s0_c3 <= pfb_r0_c3;
+
+	                        pfb_mul_valid <= pfb_s0_valid;
+	                        pfb_mul_idx <= pfb_s0_idx;
+
+	                        pfb_s1_valid <= pfb_mul_valid;
+	                        pfb_s1_idx <= pfb_mul_idx;
+
+	                        pfb_s2_valid <= pfb_s1_valid;
+	                        pfb_s2_idx <= pfb_s1_idx;
+	                        for (pfb_comp_idx = 0; pfb_comp_idx < PFB_COMPONENTS; pfb_comp_idx = pfb_comp_idx + 1) begin
+	                            pfb_s2_sum01[pfb_comp_idx] <=
+	                                $signed({pfb_s1_prod[pfb_comp_idx][0][35], pfb_s1_prod[pfb_comp_idx][0]}) +
+	                                $signed({pfb_s1_prod[pfb_comp_idx][1][35], pfb_s1_prod[pfb_comp_idx][1]});
+	                            pfb_s2_sum23[pfb_comp_idx] <=
+	                                $signed({pfb_s1_prod[pfb_comp_idx][2][35], pfb_s1_prod[pfb_comp_idx][2]}) +
+	                                $signed({pfb_s1_prod[pfb_comp_idx][3][35], pfb_s1_prod[pfb_comp_idx][3]});
+	                        end
+
+	                        pfb_s3_valid <= pfb_s2_valid;
+	                        pfb_s3_idx <= pfb_s2_idx;
+	                        for (pfb_comp_idx = 0; pfb_comp_idx < PFB_COMPONENTS; pfb_comp_idx = pfb_comp_idx + 1) begin
+	                            pfb_s3_acc[pfb_comp_idx] <=
+	                                $signed({pfb_s2_sum01[pfb_comp_idx][36], pfb_s2_sum01[pfb_comp_idx]}) +
+	                                $signed({pfb_s2_sum23[pfb_comp_idx][36], pfb_s2_sum23[pfb_comp_idx]});
+	                        end
+
+	                        pfb_s4_valid <= pfb_s3_valid;
+	                        pfb_s4_idx <= pfb_s3_idx;
+	                        for (pfb_lane_idx = 0; pfb_lane_idx < NINPUT; pfb_lane_idx = pfb_lane_idx + 1) begin
+	                            pfb_s4_cell[pfb_lane_idx*32 +: 16] <=
+	                                round_sat_q17_38(pfb_s3_acc[pfb_lane_idx*2]);
+	                            pfb_s4_cell[pfb_lane_idx*32 + 16 +: 16] <=
+	                                round_sat_q17_38(pfb_s3_acc[pfb_lane_idx*2 + 1]);
+	                        end
+
+	                    end
+
+                    if (feed_done) begin
+                        if (new_frame_ready) begin
+                            win0_buf <= win1_buf;
+                            win1_buf <= win2_buf;
+                            win2_buf <= win3_buf;
+                            win3_buf <= new_frame_buf;
+                            new_frame_ready <= 1'b0;
+                            shift_pending <= 1'b0;
+                        end else begin
+                            shift_pending <= 1'b1;
+                        end
+                    end
+
+                    if (xfft_output_fire) begin
+                        pack_word <= pack_word_next;
+                        if (pack_last_cell) begin
+                            output_word <= pack_word_next;
+                            output_sample0 <= current_output_frame_sample0;
+                            output_valid <= 1'b1;
+                            packet_chan0_reg <= {20'd0, xfft_bin[11:8], 8'd0};
+                            pack_subidx <= {PACK_IDX_W{1'b0}};
+                        end else begin
+                            pack_subidx <= pack_slot + {{(PACK_IDX_W-1){1'b0}}, 1'b1};
+                        end
+                        if (xfft_m_axis_tlast) begin
+                            frame_count <= frame_count + 32'd1;
+                        end
+                    end
+
+                    if (frame_sample0_push) begin
+                        frame_fifo_wr_ptr <= frame_fifo_wr_ptr + {{(FRAME_FIFO_AW-1){1'b0}}, 1'b1};
+                    end
+                    if (frame_sample0_pop) begin
+                        frame_fifo_rd_ptr <= frame_fifo_rd_ptr + {{(FRAME_FIFO_AW-1){1'b0}}, 1'b1};
+                    end
+                    case ({frame_sample0_push, frame_sample0_pop})
+                        2'b10: if (frame_fifo_count != FRAME_FIFO_DEPTH_COUNT) begin
+                            frame_fifo_count <= frame_fifo_count + {{FRAME_FIFO_AW{1'b0}}, 1'b1};
+                        end
+                        2'b01: if (frame_fifo_count != FRAME_FIFO_ZERO_COUNT) begin
+                            frame_fifo_count <= frame_fifo_count - {{FRAME_FIFO_AW{1'b0}}, 1'b1};
+                        end
+                        default: frame_fifo_count <= frame_fifo_count;
+                    endcase
+
+                    if (xfft_event_tlast_unexpected ||
+                        xfft_event_tlast_missing ||
+                        xfft_event_fft_overflow ||
+                        pack_slot_mismatch ||
+                        (frame_sample0_enqueue && !frame_sample0_push)) begin
+                        overflow_count <= overflow_count + 32'd1;
+                    end
+                    if (xfft_event_tlast_unexpected ||
+                        xfft_event_tlast_missing ||
+                        xfft_event_fft_overflow ||
+                        pack_slot_mismatch) begin
+                        xfft_event_count <= xfft_event_count + 32'd1;
+                    end
+                    if (xfft_event_data_in_channel_halt) begin
+                        data_halt_count <= data_halt_count + 32'd1;
+                    end
+                    if (xfft_event_tlast_unexpected) begin
+                        xfft_tlast_unexpected_count <= xfft_tlast_unexpected_count + 32'd1;
+                    end
+                    if (xfft_event_tlast_missing) begin
+                        xfft_tlast_missing_count <= xfft_tlast_missing_count + 32'd1;
+                    end
+                    if (xfft_event_fft_overflow) begin
+                        xfft_fft_overflow_count <= xfft_fft_overflow_count + 32'd1;
+                    end
+                    if (xfft_event_data_out_channel_halt) begin
+                        xfft_data_out_halt_count <= xfft_data_out_halt_count + 32'd1;
+                    end
+                    if (xfft_event_status_channel_halt) begin
+                        xfft_status_halt_count <= xfft_status_halt_count + 32'd1;
+                    end
+                    if (output_valid && !m_axis_tready) begin
+                        capture_backpressure_count <= capture_backpressure_count + 32'd1;
+                    end
+                    if (frame_sample0_enqueue && !frame_sample0_push) begin
+                        frame_sample0_overflow_count <= frame_sample0_overflow_count + 32'd1;
+                    end
+                end
+            end
+        end
+    end
+
+    assign status = {
+        xfft_config_ready_debug,
+        xfft_config_done_debug,
+        cfg_fft_shift[3:0],
+        xfft_config_tready,
+        xfft_config_tvalid,
+        xfft_configured,
+        1'b0,
+        (data_halt_count != 32'd0),
+        s_axis_tready,
+        science_valid,
+        feng_busy,
+        (overflow_count != 32'd0),
+        output_valid,
+        config_valid,
+        enable
+    };
+
+endmodule
+`endif
+
 module pfb_channelizer #(
     parameter integer DATA_W = 1024,
     parameter integer NINPUT = 8,
@@ -1761,6 +2940,19 @@ module pfb_channelizer #(
     input  wire [31:0]          cfg_chan0,
     input  wire [15:0]          cfg_chan_count,
     input  wire [15:0]          cfg_time_count,
+    input  wire                 coeff_load_start,
+    input  wire                 coeff_commit,
+    input  wire                 coeff_abort,
+    input  wire                 coeff_write,
+    input  wire [3:0]           coeff_requested_taps,
+    input  wire [13:0]          coeff_index,
+    input  wire signed [17:0]   coeff_data,
+    input  wire [31:0]          coeff_id,
+    output wire [31:0]          coeff_status,
+    output wire [31:0]          coeff_loaded_count,
+    output wire [31:0]          coeff_active_id,
+    output wire [31:0]          coeff_active_checksum,
+    output wire [31:0]          coeff_error_count,
     input  wire [DATA_W-1:0]    s_axis_tdata,
     input  wire [63:0]          s_axis_sample0,
     input  wire                 s_axis_tvalid,
@@ -1790,7 +2982,63 @@ module pfb_channelizer #(
     output wire [15:0]          packet_time_count
 );
 
-`ifdef T510_STAGE27H_PRODUCTION_ONLY
+`ifdef T510_STAGE27J_PFB
+    feng_channelizer_4096_streaming_27j #(
+        .DATA_W(DATA_W),
+        .NINPUT(NINPUT),
+        .NCHAN(NCHAN)
+    ) u_feng_channelizer_4096 (
+        .clk(clk),
+        .rst_n(rst_n),
+        .enable(enable),
+        .clear(clear),
+        .cfg_taps(cfg_taps),
+        .cfg_fft_shift(cfg_fft_shift),
+        .cfg_chan0(cfg_chan0),
+        .cfg_chan_count(cfg_chan_count),
+        .cfg_time_count(cfg_time_count),
+        .coeff_load_start(coeff_load_start),
+        .coeff_commit(coeff_commit),
+        .coeff_abort(coeff_abort),
+        .coeff_write(coeff_write),
+        .coeff_requested_taps(coeff_requested_taps),
+        .coeff_index(coeff_index),
+        .coeff_data(coeff_data),
+        .coeff_id(coeff_id),
+        .coeff_status(coeff_status),
+        .coeff_loaded_count(coeff_loaded_count),
+        .coeff_active_id(coeff_active_id),
+        .coeff_active_checksum(coeff_active_checksum),
+        .coeff_error_count(coeff_error_count),
+        .s_axis_tdata(s_axis_tdata),
+        .s_axis_sample0(s_axis_sample0),
+        .s_axis_tvalid(s_axis_tvalid),
+        .s_axis_tready(s_axis_tready),
+        .m_axis_tdata(m_axis_tdata),
+        .m_axis_sample0(m_axis_sample0),
+        .m_axis_tvalid(m_axis_tvalid),
+        .m_axis_tready(m_axis_tready),
+        .status(status),
+        .frame_count(frame_count),
+        .overflow_count(overflow_count),
+        .data_halt_count(data_halt_count),
+        .xfft_event_count(xfft_event_count),
+        .tile_overflow_count(tile_overflow_count),
+        .xfft_tlast_unexpected_count(xfft_tlast_unexpected_count),
+        .xfft_tlast_missing_count(xfft_tlast_missing_count),
+        .xfft_fft_overflow_count(xfft_fft_overflow_count),
+        .xfft_data_out_halt_count(xfft_data_out_halt_count),
+        .xfft_status_halt_count(xfft_status_halt_count),
+        .capture_backpressure_count(capture_backpressure_count),
+        .frame_sample0_overflow_count(frame_sample0_overflow_count),
+        .input_fifo_level(input_fifo_level),
+        .peak_chan(peak_chan),
+        .peak_power(peak_power),
+        .packet_chan0(packet_chan0),
+        .packet_chan_count(packet_chan_count),
+        .packet_time_count(packet_time_count)
+    );
+`elsif T510_STAGE27H_PRODUCTION_ONLY
     feng_channelizer_4096_streaming_27h #(
         .DATA_W(DATA_W),
         .NINPUT(NINPUT),
@@ -1876,6 +3124,14 @@ module pfb_channelizer #(
         .packet_chan_count(packet_chan_count),
         .packet_time_count(packet_time_count)
     );
+`endif
+
+`ifndef T510_STAGE27J_PFB
+    assign coeff_status = 32'd0;
+    assign coeff_loaded_count = 32'd0;
+    assign coeff_active_id = 32'd0;
+    assign coeff_active_checksum = 32'd0;
+    assign coeff_error_count = 32'd0;
 `endif
 
 endmodule

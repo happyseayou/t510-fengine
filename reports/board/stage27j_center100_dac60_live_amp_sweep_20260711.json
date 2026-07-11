@@ -1,0 +1,1815 @@
+{
+  "classification": "STAGE27J_CENTER100_DAC60_LIVE_AMP_SWEEP",
+  "results": [
+    {
+      "amplitude": 0,
+      "derived": {
+        "p120_minus_main_db": -5.842271971744281,
+        "p120_minus_noise_db": 0.5208951492034837,
+        "p140_minus_main_db": -5.67898415993729,
+        "right_minus_main_db": -5.088061015867764
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 0,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 56581664,
+          "time_dropped_count": 0,
+          "time_packet_count": 56581746
+        },
+        "amplitude": 0,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 8192,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 56243671,
+          "time_dropped_count": 0,
+          "time_packet_count": 56243756
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 337993,
+          "time_dropped_count": 0,
+          "time_packet_count": 337990
+        },
+        "epoch": 2,
+        "tone": {
+          "amplitude": 0,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 58671443,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 30852596500,
+          "sample_rate_hz": 122880000,
+          "seq_no": 58671443,
+          "spec_status_flags": 1591
+        },
+        "main_around_60mhz": {
+          "bin": 2811,
+          "power_db": 12.22716453390618,
+          "rf_mhz": 61.45,
+          "signed_bin": -1285
+        },
+        "noise_median_db": 5.863997412958415,
+        "peak_around_120mhz": {
+          "bin": 665,
+          "power_db": 6.384892562161899,
+          "rf_mhz": 119.95,
+          "signed_bin": 665
+        },
+        "peak_around_140mhz": {
+          "bin": 1326,
+          "power_db": 6.54818037396889,
+          "rf_mhz": 139.78,
+          "signed_bin": 1326
+        },
+        "right_of_center_peak": {
+          "bin": 763,
+          "power_db": 7.139103518038416,
+          "rf_mhz": 122.89,
+          "signed_bin": 763
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 763,
+            "power_db": 7.139103518038416,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 1281,
+            "power_db": 6.938734477951237,
+            "rf_mhz": 138.43,
+            "signed_bin": 1281
+          },
+          {
+            "bin": 173,
+            "power_db": 6.894568567631541,
+            "rf_mhz": 105.19,
+            "signed_bin": 173
+          },
+          {
+            "bin": 207,
+            "power_db": 6.8574173350699175,
+            "rf_mhz": 106.21,
+            "signed_bin": 207
+          },
+          {
+            "bin": 66,
+            "power_db": 6.834973166108648,
+            "rf_mhz": 101.98,
+            "signed_bin": 66
+          },
+          {
+            "bin": 1025,
+            "power_db": 6.834973130828159,
+            "rf_mhz": 130.75,
+            "signed_bin": 1025
+          },
+          {
+            "bin": 120,
+            "power_db": 6.782147712459691,
+            "rf_mhz": 103.6,
+            "signed_bin": 120
+          },
+          {
+            "bin": 282,
+            "power_db": 6.744018125375692,
+            "rf_mhz": 108.46000000000001,
+            "signed_bin": 282
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 512,
+      "derived": {
+        "p120_minus_main_db": -36.768959365837844,
+        "p120_minus_noise_db": 22.296240385719955,
+        "p140_minus_main_db": -58.46431674515755,
+        "right_minus_main_db": -36.768959365837844
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 512,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 62420880,
+          "time_dropped_count": 0,
+          "time_packet_count": 62420965
+        },
+        "amplitude": 512,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 0,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 62082864,
+          "time_dropped_count": 0,
+          "time_packet_count": 62082949
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 338016,
+          "time_dropped_count": 0,
+          "time_packet_count": 338016
+        },
+        "epoch": 3,
+        "tone": {
+          "amplitude": 512,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 64542646,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 33858650900,
+          "sample_rate_hz": 122880000,
+          "seq_no": 64542646,
+          "spec_status_flags": 1655
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 64.9479167929695,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.882717041411695,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 28.17895742713165,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1363,
+          "power_db": 6.483600047811947,
+          "rf_mhz": 140.89,
+          "signed_bin": 1363
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 28.17895742713165,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 28.17895742713165,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 763,
+            "power_db": 7.297046167733534,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 257,
+            "power_db": 7.047223270367277,
+            "rf_mhz": 107.71,
+            "signed_bin": 257
+          },
+          {
+            "bin": 120,
+            "power_db": 6.857417320830896,
+            "rf_mhz": 103.6,
+            "signed_bin": 120
+          },
+          {
+            "bin": 776,
+            "power_db": 6.849948875398608,
+            "rf_mhz": 123.28,
+            "signed_bin": 776
+          },
+          {
+            "bin": 219,
+            "power_db": 6.789733782113356,
+            "rf_mhz": 106.57,
+            "signed_bin": 219
+          },
+          {
+            "bin": 897,
+            "power_db": 6.7516708579125195,
+            "rf_mhz": 126.91,
+            "signed_bin": 897
+          },
+          {
+            "bin": 42,
+            "power_db": 6.736351740836726,
+            "rf_mhz": 101.26,
+            "signed_bin": 42
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 1024,
+      "derived": {
+        "p120_minus_main_db": -44.61558759922875,
+        "p120_minus_noise_db": 20.479039796276595,
+        "p140_minus_main_db": -64.6333101829608,
+        "right_minus_main_db": -44.61558759922875
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 1024,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 68260666,
+          "time_dropped_count": 0,
+          "time_packet_count": 68260749
+        },
+        "amplitude": 1024,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 512,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 67922659,
+          "time_dropped_count": 0,
+          "time_packet_count": 67922746
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 338007,
+          "time_dropped_count": 0,
+          "time_packet_count": 338003
+        },
+        "epoch": 4,
+        "tone": {
+          "amplitude": 1024,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 70402680,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 36858987284,
+          "sample_rate_hz": 122880000,
+          "seq_no": 70402680,
+          "spec_status_flags": 1655
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 70.96799468404365,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.873367288538299,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 26.352407084814892,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1327,
+          "power_db": 6.3346845010828545,
+          "rf_mhz": 139.81,
+          "signed_bin": 1327
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 26.352407084814892,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 26.352407084814892,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 1147,
+            "power_db": 7.799570497249894,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          },
+          {
+            "bin": 763,
+            "power_db": 7.475412750483834,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 397,
+            "power_db": 7.2699872655664075,
+            "rf_mhz": 111.91,
+            "signed_bin": 397
+          },
+          {
+            "bin": 780,
+            "power_db": 7.068599598730362,
+            "rf_mhz": 123.4,
+            "signed_bin": 780
+          },
+          {
+            "bin": 177,
+            "power_db": 6.931404564839872,
+            "rf_mhz": 105.31,
+            "signed_bin": 177
+          },
+          {
+            "bin": 194,
+            "power_db": 6.916707659147877,
+            "rf_mhz": 105.82,
+            "signed_bin": 194
+          },
+          {
+            "bin": 258,
+            "power_db": 6.834973134582361,
+            "rf_mhz": 107.74,
+            "signed_bin": 258
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 2048,
+      "derived": {
+        "p120_minus_main_db": -54.73905871806343,
+        "p120_minus_noise_db": 16.342280118887608,
+        "p140_minus_main_db": -70.37599508524477,
+        "right_minus_main_db": -54.73905871806343
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 2048,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 74130048,
+          "time_dropped_count": 0,
+          "time_packet_count": 74130135
+        },
+        "amplitude": 2048,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 1024,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 73792065,
+          "time_dropped_count": 0,
+          "time_packet_count": 73792153
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 337983,
+          "time_dropped_count": 0,
+          "time_packet_count": 337982
+        },
+        "epoch": 5,
+        "tone": {
+          "amplitude": 2048,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 76273575,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 39864886036,
+          "sample_rate_hz": 122880000,
+          "seq_no": 76273575,
+          "spec_status_flags": 1591
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 76.9640558578527,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.882717020901659,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 22.224997139789266,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1312,
+          "power_db": 6.588060772607939,
+          "rf_mhz": 139.36,
+          "signed_bin": 1312
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 22.224997139789266,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 22.224997139789266,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 187,
+            "power_db": 11.406651234442261,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 1147,
+            "power_db": 8.962505537940261,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          },
+          {
+            "bin": 763,
+            "power_db": 7.187783938517642,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 257,
+            "power_db": 7.1669876580566205,
+            "rf_mhz": 107.71,
+            "signed_bin": 257
+          },
+          {
+            "bin": 121,
+            "power_db": 7.04722330806025,
+            "rf_mhz": 103.63,
+            "signed_bin": 121
+          },
+          {
+            "bin": 240,
+            "power_db": 6.916707647687348,
+            "rf_mhz": 107.2,
+            "signed_bin": 240
+          },
+          {
+            "bin": 1649,
+            "power_db": 6.8124122981915445,
+            "rf_mhz": 149.47,
+            "signed_bin": 1649
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 4096,
+      "derived": {
+        "p120_minus_main_db": -68.25021471968317,
+        "p120_minus_noise_db": 8.888456161166854,
+        "p140_minus_main_db": -76.4437075282949,
+        "right_minus_main_db": -68.25021471968317
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 4096,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 79988350,
+          "time_dropped_count": 0,
+          "time_packet_count": 79988431
+        },
+        "amplitude": 4096,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 2048,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 79650352,
+          "time_dropped_count": 0,
+          "time_packet_count": 79650437
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 337998,
+          "time_dropped_count": 0,
+          "time_packet_count": 337994
+        },
+        "epoch": 6,
+        "tone": {
+          "amplitude": 4096,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 82080481,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 42838024980,
+          "sample_rate_hz": 122880000,
+          "seq_no": 82080481,
+          "spec_status_flags": 1591
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 82.98386765916987,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.84519677831985,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 14.733652939486703,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1352,
+          "power_db": 6.540160130874975,
+          "rf_mhz": 140.56,
+          "signed_bin": 1352
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 14.733652939486703,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 14.733652939486703,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 187,
+            "power_db": 9.37434296605801,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 256,
+            "power_db": 7.125093999580918,
+            "rf_mhz": 107.68,
+            "signed_bin": 256
+          },
+          {
+            "bin": 389,
+            "power_db": 7.047223294250894,
+            "rf_mhz": 111.67,
+            "signed_bin": 389
+          },
+          {
+            "bin": 763,
+            "power_db": 7.047223277891149,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 1032,
+            "power_db": 6.81241237199921,
+            "rf_mhz": 130.96,
+            "signed_bin": 1032
+          },
+          {
+            "bin": 1627,
+            "power_db": 6.782147793962139,
+            "rf_mhz": 148.81,
+            "signed_bin": 1627
+          },
+          {
+            "bin": 17,
+            "power_db": 6.774548590969237,
+            "rf_mhz": 100.51,
+            "signed_bin": 17
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 8192,
+      "derived": {
+        "p120_minus_main_db": -67.49741069017117,
+        "p120_minus_noise_db": 15.684829387892202,
+        "p140_minus_main_db": -82.57402768462693,
+        "right_minus_main_db": -67.49741069017117
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 8192,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 85846316,
+          "time_dropped_count": 0,
+          "time_packet_count": 85846398
+        },
+        "amplitude": 8192,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 4096,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 85508320,
+          "time_dropped_count": 0,
+          "time_packet_count": 85508400
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 337996,
+          "time_dropped_count": 0,
+          "time_packet_count": 337998
+        },
+        "epoch": 7,
+        "tone": {
+          "amplitude": 8192,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 87966716,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 45851771668,
+          "sample_rate_hz": 122880000,
+          "seq_no": 87966716,
+          "spec_status_flags": 1655
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 89.0085544200444,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.826314341981041,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 21.511143729873243,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1339,
+          "power_db": 6.434526735417472,
+          "rf_mhz": 140.17000000000002,
+          "signed_bin": 1339
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 21.511143729873243,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 21.511143729873243,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 587,
+            "power_db": 10.565872619804946,
+            "rf_mhz": 117.61,
+            "signed_bin": 587
+          },
+          {
+            "bin": 747,
+            "power_db": 10.086001667701936,
+            "rf_mhz": 122.41,
+            "signed_bin": 747
+          },
+          {
+            "bin": 1067,
+            "power_db": 8.902346561911001,
+            "rf_mhz": 132.01,
+            "signed_bin": 1067
+          },
+          {
+            "bin": 267,
+            "power_db": 8.239087375798636,
+            "rf_mhz": 108.01,
+            "signed_bin": 267
+          },
+          {
+            "bin": 763,
+            "power_db": 7.7268834885421995,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 107,
+            "power_db": 7.390446407044333,
+            "rf_mhz": 103.21,
+            "signed_bin": 107
+          },
+          {
+            "bin": 1147,
+            "power_db": 7.08987122691307,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 4096,
+      "derived": {
+        "p120_minus_main_db": -68.83153326780095,
+        "p120_minus_noise_db": 8.279149270669388,
+        "p140_minus_main_db": -76.34076467797713,
+        "right_minus_main_db": -68.83153326780095
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 4096,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 91704290,
+          "time_dropped_count": 0,
+          "time_packet_count": 91704377
+        },
+        "amplitude": 4096,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 8192,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 91366304,
+          "time_dropped_count": 0,
+          "time_packet_count": 91366391
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 337986,
+          "time_dropped_count": 0,
+          "time_packet_count": 337986
+        },
+        "epoch": 8,
+        "tone": {
+          "amplitude": 4096,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 93829066,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 48853295892,
+          "sample_rate_hz": 122880000,
+          "seq_no": 93829066,
+          "spec_status_flags": 1655
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 82.98404986400902,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.873367325538679,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 14.152516596208066,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1352,
+          "power_db": 6.643285186031886,
+          "rf_mhz": 140.56,
+          "signed_bin": 1352
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 14.152516596208066,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 14.152516596208066,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 187,
+            "power_db": 8.883667226708612,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 587,
+            "power_db": 7.323937530427591,
+            "rf_mhz": 117.61,
+            "signed_bin": 587
+          },
+          {
+            "bin": 173,
+            "power_db": 7.160033401147916,
+            "rf_mhz": 105.19,
+            "signed_bin": 173
+          },
+          {
+            "bin": 107,
+            "power_db": 7.146091350571987,
+            "rf_mhz": 103.21,
+            "signed_bin": 107
+          },
+          {
+            "bin": 763,
+            "power_db": 7.032913794664503,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 257,
+            "power_db": 6.989700008251992,
+            "rf_mhz": 107.71,
+            "signed_bin": 257
+          },
+          {
+            "bin": 1707,
+            "power_db": 6.894568526365403,
+            "rf_mhz": 151.21,
+            "signed_bin": 1707
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 2048,
+      "derived": {
+        "p120_minus_main_db": -54.61686931310092,
+        "p120_minus_noise_db": 16.484759313501335,
+        "p140_minus_main_db": -70.39347347201578,
+        "right_minus_main_db": -54.61686931310092
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 2048,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 97551856,
+          "time_dropped_count": 0,
+          "time_packet_count": 97551943
+        },
+        "amplitude": 2048,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 4096,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 97213892,
+          "time_dropped_count": 0,
+          "time_packet_count": 97213978
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 337964,
+          "time_dropped_count": 0,
+          "time_packet_count": 337965
+        },
+        "epoch": 9,
+        "tone": {
+          "amplitude": 2048,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 99693887,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 51856081684,
+          "sample_rate_hz": 122880000,
+          "seq_no": 99693887,
+          "spec_status_flags": 1655
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 76.96562601435326,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.8639973877510005,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 22.348756701252338,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1335,
+          "power_db": 6.572152542337474,
+          "rf_mhz": 140.05,
+          "signed_bin": 1335
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 22.348756701252338,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 22.348756701252338,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 187,
+            "power_db": 10.7524271918793,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 1147,
+            "power_db": 9.735126791731004,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          },
+          {
+            "bin": 763,
+            "power_db": 7.646741687078204,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 257,
+            "power_db": 6.989699935616729,
+            "rf_mhz": 107.71,
+            "signed_bin": 257
+          },
+          {
+            "bin": 174,
+            "power_db": 6.975199335888521,
+            "rf_mhz": 105.22,
+            "signed_bin": 174
+          },
+          {
+            "bin": 154,
+            "power_db": 6.960650081784843,
+            "rf_mhz": 104.62,
+            "signed_bin": 154
+          },
+          {
+            "bin": 98,
+            "power_db": 6.713271388267151,
+            "rf_mhz": 102.94,
+            "signed_bin": 98
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 1024,
+      "derived": {
+        "p120_minus_main_db": -44.5454041067527,
+        "p120_minus_noise_db": 20.539619155306397,
+        "p140_minus_main_db": -64.43561516263206,
+        "right_minus_main_db": -44.5454041067527
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 1024,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 103393184,
+          "time_dropped_count": 0,
+          "time_packet_count": 103393271
+        },
+        "amplitude": 1024,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 2048,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 103055168,
+          "time_dropped_count": 0,
+          "time_packet_count": 103055249
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 338016,
+          "time_dropped_count": 0,
+          "time_packet_count": 338022
+        },
+        "epoch": 10,
+        "tone": {
+          "amplitude": 1024,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 105402541,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 54778913556,
+          "sample_rate_hz": 122880000,
+          "seq_no": 105402541,
+          "spec_status_flags": 1591
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 70.96774026998473,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.882717007925633,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 26.422336163232032,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1355,
+          "power_db": 6.532125107352665,
+          "rf_mhz": 140.65,
+          "signed_bin": 1355
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 26.422336163232032,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 26.422336163232032,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 1147,
+            "power_db": 8.178957518040042,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          },
+          {
+            "bin": 763,
+            "power_db": 7.9297502001436415,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 187,
+            "power_db": 7.370600543851566,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 1088,
+            "power_db": 7.01136061338117,
+            "rf_mhz": 132.64,
+            "signed_bin": 1088
+          },
+          {
+            "bin": 79,
+            "power_db": 7.0041523522329925,
+            "rf_mhz": 102.37,
+            "signed_bin": 79
+          },
+          {
+            "bin": 241,
+            "power_db": 6.842467458137142,
+            "rf_mhz": 107.23,
+            "signed_bin": 241
+          },
+          {
+            "bin": 270,
+            "power_db": 6.827465848884699,
+            "rf_mhz": 108.1,
+            "signed_bin": 270
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 0,
+      "derived": {
+        "p120_minus_main_db": -5.537553001287908,
+        "p120_minus_noise_db": 0.774506688471873,
+        "p140_minus_main_db": -5.657421109134466,
+        "right_minus_main_db": -5.074464205158356
+      },
+      "remote": {
+        "after": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 0,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 109247744,
+          "time_dropped_count": 0,
+          "time_packet_count": 109247831
+        },
+        "amplitude": 0,
+        "before": {
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 1024,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 108909744,
+          "time_dropped_count": 0,
+          "time_packet_count": 108909829
+        },
+        "deltas": {
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 338000,
+          "time_dropped_count": 0,
+          "time_packet_count": 338002
+        },
+        "epoch": 11,
+        "tone": {
+          "amplitude": 0,
+          "dac_sample_rate_hz": 245760000.0,
+          "enable_mask": 255,
+          "freq_hz": 0.0,
+          "phase0_by_channel": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "phase_deg_per_channel": 0.0,
+          "phase_offset_deg": 0.0,
+          "phase_step": 0
+        }
+      },
+      "spectrum": {
+        "frame_count": 15,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "frame_id": 111330525,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "pfb_taps": 4,
+          "sample0": 57814041364,
+          "sample_rate_hz": 122880000,
+          "seq_no": 111330525,
+          "spec_status_flags": 1591
+        },
+        "main_around_60mhz": {
+          "bin": 2811,
+          "power_db": 12.157256485258861,
+          "rf_mhz": 61.45,
+          "signed_bin": -1285
+        },
+        "noise_median_db": 5.84519679549908,
+        "peak_around_120mhz": {
+          "bin": 662,
+          "power_db": 6.6197034839709525,
+          "rf_mhz": 119.86,
+          "signed_bin": 662
+        },
+        "peak_around_140mhz": {
+          "bin": 1362,
+          "power_db": 6.499835376124395,
+          "rf_mhz": 140.86,
+          "signed_bin": 1362
+        },
+        "right_of_center_peak": {
+          "bin": 763,
+          "power_db": 7.082792280100505,
+          "rf_mhz": 122.89,
+          "signed_bin": 763
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 763,
+            "power_db": 7.082792280100505,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 257,
+            "power_db": 6.996932172651213,
+            "rf_mhz": 107.71,
+            "signed_bin": 257
+          },
+          {
+            "bin": 147,
+            "power_db": 6.849948824747266,
+            "rf_mhz": 104.41,
+            "signed_bin": 147
+          },
+          {
+            "bin": 18,
+            "power_db": 6.804865939305205,
+            "rf_mhz": 100.54,
+            "signed_bin": 18
+          },
+          {
+            "bin": 56,
+            "power_db": 6.774548593603342,
+            "rf_mhz": 101.68,
+            "signed_bin": 56
+          },
+          {
+            "bin": 1259,
+            "power_db": 6.774548580612695,
+            "rf_mhz": 137.77,
+            "signed_bin": 1259
+          },
+          {
+            "bin": 704,
+            "power_db": 6.774548551462427,
+            "rf_mhz": 121.12,
+            "signed_bin": 704
+          },
+          {
+            "bin": 196,
+            "power_db": 6.766936056255508,
+            "rf_mhz": 105.88,
+            "signed_bin": 196
+          }
+        ]
+      }
+    }
+  ]
+}

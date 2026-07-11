@@ -23,6 +23,7 @@ pub const SPEC_BLOCK_CHANS_27H: u16 = 256;
 pub const SPEC_TIME_COUNT_27H: u16 = 1;
 pub const SPEC_FFT_ONLY_FLAG: u32 = 1 << 8;
 pub const SPEC_ANTI_ALIAS_100M_FLAG: u32 = 1 << 9;
+pub const SPEC_PFB_ACTIVE_FLAG: u32 = 1 << 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BandwidthMode {
@@ -386,11 +387,15 @@ pub fn is_supported_spec_layout(header: &T510Header) -> bool {
         && header.chan_count == SPEC_BLOCK_CHANS_27H
         && header.time_count == SPEC_TIME_COUNT_27H
         && header.pfb_taps == 0;
+    let stage27j = header.block_count == SPEC_BLOCK_COUNT_27H
+        && header.chan_count == SPEC_BLOCK_CHANS_27H
+        && header.time_count == SPEC_TIME_COUNT_27H
+        && header.pfb_taps >= 4;
     let stage27g = header.block_count == SPEC_BLOCK_COUNT_27F
         && header.chan_count == SPEC_BLOCK_CHANS_27F
         && header.time_count == SPEC_TIME_COUNT_27F
         && header.pfb_taps >= 4;
-    stage27h || stage27g
+    stage27h || stage27j || stage27g
 }
 
 pub fn validate_spec_header(header: &T510Header, udp_payload_len: usize) -> Result<(), String> {

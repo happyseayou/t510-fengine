@@ -282,6 +282,60 @@ module tb_t510_fengine_top_smoke;
         end
     endtask
 
+`ifdef T510_STAGE27J_PFB
+    task automatic load_stage27j_unity_pfb_coefficients;
+        integer tap;
+        integer phase;
+        reg signed [17:0] coeff;
+        reg [31:0] rd;
+        integer timeout;
+        begin
+            axi_write(16'h0968, 32'd0);
+            axi_write(16'h0974, 32'h27a4_0001);
+            axi_write(16'h0960, 32'h0000_0049);
+            for (tap = 0; tap < 4; tap = tap + 1) begin
+                for (phase = 0; phase < 4096; phase = phase + 1) begin
+                    if (tap == 2) begin
+                        coeff = 18'sd1;
+                    end else if (tap == 3) begin
+                        coeff = 18'sd131071;
+                    end else begin
+                        coeff = 18'sd0;
+                    end
+                    axi_write(16'h096c, {{14{coeff[17]}}, coeff});
+                end
+            end
+
+            timeout = 0;
+            rd = 32'd0;
+            while (((rd & 32'h0000_0004) == 32'd0) && (timeout < 80)) begin
+                axi_read(16'h0964, rd);
+                timeout = timeout + 1;
+            end
+            `TB_CHECK(rd[2], "top 27j PFB shadow coefficient bank full")
+            axi_read(16'h0970, rd);
+            `TB_CHECK_EQ(rd, 32'd16384, "top 27j PFB coefficient load count")
+
+            axi_write(16'h0960, 32'h0000_0042);
+            timeout = 0;
+            rd = 32'd0;
+            while ((((rd & 32'h0000_0f01) != 32'h0000_0401)) && (timeout < 80)) begin
+                axi_read(16'h0964, rd);
+                timeout = timeout + 1;
+            end
+            `TB_CHECK(rd[0], "top 27j PFB active coefficient bank valid")
+            `TB_CHECK_EQ(rd[11:8], 4'd4, "top 27j PFB active taps")
+            `TB_CHECK(!rd[5], "top 27j PFB coefficient command error clear")
+            axi_read(16'h0974, rd);
+            `TB_CHECK_EQ(rd, 32'h27a4_0001, "top 27j PFB active coefficient id")
+            axi_read(16'h0978, rd);
+            `TB_CHECK_EQ(rd, 32'h2000_0000, "top 27j PFB active coefficient checksum")
+            axi_read(16'h097c, rd);
+            `TB_CHECK_EQ(rd, 32'd0, "top 27j PFB coefficient error count")
+        end
+    endtask
+`endif
+
     task automatic wait_for_state(input [3:0] expected_state);
         reg [31:0] rd;
         integer timeout;
@@ -570,10 +624,18 @@ module tb_t510_fengine_top_smoke;
             `TB_CHECK_EQ(beat1[(120-64)*8 +: 8], 8'h01, "top production SPEC product byte0")
             `TB_CHECK_EQ(beat1[(121-64)*8 +: 8], 8'hf1, "top production SPEC product byte1")
             spec_status_byte1 = beat1[(123-64)*8 +: 8];
+`ifdef T510_STAGE27J_PFB
+            `TB_CHECK((spec_status_byte1 & 8'h01) == 8'd0, "top production SPEC FFT-only status bit cleared")
+            `TB_CHECK((spec_status_byte1 & 8'h02) != 8'd0, "top production SPEC AA100 status bit")
+            `TB_CHECK((spec_status_byte1 & 8'h04) != 8'd0, "top production SPEC PFB-active status bit")
+            `TB_CHECK_EQ(beat2[0*8 +: 8], 8'h04, "top production SPEC taps low")
+            `TB_CHECK_EQ(beat2[1*8 +: 8], 8'h00, "top production SPEC taps high")
+`else
             `TB_CHECK((spec_status_byte1 & 8'h01) != 8'd0, "top production SPEC FFT-only status bit")
             `TB_CHECK((spec_status_byte1 & 8'h02) != 8'd0, "top production SPEC XFFT configured status bit")
             `TB_CHECK_EQ(beat2[0*8 +: 8], 8'h00, "top production SPEC taps low")
             `TB_CHECK_EQ(beat2[1*8 +: 8], 8'h00, "top production SPEC taps high")
+`endif
         end
     endtask
 
@@ -589,6 +651,9 @@ module tb_t510_fengine_top_smoke;
             axi_write(32'h0000_d010, 32'd100_000_000);
             axi_write(32'h0000_d014, 32'd2);
             axi_write(32'h0000_d018, 32'd31_457);
+`ifdef T510_STAGE27J_PFB
+            load_stage27j_unity_pfb_coefficients();
+`endif
             axi_write(16'h0900, 32'h0000_0003);
             axi_write(16'h000c, 32'h0000_0001);
             wait_for_state(4'd6);

@@ -104,11 +104,11 @@
         <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_zynq_ultra_ps_e_0_0_10/t510_rfdc_bd_zynq_ultra_ps_e_0_0.xci">
           <Proxy FileSetName="t510_rfdc_bd_zynq_ultra_ps_e_0_0"/>
         </CompFileExtendedInfo>
-        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_xbar_0_10/t510_rfdc_bd_xbar_0.xci">
-          <Proxy FileSetName="t510_rfdc_bd_xbar_0"/>
-        </CompFileExtendedInfo>
         <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_rst_ps8_0_100M_0_10/t510_rfdc_bd_rst_ps8_0_100M_0.xci">
           <Proxy FileSetName="t510_rfdc_bd_rst_ps8_0_100M_0"/>
+        </CompFileExtendedInfo>
+        <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_xbar_0_10/t510_rfdc_bd_xbar_0.xci">
+          <Proxy FileSetName="t510_rfdc_bd_xbar_0"/>
         </CompFileExtendedInfo>
         <CompFileExtendedInfo CompFileName="t510_rfdc_bd.bd" FileRelPathName="ip/t510_rfdc_bd_auto_pc_0_8/t510_rfdc_bd_auto_pc_0.xci">
           <Proxy FileSetName="t510_rfdc_bd_auto_pc_0"/>
@@ -306,6 +306,7 @@
         <Option Name="TopModule" Val="t510_fengine_board_top"/>
         <Define Name="T510_STAGE27H_PRODUCTION_ONLY"/>
         <Define Name="T510_STAGE27I_ANTI_ALIAS"/>
+        <Define Name="T510_STAGE27J_PFB"/>
       </Config>
     </FileSet>
     <FileSet Name="constrs_1" Type="Constrs" RelSrcDir="$PSRCDIR/constrs_1" RelGenDir="$PGENDIR/constrs_1">
@@ -692,13 +693,15 @@
   <Runs Version="1" Minor="19">
     <Run Id="synth_1" Type="Ft3:Synth" SrcSet="sources_1" Part="xczu47dr-ffve1156-2-i" ConstrsSet="constrs_1" Description="Higher performance designs, resource sharing is turned off, the global fanout guide is set to a lower number, FSM extraction forced to one-hot, LUT combining is disabled, equivalent registers are preserved, SRL are inferred  with a larger threshold" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" State="current" Dir="$PRUNDIR/synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Flow_PerfOptimized_high" Flow="Vivado Synthesis 2022"/>
+        <StratHandle Name="Flow_PerfOptimized_high" Flow="Vivado Synthesis 2022">
+          <Desc>Higher performance designs, resource sharing is turned off, the global fanout guide is set to a lower number, FSM extraction forced to one-hot, LUT combining is disabled, equivalent registers are preserved, SRL are inferred  with a larger threshold</Desc>
+        </StratHandle>
         <Step Id="synth_design" PreStepTclHook="$PPRDIR/scripts/vivado_msg_policy.tcl">
-          <Option Id="ResourceSharing">2</Option>
-          <Option Id="Directive">3</Option>
           <Option Id="KeepEquivalentRegisters">1</Option>
-          <Option Id="ShregMinSize">5</Option>
           <Option Id="NoCombineLuts">1</Option>
+          <Option Id="Directive">3</Option>
+          <Option Id="ResourceSharing">2</Option>
+          <Option Id="ShregMinSize">5</Option>
           <Option Id="FsmExtraction">1</Option>
         </Step>
       </Strategy>
@@ -789,7 +792,9 @@
     </Run>
     <Run Id="t510_fengine_xfft_4096_lane_synth_1" Type="Ft3:Synth" SrcSet="t510_fengine_xfft_4096_lane" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_fengine_xfft_4096_lane" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/t510_fengine_xfft_4096_lane_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_fengine_xfft_4096_lane_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_fengine_xfft_4096_lane_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
+          <Desc>Vivado Synthesis Defaults</Desc>
+        </StratHandle>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -799,7 +804,9 @@
     </Run>
     <Run Id="impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="constrs_1" Description="Uses multiple algorithms for optimization, placement, and routing to get potentially better results." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" State="current" Dir="$PRUNDIR/impl_1" SynthRun="synth_1" IncludeInArchive="true" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Performance_Explore" Flow="Vivado Implementation 2022"/>
+        <StratHandle Name="Performance_Explore" Flow="Vivado Implementation 2022">
+          <Desc>Uses multiple algorithms for optimization, placement, and routing to get potentially better results.</Desc>
+        </StratHandle>
         <Step Id="init_design"/>
         <Step Id="opt_design">
           <Option Id="Directive">0</Option>
@@ -961,7 +968,9 @@
     </Run>
     <Run Id="t510_fengine_xfft_4096_lane_impl_1" Type="Ft2:EntireDesign" Part="xczu47dr-ffve1156-2-i" ConstrsSet="t510_fengine_xfft_4096_lane" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="t510_fengine_xfft_4096_lane_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/t510_fengine_xfft_4096_lane_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/t510_fengine_xfft_4096_lane_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
+          <Desc>Default settings for Implementation.</Desc>
+        </StratHandle>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>

@@ -21,6 +21,11 @@ module tb_feng_ctrl_axi;
 `else
     localparam bit TB_RAW_WITNESS_DIAGNOSTIC = 1'b0;
 `endif
+`ifdef T510_STAGE27J_PFB
+    localparam bit TB_PRODUCTION_27J_PFB = 1'b1;
+`else
+    localparam bit TB_PRODUCTION_27J_PFB = 1'b0;
+`endif
 
     logic [31:0] s_axi_awaddr = 32'd0;
     logic        s_axi_awvalid = 1'b0;
@@ -146,6 +151,11 @@ module tb_feng_ctrl_axi;
     logic [31:0]  pfb_input_fifo_level = 32'd0;
     logic [31:0]  pfb_peak_chan = 32'd0;
     logic [31:0]  pfb_peak_power = 32'd0;
+    logic [31:0]  pfb_coeff_status = 32'h0000_0401;
+    logic [31:0]  pfb_coeff_loaded_count = 32'd16384;
+    logic [31:0]  pfb_coeff_active_id = 32'h27a4_0001;
+    logic [31:0]  pfb_coeff_active_checksum = 32'd0;
+    logic [31:0]  pfb_coeff_error_count = 32'd0;
     logic [31:0]  time_ddr_ring_status = 32'd0;
     logic [31:0]  time_ddr_ring_occupancy = 32'd0;
     logic [31:0]  time_ddr_ring_write_count = 32'd0;
@@ -175,6 +185,14 @@ module tb_feng_ctrl_axi;
     wire [31:0] pfb_chan0;
     wire [15:0] pfb_chan_count;
     wire [15:0] pfb_time_count;
+    wire        pfb_coeff_load_start_pulse;
+    wire        pfb_coeff_commit_pulse;
+    wire        pfb_coeff_abort_pulse;
+    wire        pfb_coeff_write_pulse;
+    wire [3:0]  pfb_coeff_requested_taps;
+    wire [13:0] pfb_coeff_index;
+    wire signed [17:0] pfb_coeff_data;
+    wire [31:0] pfb_coeff_id;
     wire [31:0] chan_split;
     wire [31:0] src_ip;
     wire [31:0] dgx_a_ip;
@@ -264,6 +282,7 @@ module tb_feng_ctrl_axi;
         .N_TX_ENDPOINTS(TB_TX_ENDPOINTS),
         .N_SPEC_ROUTES(TB_SPEC_ROUTES),
         .PRODUCTION_27H(TB_PRODUCTION_27H),
+        .PRODUCTION_27J_PFB(TB_PRODUCTION_27J_PFB),
         .RAW_WITNESS_DIAGNOSTIC(TB_RAW_WITNESS_DIAGNOSTIC)
     ) dut (
         .s_axi_aclk(clk),
@@ -408,6 +427,11 @@ module tb_feng_ctrl_axi;
         .pfb_input_fifo_level(pfb_input_fifo_level),
         .pfb_peak_chan(pfb_peak_chan),
         .pfb_peak_power(pfb_peak_power),
+        .pfb_coeff_status(pfb_coeff_status),
+        .pfb_coeff_loaded_count(pfb_coeff_loaded_count),
+        .pfb_coeff_active_id(pfb_coeff_active_id),
+        .pfb_coeff_active_checksum(pfb_coeff_active_checksum),
+        .pfb_coeff_error_count(pfb_coeff_error_count),
         .science_aa100_active(science_aa100_active_tb),
         .science_aa100_primed(science_aa100_primed_tb),
         .science_aa100_coeff_version(32'hAA10_0041),
@@ -469,6 +493,14 @@ module tb_feng_ctrl_axi;
         .pfb_chan0(pfb_chan0),
         .pfb_chan_count(pfb_chan_count),
         .pfb_time_count(pfb_time_count),
+        .pfb_coeff_load_start_pulse(pfb_coeff_load_start_pulse),
+        .pfb_coeff_commit_pulse(pfb_coeff_commit_pulse),
+        .pfb_coeff_abort_pulse(pfb_coeff_abort_pulse),
+        .pfb_coeff_write_pulse(pfb_coeff_write_pulse),
+        .pfb_coeff_requested_taps(pfb_coeff_requested_taps),
+        .pfb_coeff_index(pfb_coeff_index),
+        .pfb_coeff_data(pfb_coeff_data),
+        .pfb_coeff_id(pfb_coeff_id),
         .chan_split(chan_split),
         .src_ip(src_ip),
         .dgx_a_ip(dgx_a_ip),
@@ -969,7 +1001,9 @@ module tb_feng_ctrl_axi;
         reset_dut();
 
         axi_read(16'h0000, rd);
-`ifdef T510_STAGE27I_ANTI_ALIAS
+`ifdef T510_STAGE27J_PFB
+        `TB_CHECK_EQ(rd, 32'h0001_002c, "CORE_VERSION Stage 27j PFB candidate")
+`elsif T510_STAGE27I_ANTI_ALIAS
         `TB_CHECK_EQ(rd, 32'h0001_002b, "CORE_VERSION 100MHz anti-alias candidate")
 `else
         if (TB_RAW_WITNESS_DIAGNOSTIC) begin
@@ -989,17 +1023,51 @@ module tb_feng_ctrl_axi;
         axi_read(16'h0908, rd);
         `TB_CHECK_EQ(rd, 32'd4096, "default PFB nchan")
         axi_read(16'h090c, rd);
-        `TB_CHECK_EQ(rd, 32'd0, "default PFB taps")
+        if (TB_PRODUCTION_27J_PFB) begin
+            `TB_CHECK_EQ(rd, 32'd4, "default Stage 27j PFB taps")
+        end else begin
+            `TB_CHECK_EQ(rd, 32'd0, "default PFB taps")
+        end
         axi_write(16'h090c, 32'd4);
         axi_read(16'h090c, rd);
-        if (TB_PRODUCTION_27H) begin
+        if (TB_PRODUCTION_27J_PFB) begin
+            `TB_CHECK_EQ(rd, 32'd4, "Stage 27j production keeps 4 PFB taps")
+        end else if (TB_PRODUCTION_27H) begin
             `TB_CHECK_EQ(rd, 32'd0, "production FFT-only clamps PFB taps")
         end else begin
             `TB_CHECK_EQ(rd, 32'd4, "PFB taps nonzero write readback")
         end
         axi_write(16'h090c, 32'd0);
         axi_read(16'h090c, rd);
-        `TB_CHECK_EQ(rd, 32'd0, "PFB taps zero write readback for FFT-only")
+        if (TB_PRODUCTION_27J_PFB) begin
+            `TB_CHECK_EQ(rd, 32'd4, "Stage 27j production rejects taps=0")
+        end else begin
+            `TB_CHECK_EQ(rd, 32'd0, "PFB taps zero write readback for FFT-only")
+        end
+        if (TB_PRODUCTION_27J_PFB) begin
+            axi_read(16'h0960, rd);
+            `TB_CHECK_EQ(rd, 32'h0000_0040, "Stage 27j default PFB coeff control")
+            axi_write(16'h0968, 32'h0000_1234);
+            axi_read(16'h0968, rd);
+            `TB_CHECK_EQ(rd, 32'h0000_1234, "Stage 27j PFB coeff index readback")
+            axi_write(16'h096c, 32'h0001_ffff);
+            axi_read(16'h096c, rd);
+            `TB_CHECK_EQ(rd, 32'h0001_ffff, "Stage 27j PFB coeff data readback")
+            axi_write(16'h0960, 32'h0000_0048);
+            axi_write(16'h0968, 32'h0000_1234);
+            axi_write(16'h096c, 32'h0000_1111);
+            `TB_CHECK_EQ(pfb_coeff_index, 14'h1234, "Stage 27j coeff write pulse keeps current payload index")
+            `TB_CHECK_EQ(pfb_coeff_data, 18'h01111, "Stage 27j coeff write pulse keeps current payload data")
+            axi_read(16'h0968, rd);
+            `TB_CHECK_EQ(rd, 32'h0000_1235, "Stage 27j coeff auto-increment advances next MMIO index")
+            axi_write(16'h096c, 32'h0000_2222);
+            `TB_CHECK_EQ(pfb_coeff_index, 14'h1235, "Stage 27j next coeff payload uses incremented index")
+            `TB_CHECK_EQ(pfb_coeff_data, 18'h02222, "Stage 27j next coeff payload uses new data")
+            axi_read(16'h0968, rd);
+            `TB_CHECK_EQ(rd, 32'h0000_1236, "Stage 27j coeff auto-increment remains monotonic")
+            axi_read(16'h0974, rd);
+            `TB_CHECK_EQ(rd, pfb_coeff_active_id, "Stage 27j PFB active coeff id status")
+        end
         axi_read(16'h0918, rd);
         `TB_CHECK_EQ(rd, 32'd256, "default PFB channel count")
         axi_read(16'h091c, rd);

@@ -154,6 +154,11 @@ module t510_fengine_top (
     localparam integer TX_SPEC_ROUTES = 64;
     localparam bit CTRL_PRODUCTION_27H = 1'b0;
 `endif
+`ifdef T510_STAGE27J_PFB
+    localparam bit CTRL_PRODUCTION_27J_PFB = 1'b1;
+`else
+    localparam bit CTRL_PRODUCTION_27J_PFB = 1'b0;
+`endif
 `ifdef T510_STAGE27I_RAW_WITNESS
     localparam bit RFDC_RAW_WITNESS_COMPILED = 1'b1;
 `else
@@ -188,6 +193,14 @@ module t510_fengine_top (
     wire [31:0] ctrl_pfb_chan0;
     wire [15:0] ctrl_pfb_chan_count;
     wire [15:0] ctrl_pfb_time_count;
+    wire        ctrl_pfb_coeff_load_start_pulse;
+    wire        ctrl_pfb_coeff_commit_pulse;
+    wire        ctrl_pfb_coeff_abort_pulse;
+    wire        ctrl_pfb_coeff_write_pulse;
+    wire [3:0]  ctrl_pfb_coeff_requested_taps;
+    wire [13:0] ctrl_pfb_coeff_index;
+    wire signed [17:0] ctrl_pfb_coeff_data;
+    wire [31:0] ctrl_pfb_coeff_id;
     wire [31:0] ctrl_chan_split;
     wire [31:0] ctrl_src_ip;
     wire [31:0] ctrl_dgx_a_ip;
@@ -340,12 +353,20 @@ module t510_fengine_top (
     logic        ctrl_stop_toggle;
     logic        ctrl_soft_reset_toggle;
     logic        ctrl_pfb_clear_toggle;
+    logic        ctrl_pfb_coeff_load_start_toggle;
+    logic        ctrl_pfb_coeff_commit_toggle;
+    logic        ctrl_pfb_coeff_abort_toggle;
+    logic        ctrl_pfb_coeff_write_toggle;
     logic        ctrl_tx_clear_toggle;
     logic        ctrl_time_ddr_ring_clear_toggle;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  soft_epoch_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  stop_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  soft_reset_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_clear_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_coeff_load_start_toggle_cmac_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_coeff_commit_toggle_cmac_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_coeff_abort_toggle_cmac_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_coeff_write_toggle_cmac_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_cmac_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  time_ddr_ring_clear_toggle_cmac_sync;
@@ -354,6 +375,10 @@ module t510_fengine_top (
     logic        stop_toggle_seen;
     logic        soft_reset_toggle_seen;
     logic        pfb_clear_toggle_seen;
+    logic        pfb_coeff_load_start_toggle_cmac_seen;
+    logic        pfb_coeff_commit_toggle_cmac_seen;
+    logic        pfb_coeff_abort_toggle_cmac_seen;
+    logic        pfb_coeff_write_toggle_cmac_seen;
     logic        tx_clear_toggle_seen;
     logic        tx_clear_toggle_cmac_seen;
     logic        time_ddr_ring_clear_toggle_cmac_seen;
@@ -364,6 +389,10 @@ module t510_fengine_top (
     wire         stop_pulse;
     wire         soft_reset_pulse;
     wire         pfb_clear_pulse;
+    wire         pfb_coeff_load_start_pulse_cmac;
+    wire         pfb_coeff_commit_pulse_cmac;
+    wire         pfb_coeff_abort_pulse_cmac;
+    wire         pfb_coeff_write_pulse_cmac;
     wire         tx_clear_pulse;
     wire         tx_clear_pulse_cmac;
     wire         time_ddr_ring_clear_pulse_cmac;
@@ -485,6 +514,10 @@ module t510_fengine_top (
     wire [63:0]  spec_feng_cmac_sample0;
     wire         spec_feng_cmac_tvalid;
     wire         spec_feng_cmac_tready;
+    wire [SCIENCE_DATA_W-1:0] spec_feng_cdc_tdata;
+    wire [63:0]  spec_feng_cdc_sample0;
+    wire         spec_feng_cdc_tvalid;
+    wire         spec_feng_cdc_tready;
     wire         spec_feng_input_cdc_ready;
     wire         spec_feng_cmac_fifo_full;
     wire         spec_feng_cmac_fifo_empty;
@@ -522,6 +555,11 @@ module t510_fengine_top (
     wire [31:0] pfb_input_fifo_level;
     wire [31:0] pfb_peak_chan;
     wire [31:0] pfb_peak_power;
+    wire [31:0] pfb_coeff_status;
+    wire [31:0] pfb_coeff_loaded_count;
+    wire [31:0] pfb_coeff_active_id;
+    wire [31:0] pfb_coeff_active_checksum;
+    wire [31:0] pfb_coeff_error_count;
     wire [31:0] pfb_packet_chan0;
     wire [15:0] pfb_packet_chan_count;
     wire [15:0] pfb_packet_time_count;
@@ -765,8 +803,18 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic spec_enable_cmac;
     (* ASYNC_REG = "TRUE" *) logic pfb_enable_cmac_meta;
     (* ASYNC_REG = "TRUE" *) logic pfb_enable_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] pfb_taps_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [15:0] pfb_taps_cmac;
     (* ASYNC_REG = "TRUE" *) logic [15:0] pfb_fft_shift_cmac_meta;
     (* ASYNC_REG = "TRUE" *) logic [15:0] pfb_fft_shift_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [3:0]  pfb_coeff_requested_taps_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [3:0]  pfb_coeff_requested_taps_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [13:0] pfb_coeff_index_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [13:0] pfb_coeff_index_cmac;
+    (* ASYNC_REG = "TRUE" *) logic signed [17:0] pfb_coeff_data_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic signed [17:0] pfb_coeff_data_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] pfb_coeff_id_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] pfb_coeff_id_cmac;
     (* ASYNC_REG = "TRUE" *) logic [47:0] src_mac_cmac_meta;
     (* ASYNC_REG = "TRUE" *) logic [47:0] src_mac_cmac;
     (* ASYNC_REG = "TRUE" *) logic [31:0] src_ip_cmac_meta;
@@ -922,6 +970,16 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_peak_chan_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_peak_power_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_peak_power_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_status_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_status_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_loaded_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_loaded_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_active_id_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_active_id_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_active_checksum_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_active_checksum_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_error_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  pfb_coeff_error_count_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  rfdc_status_flags_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  rfdc_status_flags_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [63:0]  rfdc_sample_count_ctrl_meta;
@@ -1317,6 +1375,14 @@ module t510_fengine_top (
     assign pfb_clear_pulse = pfb_clear_toggle_sync[2] ^ pfb_clear_toggle_seen;
     assign tx_clear_pulse = tx_clear_toggle_sync[2] ^ tx_clear_toggle_seen;
     assign tx_clear_pulse_cmac = tx_clear_toggle_cmac_sync[2] ^ tx_clear_toggle_cmac_seen;
+    assign pfb_coeff_load_start_pulse_cmac =
+        pfb_coeff_load_start_toggle_cmac_sync[2] ^ pfb_coeff_load_start_toggle_cmac_seen;
+    assign pfb_coeff_commit_pulse_cmac =
+        pfb_coeff_commit_toggle_cmac_sync[2] ^ pfb_coeff_commit_toggle_cmac_seen;
+    assign pfb_coeff_abort_pulse_cmac =
+        pfb_coeff_abort_toggle_cmac_sync[2] ^ pfb_coeff_abort_toggle_cmac_seen;
+    assign pfb_coeff_write_pulse_cmac =
+        pfb_coeff_write_toggle_cmac_sync[2] ^ pfb_coeff_write_toggle_cmac_seen;
     assign time_ddr_ring_clear_pulse_cmac =
         time_ddr_ring_clear_toggle_cmac_sync[2] ^ time_ddr_ring_clear_toggle_cmac_seen;
     assign packet_stream_reset_pulse_cmac =
@@ -1358,6 +1424,10 @@ module t510_fengine_top (
             ctrl_pfb_clear_toggle  <= 1'b0;
             ctrl_tx_clear_toggle   <= 1'b0;
             ctrl_time_ddr_ring_clear_toggle <= 1'b0;
+            ctrl_pfb_coeff_load_start_toggle <= 1'b0;
+            ctrl_pfb_coeff_commit_toggle <= 1'b0;
+            ctrl_pfb_coeff_abort_toggle <= 1'b0;
+            ctrl_pfb_coeff_write_toggle <= 1'b0;
         end else begin
             if (ctrl_soft_epoch_pulse) begin
                 ctrl_soft_epoch_toggle <= ~ctrl_soft_epoch_toggle;
@@ -1376,6 +1446,18 @@ module t510_fengine_top (
             end
             if (ctrl_time_ddr_ring_clear_pulse) begin
                 ctrl_time_ddr_ring_clear_toggle <= ~ctrl_time_ddr_ring_clear_toggle;
+            end
+            if (ctrl_pfb_coeff_load_start_pulse) begin
+                ctrl_pfb_coeff_load_start_toggle <= ~ctrl_pfb_coeff_load_start_toggle;
+            end
+            if (ctrl_pfb_coeff_commit_pulse) begin
+                ctrl_pfb_coeff_commit_toggle <= ~ctrl_pfb_coeff_commit_toggle;
+            end
+            if (ctrl_pfb_coeff_abort_pulse) begin
+                ctrl_pfb_coeff_abort_toggle <= ~ctrl_pfb_coeff_abort_toggle;
+            end
+            if (ctrl_pfb_coeff_write_pulse) begin
+                ctrl_pfb_coeff_write_toggle <= ~ctrl_pfb_coeff_write_toggle;
             end
         end
     end
@@ -1401,8 +1483,8 @@ module t510_fengine_top (
             spec_chan_count_meta   <= 16'd0;
             spec_chan_count        <= 16'd0;
             pfb_enable_sync        <= 2'b00;
-            pfb_taps_meta          <= 16'd0;
-            pfb_taps               <= 16'd0;
+            pfb_taps_meta          <= CTRL_PRODUCTION_27J_PFB ? 16'd4 : 16'd0;
+            pfb_taps               <= CTRL_PRODUCTION_27J_PFB ? 16'd4 : 16'd0;
             pfb_fft_shift_meta     <= FFT_ONLY_DEFAULT_SHIFT;
             pfb_fft_shift          <= FFT_ONLY_DEFAULT_SHIFT;
             pfb_chan0_meta         <= 32'd0;
@@ -1644,14 +1726,32 @@ module t510_fengine_top (
             spec_enable_cmac <= 1'b0;
             pfb_enable_cmac_meta <= 1'b0;
             pfb_enable_cmac <= 1'b0;
+            pfb_taps_cmac_meta <= CTRL_PRODUCTION_27J_PFB ? 16'd4 : 16'd0;
+            pfb_taps_cmac <= CTRL_PRODUCTION_27J_PFB ? 16'd4 : 16'd0;
             pfb_fft_shift_cmac_meta <= FFT_ONLY_DEFAULT_SHIFT;
             pfb_fft_shift_cmac <= FFT_ONLY_DEFAULT_SHIFT;
+            pfb_coeff_requested_taps_cmac_meta <= 4'd4;
+            pfb_coeff_requested_taps_cmac <= 4'd4;
+            pfb_coeff_index_cmac_meta <= 14'd0;
+            pfb_coeff_index_cmac <= 14'd0;
+            pfb_coeff_data_cmac_meta <= 18'sd0;
+            pfb_coeff_data_cmac <= 18'sd0;
+            pfb_coeff_id_cmac_meta <= 32'h27a4_0001;
+            pfb_coeff_id_cmac <= 32'h27a4_0001;
             rfdc_sample_count_cmac_meta <= 64'd0;
             rfdc_sample_count_cmac <= 64'd0;
             ctrl_board_id_cmac_meta <= 16'd0;
             ctrl_board_id_cmac <= 16'd0;
             tx_clear_toggle_cmac_sync <= 3'b000;
             tx_clear_toggle_cmac_seen <= 1'b0;
+            pfb_coeff_load_start_toggle_cmac_sync <= 3'b000;
+            pfb_coeff_load_start_toggle_cmac_seen <= 1'b0;
+            pfb_coeff_commit_toggle_cmac_sync <= 3'b000;
+            pfb_coeff_commit_toggle_cmac_seen <= 1'b0;
+            pfb_coeff_abort_toggle_cmac_sync <= 3'b000;
+            pfb_coeff_abort_toggle_cmac_seen <= 1'b0;
+            pfb_coeff_write_toggle_cmac_sync <= 3'b000;
+            pfb_coeff_write_toggle_cmac_seen <= 1'b0;
             time_ddr_ring_clear_toggle_cmac_sync <= 3'b000;
             time_ddr_ring_clear_toggle_cmac_seen <= 1'b0;
             packet_stream_reset_toggle_cmac_sync <= 3'b000;
@@ -1687,14 +1787,44 @@ module t510_fengine_top (
             spec_enable_cmac <= spec_enable_cmac_meta;
             pfb_enable_cmac_meta <= pfb_enable_sync[1];
             pfb_enable_cmac <= pfb_enable_cmac_meta;
+            pfb_taps_cmac_meta <= pfb_taps;
+            pfb_taps_cmac <= pfb_taps_cmac_meta;
             pfb_fft_shift_cmac_meta <= pfb_fft_shift;
             pfb_fft_shift_cmac <= pfb_fft_shift_cmac_meta;
+            pfb_coeff_requested_taps_cmac_meta <= ctrl_pfb_coeff_requested_taps;
+            pfb_coeff_requested_taps_cmac <= pfb_coeff_requested_taps_cmac_meta;
+            pfb_coeff_index_cmac_meta <= ctrl_pfb_coeff_index;
+            pfb_coeff_index_cmac <= pfb_coeff_index_cmac_meta;
+            pfb_coeff_data_cmac_meta <= ctrl_pfb_coeff_data;
+            pfb_coeff_data_cmac <= pfb_coeff_data_cmac_meta;
+            pfb_coeff_id_cmac_meta <= ctrl_pfb_coeff_id;
+            pfb_coeff_id_cmac <= pfb_coeff_id_cmac_meta;
             rfdc_sample_count_cmac_meta <= rfdc_sample_count;
             rfdc_sample_count_cmac <= rfdc_sample_count_cmac_meta;
             ctrl_board_id_cmac_meta <= ctrl_board_id;
             ctrl_board_id_cmac <= ctrl_board_id_cmac_meta;
             tx_clear_toggle_cmac_sync <= {tx_clear_toggle_cmac_sync[1:0], ctrl_tx_clear_toggle};
             tx_clear_toggle_cmac_seen <= tx_clear_toggle_cmac_sync[2];
+            pfb_coeff_load_start_toggle_cmac_sync <= {
+                pfb_coeff_load_start_toggle_cmac_sync[1:0],
+                ctrl_pfb_coeff_load_start_toggle
+            };
+            pfb_coeff_load_start_toggle_cmac_seen <= pfb_coeff_load_start_toggle_cmac_sync[2];
+            pfb_coeff_commit_toggle_cmac_sync <= {
+                pfb_coeff_commit_toggle_cmac_sync[1:0],
+                ctrl_pfb_coeff_commit_toggle
+            };
+            pfb_coeff_commit_toggle_cmac_seen <= pfb_coeff_commit_toggle_cmac_sync[2];
+            pfb_coeff_abort_toggle_cmac_sync <= {
+                pfb_coeff_abort_toggle_cmac_sync[1:0],
+                ctrl_pfb_coeff_abort_toggle
+            };
+            pfb_coeff_abort_toggle_cmac_seen <= pfb_coeff_abort_toggle_cmac_sync[2];
+            pfb_coeff_write_toggle_cmac_sync <= {
+                pfb_coeff_write_toggle_cmac_sync[1:0],
+                ctrl_pfb_coeff_write_toggle
+            };
+            pfb_coeff_write_toggle_cmac_seen <= pfb_coeff_write_toggle_cmac_sync[2];
             time_ddr_ring_clear_toggle_cmac_sync <= {
                 time_ddr_ring_clear_toggle_cmac_sync[1:0],
                 ctrl_time_ddr_ring_clear_toggle
@@ -1780,6 +1910,16 @@ module t510_fengine_top (
             pfb_peak_chan_ctrl              <= 32'd0;
             pfb_peak_power_ctrl_meta        <= 32'd0;
             pfb_peak_power_ctrl             <= 32'd0;
+            pfb_coeff_status_ctrl_meta      <= 32'd0;
+            pfb_coeff_status_ctrl           <= 32'd0;
+            pfb_coeff_loaded_count_ctrl_meta <= 32'd0;
+            pfb_coeff_loaded_count_ctrl      <= 32'd0;
+            pfb_coeff_active_id_ctrl_meta   <= 32'd0;
+            pfb_coeff_active_id_ctrl        <= 32'd0;
+            pfb_coeff_active_checksum_ctrl_meta <= 32'd0;
+            pfb_coeff_active_checksum_ctrl      <= 32'd0;
+            pfb_coeff_error_count_ctrl_meta <= 32'd0;
+            pfb_coeff_error_count_ctrl      <= 32'd0;
             rfdc_status_flags_ctrl_meta     <= 32'd0;
             rfdc_status_flags_ctrl          <= 32'd0;
             rfdc_sample_count_ctrl_meta     <= 64'd0;
@@ -1905,6 +2045,16 @@ module t510_fengine_top (
             pfb_peak_chan_ctrl              <= pfb_peak_chan_ctrl_meta;
             pfb_peak_power_ctrl_meta        <= pfb_peak_power;
             pfb_peak_power_ctrl             <= pfb_peak_power_ctrl_meta;
+            pfb_coeff_status_ctrl_meta      <= pfb_coeff_status;
+            pfb_coeff_status_ctrl           <= pfb_coeff_status_ctrl_meta;
+            pfb_coeff_loaded_count_ctrl_meta <= pfb_coeff_loaded_count;
+            pfb_coeff_loaded_count_ctrl      <= pfb_coeff_loaded_count_ctrl_meta;
+            pfb_coeff_active_id_ctrl_meta   <= pfb_coeff_active_id;
+            pfb_coeff_active_id_ctrl        <= pfb_coeff_active_id_ctrl_meta;
+            pfb_coeff_active_checksum_ctrl_meta <= pfb_coeff_active_checksum;
+            pfb_coeff_active_checksum_ctrl      <= pfb_coeff_active_checksum_ctrl_meta;
+            pfb_coeff_error_count_ctrl_meta <= pfb_coeff_error_count;
+            pfb_coeff_error_count_ctrl      <= pfb_coeff_error_count_ctrl_meta;
             rfdc_status_flags_ctrl_meta     <= rfdc_status_flags;
             rfdc_status_flags_ctrl          <= rfdc_status_flags_ctrl_meta;
             rfdc_sample_count_ctrl_meta     <= rfdc_sample_count;
@@ -2230,7 +2380,7 @@ module t510_fengine_top (
     assign pfb_spec_cmac_sideband = {
         pfb_status,
         pfb_fft_shift_cmac,
-        16'd0,
+        CTRL_PRODUCTION_27J_PFB ? 16'd4 : 16'd0,
         pfb_packet_time_count,
         pfb_packet_chan_count,
         pfb_packet_chan0,
@@ -2260,15 +2410,45 @@ module t510_fengine_top (
         .m_clk(cmac_tx_clk),
         .m_rst_n(cmac_tx_rst_n),
         .m_clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
+`ifdef T510_STAGE27J_PFB
+        .m_axis_tdata(spec_feng_cdc_tdata),
+        .m_axis_tside(spec_feng_cdc_sample0),
+        .m_axis_tvalid(spec_feng_cdc_tvalid),
+        .m_axis_tready(spec_feng_cdc_tready),
+`else
         .m_axis_tdata(spec_feng_cmac_tdata),
         .m_axis_tside(spec_feng_cmac_sample0),
         .m_axis_tvalid(spec_feng_cmac_tvalid),
         .m_axis_tready(spec_feng_cmac_tready),
+`endif
         .wr_level_words(spec_feng_cmac_wr_level_words),
         .rd_level_words(spec_feng_cmac_rd_level_words),
         .fifo_full(spec_feng_cmac_fifo_full),
         .fifo_empty(spec_feng_cmac_fifo_empty)
     );
+
+`ifdef T510_STAGE27J_PFB
+    axis512_register_slice #(
+        .DATA_W(SCIENCE_DATA_W + 64),
+        .KEEP_W(8),
+        .DEPTH(2),
+        .COUNT_W(2)
+    ) u_spec_feng_input_slice (
+        .clk(cmac_tx_clk),
+        .rst_n(cmac_tx_rst_n),
+        .clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
+        .s_axis_tdata({spec_feng_cdc_sample0, spec_feng_cdc_tdata}),
+        .s_axis_tkeep(8'hff),
+        .s_axis_tvalid(spec_feng_cdc_tvalid),
+        .s_axis_tlast(1'b0),
+        .s_axis_tready(spec_feng_cdc_tready),
+        .m_axis_tdata({spec_feng_cmac_sample0, spec_feng_cmac_tdata}),
+        .m_axis_tkeep(),
+        .m_axis_tvalid(spec_feng_cmac_tvalid),
+        .m_axis_tlast(),
+        .m_axis_tready(spec_feng_cmac_tready)
+    );
+`endif
     assign spec_tready = spec_live_requested_data ? spec_feng_input_cdc_ready : 1'b1;
 
     pfb_channelizer #(
@@ -2280,11 +2460,24 @@ module t510_fengine_top (
         .rst_n(cmac_tx_rst_n),
         .enable(spec_enable_cmac && pfb_enable_cmac),
         .clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
-        .cfg_taps(16'd0),
+        .cfg_taps(CTRL_PRODUCTION_27J_PFB ? 16'd4 : 16'd0),
         .cfg_fft_shift(pfb_fft_shift_cmac),
         .cfg_chan0(32'd0),
         .cfg_chan_count(16'd256),
         .cfg_time_count(16'd1),
+        .coeff_load_start(pfb_coeff_load_start_pulse_cmac),
+        .coeff_commit(pfb_coeff_commit_pulse_cmac),
+        .coeff_abort(pfb_coeff_abort_pulse_cmac),
+        .coeff_write(pfb_coeff_write_pulse_cmac),
+        .coeff_requested_taps(pfb_coeff_requested_taps_cmac),
+        .coeff_index(pfb_coeff_index_cmac),
+        .coeff_data(pfb_coeff_data_cmac),
+        .coeff_id(pfb_coeff_id_cmac),
+        .coeff_status(pfb_coeff_status),
+        .coeff_loaded_count(pfb_coeff_loaded_count),
+        .coeff_active_id(pfb_coeff_active_id),
+        .coeff_active_checksum(pfb_coeff_active_checksum),
+        .coeff_error_count(pfb_coeff_error_count),
         .s_axis_tdata(spec_feng_cmac_tdata),
         .s_axis_sample0(spec_feng_cmac_sample0),
         .s_axis_tvalid(spec_feng_cmac_tvalid),
@@ -2379,6 +2572,19 @@ module t510_fengine_top (
         .cfg_chan0(pfb_chan0),
         .cfg_chan_count(pfb_chan_count),
         .cfg_time_count(pfb_time_count),
+        .coeff_load_start(1'b0),
+        .coeff_commit(1'b0),
+        .coeff_abort(1'b0),
+        .coeff_write(1'b0),
+        .coeff_requested_taps(4'd0),
+        .coeff_index(14'd0),
+        .coeff_data(18'sd0),
+        .coeff_id(32'd0),
+        .coeff_status(pfb_coeff_status),
+        .coeff_loaded_count(pfb_coeff_loaded_count),
+        .coeff_active_id(pfb_coeff_active_id),
+        .coeff_active_checksum(pfb_coeff_active_checksum),
+        .coeff_error_count(pfb_coeff_error_count),
         .s_axis_tdata(quant_spec_tdata),
         .s_axis_sample0(spec_input_sample0),
         .s_axis_tvalid(spec_tvalid),
@@ -2410,7 +2616,8 @@ module t510_fengine_top (
 `endif
 
     assign spec_product_status_flags = {
-        22'd0,
+        21'd0,
+        (pfb_taps_data >= 16'd4) && pfb_status_data[5] && !pfb_status_data[8],
         science_aa100_active && (science_bandwidth_mode == 2'd1),
         pfb_status_data[8],
         pfb_status_data[7:0]
@@ -3102,6 +3309,7 @@ module t510_fengine_top (
         .N_SPEC_ROUTES(TX_SPEC_ROUTES),
         .N_TIME_ROUTES(TX_TIME_ROUTES),
         .PRODUCTION_27H(CTRL_PRODUCTION_27H),
+        .PRODUCTION_27J_PFB(CTRL_PRODUCTION_27J_PFB),
         .RAW_WITNESS_DIAGNOSTIC(RFDC_RAW_WITNESS_COMPILED)
     ) u_feng_ctrl_axi (
         .s_axi_aclk(ctrl_clk),
@@ -3246,6 +3454,11 @@ module t510_fengine_top (
         .pfb_input_fifo_level(pfb_input_fifo_level_ctrl),
         .pfb_peak_chan(pfb_peak_chan_ctrl),
         .pfb_peak_power(pfb_peak_power_ctrl),
+        .pfb_coeff_status(pfb_coeff_status_ctrl),
+        .pfb_coeff_loaded_count(pfb_coeff_loaded_count_ctrl),
+        .pfb_coeff_active_id(pfb_coeff_active_id_ctrl),
+        .pfb_coeff_active_checksum(pfb_coeff_active_checksum_ctrl),
+        .pfb_coeff_error_count(pfb_coeff_error_count_ctrl),
         .science_aa100_active(science_aa100_active),
         .science_aa100_primed(science_aa100_primed),
         .science_aa100_coeff_version(science_aa100_coeff_version),
@@ -3307,6 +3520,14 @@ module t510_fengine_top (
         .pfb_chan0(ctrl_pfb_chan0),
         .pfb_chan_count(ctrl_pfb_chan_count),
         .pfb_time_count(ctrl_pfb_time_count),
+        .pfb_coeff_load_start_pulse(ctrl_pfb_coeff_load_start_pulse),
+        .pfb_coeff_commit_pulse(ctrl_pfb_coeff_commit_pulse),
+        .pfb_coeff_abort_pulse(ctrl_pfb_coeff_abort_pulse),
+        .pfb_coeff_write_pulse(ctrl_pfb_coeff_write_pulse),
+        .pfb_coeff_requested_taps(ctrl_pfb_coeff_requested_taps),
+        .pfb_coeff_index(ctrl_pfb_coeff_index),
+        .pfb_coeff_data(ctrl_pfb_coeff_data),
+        .pfb_coeff_id(ctrl_pfb_coeff_id),
         .chan_split(ctrl_chan_split),
         .src_ip(ctrl_src_ip),
         .dgx_a_ip(ctrl_dgx_a_ip),

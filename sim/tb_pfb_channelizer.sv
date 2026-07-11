@@ -14,11 +14,28 @@ module tb_pfb_channelizer;
     logic rst_n = 1'b0;
     logic enable = 1'b0;
     logic clear = 1'b0;
+`ifdef T510_STAGE27J_PFB
+    logic [15:0] cfg_taps = 16'd4;
+`else
     logic [15:0] cfg_taps = 16'd0;
+`endif
     logic [15:0] cfg_fft_shift = 16'h0556;
     logic [31:0] cfg_chan0 = 32'd0;
     logic [15:0] cfg_chan_count = 16'd256;
     logic [15:0] cfg_time_count = 16'd1;
+    logic        coeff_load_start = 1'b0;
+    logic        coeff_commit = 1'b0;
+    logic        coeff_abort = 1'b0;
+    logic        coeff_write = 1'b0;
+    logic [3:0]  coeff_requested_taps = 4'd4;
+    logic [13:0] coeff_index = 14'd0;
+    logic signed [17:0] coeff_data = 18'sd0;
+    logic [31:0] coeff_id = 32'h27a4_0001;
+    wire [31:0] coeff_status;
+    wire [31:0] coeff_loaded_count;
+    wire [31:0] coeff_active_id;
+    wire [31:0] coeff_active_checksum;
+    wire [31:0] coeff_error_count;
     logic [DATA_W-1:0] s_axis_tdata = {DATA_W{1'b0}};
     logic [63:0]  s_axis_sample0 = 64'd0;
     logic         s_axis_tvalid = 1'b0;
@@ -43,6 +60,9 @@ module tb_pfb_channelizer;
     integer accepted_input_beats = 0;
     integer test_case = 0;
     logic zero_input_mode = 1'b0;
+`ifdef T510_STAGE27J_PFB
+    integer pfb_input_cell_count = 0;
+`endif
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
     logic [12:0] xfft_frame_cell_count = 13'd0;
     logic        xfft_frame_active = 1'b0;
@@ -73,13 +93,34 @@ module tb_pfb_channelizer;
         end
     endfunction
 
+    function automatic logic cell_within_one_lsb(
+        input logic [255:0] actual,
+        input logic [255:0] expected
+    );
+        integer comp;
+        integer delta;
+        begin
+            cell_within_one_lsb = 1'b1;
+            for (comp = 0; comp < 16; comp = comp + 1) begin
+                delta = $signed(actual[comp*16 +: 16]) - $signed(expected[comp*16 +: 16]);
+                if ((delta < -1) || (delta > 1)) begin
+                    cell_within_one_lsb = 1'b0;
+                end
+            end
+        end
+    endfunction
+
     function automatic [DATA_W-1:0] make_beat(input integer beat);
         integer cell_idx;
         logic [DATA_W-1:0] value;
         begin
             value = {DATA_W{1'b0}};
             for (cell_idx = 0; cell_idx < CELLS_PER_BEAT; cell_idx = cell_idx + 1) begin
+`ifdef T510_STAGE27J_PFB
+                value[cell_idx*256 +: 256] = make_cell(((beat * CELLS_PER_BEAT) + cell_idx) % 4096);
+`else
                 value[cell_idx*256 +: 256] = make_cell((beat * CELLS_PER_BEAT) + cell_idx);
+`endif
             end
             make_beat = value;
         end
@@ -105,6 +146,19 @@ module tb_pfb_channelizer;
         .cfg_chan0(cfg_chan0),
         .cfg_chan_count(cfg_chan_count),
         .cfg_time_count(cfg_time_count),
+        .coeff_load_start(coeff_load_start),
+        .coeff_commit(coeff_commit),
+        .coeff_abort(coeff_abort),
+        .coeff_write(coeff_write),
+        .coeff_requested_taps(coeff_requested_taps),
+        .coeff_index(coeff_index),
+        .coeff_data(coeff_data),
+        .coeff_id(coeff_id),
+        .coeff_status(coeff_status),
+        .coeff_loaded_count(coeff_loaded_count),
+        .coeff_active_id(coeff_active_id),
+        .coeff_active_checksum(coeff_active_checksum),
+        .coeff_error_count(coeff_error_count),
         .s_axis_tdata(s_axis_tdata),
         .s_axis_sample0(s_axis_sample0),
         .s_axis_tvalid(s_axis_tvalid),
@@ -153,7 +207,7 @@ module tb_pfb_channelizer;
             `TB_CHECK_EQ(
                 m_axis_sample0,
                 beat_sample0((out_packet_idx / SPEC_BLOCKS) * INPUT_BEATS_PER_FFT_FRAME),
-                "PFB packet sample0 is first FFT frame sample"
+                "PFB packet sample0 is first contributing frame sample"
             )
             if (out_packet_beat == 0) begin
                 `TB_CHECK_EQ(packet_chan0, (out_packet_idx % SPEC_BLOCKS) * 256, "FFT-only packet chan0 block sweep")
@@ -205,17 +259,92 @@ module tb_pfb_channelizer;
     end
 `endif
 
+`ifdef T510_STAGE27J_PFB
+    always_ff @(posedge clk) begin
+        if (!rst_n || clear || !enable) begin
+            pfb_input_cell_count <= 0;
+        end else if (dut.u_feng_channelizer_4096.xfft_input_fire) begin
+            `TB_CHECK_EQ(
+                dut.u_feng_channelizer_4096.xfft_data_idx,
+                pfb_input_cell_count % 4096,
+                "27j PFB XFFT input index remains ordered across backpressure"
+            )
+            if (!zero_input_mode) begin
+                `TB_CHECK(
+                    cell_within_one_lsb(
+                        dut.u_feng_channelizer_4096.xfft_data,
+                        make_cell(pfb_input_cell_count % 4096)
+                    ),
+                    "27j near-unity PFB preserves every repeated-frame cell within one rounded LSB across backpressure"
+                )
+            end
+            pfb_input_cell_count <= pfb_input_cell_count + 1;
+        end
+    end
+`endif
+
     task automatic reset_dut;
         begin
             rst_n = 1'b0;
             s_axis_tvalid = 1'b0;
             clear = 1'b0;
+            enable = 1'b0;
+            coeff_load_start = 1'b0;
+            coeff_commit = 1'b0;
+            coeff_abort = 1'b0;
+            coeff_write = 1'b0;
+            coeff_requested_taps = 4'd4;
+            coeff_index = 14'd0;
+            coeff_data = 18'sd0;
+            coeff_id = 32'h27a4_0001;
             repeat (6) @(posedge clk);
             rst_n = 1'b1;
             repeat (2) @(posedge clk);
             s_axis_tdata = zero_input_mode ? {DATA_W{1'b0}} : make_beat(0);
         end
     endtask
+
+`ifdef T510_STAGE27J_PFB
+    task automatic load_unity_pfb_coefficients;
+        integer tap;
+        integer phase;
+        begin
+            @(negedge clk);
+            coeff_requested_taps = 4'd4;
+            coeff_id = 32'h27a4_0001;
+            coeff_load_start = 1'b1;
+            @(negedge clk);
+            coeff_load_start = 1'b0;
+            for (tap = 0; tap < 4; tap = tap + 1) begin
+                for (phase = 0; phase < 4096; phase = phase + 1) begin
+                    coeff_index = {tap[1:0], phase[11:0]};
+                    if (tap == 2) begin
+                        coeff_data = 18'sd1;
+                    end else if (tap == 3) begin
+                        coeff_data = 18'sd131071;
+                    end else begin
+                        coeff_data = 18'sd0;
+                    end
+                    coeff_write = 1'b1;
+                    @(negedge clk);
+                    coeff_write = 1'b0;
+                end
+            end
+            repeat (2) @(posedge clk);
+            `TB_CHECK_EQ(coeff_loaded_count, 32'd16384, "27j PFB coefficient load count")
+            `TB_CHECK(coeff_status[2], "27j PFB shadow coefficient bank full")
+            @(negedge clk);
+            coeff_commit = 1'b1;
+            @(negedge clk);
+            coeff_commit = 1'b0;
+            repeat (4) @(posedge clk);
+            `TB_CHECK(coeff_status[0], "27j PFB active coefficient bank valid")
+            `TB_CHECK_EQ(coeff_status[11:8], 4'd4, "27j PFB active taps")
+            `TB_CHECK_EQ(coeff_active_id, 32'h27a4_0001, "27j PFB active coefficient profile id")
+            `TB_CHECK_EQ(coeff_error_count, 32'd0, "27j PFB coefficient command error count")
+        end
+    endtask
+`endif
 
     task automatic wait_for_outputs(input integer expected);
         integer timeout;
@@ -238,22 +367,37 @@ module tb_pfb_channelizer;
                 timeout = timeout + 1;
             end
             `TB_CHECK_EQ(accepted_input_beats, expected, "FFT-only accepted input beat count")
-`ifdef T510_STAGE27H_PRODUCTION_ONLY
+`ifdef T510_STAGE27J_PFB
+            `TB_CHECK(timeout <= (expected * (CELLS_PER_BEAT + 1)) + 4096, "27j PFB production input frame buffer keeps up with priming")
+`elsif T510_STAGE27H_PRODUCTION_ONLY
             `TB_CHECK(timeout <= (expected * (CELLS_PER_BEAT + 1)) + 64, "FFT-only production input frame buffer keeps up with 1024b input beats")
 `endif
         end
     endtask
 
     initial begin
+`ifdef T510_STAGE27J_PFB
+        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q17_38(38'sd65535)), 16'sd0, "PFB positive sub-half-LSB rounds to zero")
+        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q17_38(-38'sd65535)), 16'sd0, "PFB negative sub-half-LSB rounds to zero")
+        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q17_38(38'sd65536)), 16'sd1, "PFB positive half-LSB rounds away from zero")
+        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q17_38(-38'sd65536)), -16'sd1, "PFB negative half-LSB rounds away from zero")
+`endif
         reset_dut();
+`ifdef T510_STAGE27J_PFB
+        load_unity_pfb_coefficients();
+`endif
         repeat (4) @(posedge clk);
 
         `TB_CHECK(!status[0], "PFB enabled status bit stays low before streaming enable")
         `TB_CHECK(status[1], "PFB config valid status bit")
+`ifdef T510_STAGE27J_PFB
+        `TB_CHECK(!status[8], "27j PFB clears FFT-only status bit")
+`else
         `TB_CHECK(status[8], "FFT-only status bit")
+`endif
         `TB_CHECK(status[9], "XFFT config completes while stream enable is low")
         `TB_CHECK_EQ(status[23:16], 8'hff, "XFFT lane config done mask")
-        `TB_CHECK(status[5], "FFT-only science-valid gate reflects configured XFFT backend")
+        `TB_CHECK(status[5], "PFB science-valid gate reflects configured XFFT backend")
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
 `ifndef T510_SIM_FFT_MODEL
         `TB_CHECK_EQ(dut.u_feng_channelizer_4096.u_fengine_xfft_4096.gen_lane_xfft[0].lane_config_tdata[0], 1'b1, "lane0 XFFT forward config")
@@ -279,7 +423,9 @@ module tb_pfb_channelizer;
 
         @(negedge clk);
         s_axis_tvalid = 1'b1;
-`ifdef T510_STAGE27H_PRODUCTION_ONLY
+`ifdef T510_STAGE27J_PFB
+        wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME * (OUTPUT_TILES + 3));
+`elsif T510_STAGE27H_PRODUCTION_ONLY
         wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME * OUTPUT_TILES);
 `endif
         @(negedge clk);
@@ -310,13 +456,18 @@ module tb_pfb_channelizer;
         test_case = 1;
         zero_input_mode = 1'b1;
         reset_dut();
+`ifdef T510_STAGE27J_PFB
+        load_unity_pfb_coefficients();
+`endif
         repeat (4) @(posedge clk);
         @(negedge clk);
         enable = 1'b1;
         repeat (2) @(posedge clk);
         @(negedge clk);
         s_axis_tvalid = 1'b1;
-`ifdef T510_STAGE27H_PRODUCTION_ONLY
+`ifdef T510_STAGE27J_PFB
+        wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME * 4);
+`elsif T510_STAGE27H_PRODUCTION_ONLY
         wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME);
 `endif
         @(negedge clk);
@@ -325,7 +476,7 @@ module tb_pfb_channelizer;
         repeat (3) @(posedge clk);
         `TB_CHECK_EQ(frame_count, 32'd1, "FFT-only zero input frame count")
         `TB_CHECK_EQ(overflow_count, 32'd0, "FFT-only zero input no overflow")
-        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.xfft_event_count, 32'd0, "FFT-only zero input no XFFT event")
+        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.xfft_event_count, 32'd0, "PFB zero input no XFFT event")
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
         `TB_CHECK_EQ(xfft_frame_gap_count, 0, "FFT-only zero input XFFT frame has zero internal gaps")
 `endif

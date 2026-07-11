@@ -21,7 +21,7 @@ use t510_time_rx::{
     validate_time_header_fast, BandwidthMode, ChannelWaveform, DisplayConfig, FastPacketError,
     SpectrumLane, SpectrumSnapshot, T510Header, WaveformSnapshot, RAW_SAMPLE_RATE_HZ,
     SPEC_BLOCK_CHANS_27F, SPEC_BLOCK_CHANS_27H, SPEC_BLOCK_COUNT_27F, SPEC_BLOCK_COUNT_27H,
-    SPEC_FFT_ONLY_FLAG, SPEC_TIME_COUNT_27F, SPEC_TIME_COUNT_27H, STREAM_SPEC, STREAM_TIME,
+    SPEC_FFT_ONLY_FLAG, SPEC_PFB_ACTIVE_FLAG, SPEC_TIME_COUNT_27F, SPEC_TIME_COUNT_27H, STREAM_SPEC, STREAM_TIME,
     TIME_NINPUT, TIME_SUBSAMPLES_PER_BEAT, TIME_UDP_PAYLOAD_BYTES,
 };
 
@@ -108,6 +108,7 @@ enum SpecLayout {
     Auto,
     Stage27g,
     Stage27h,
+    Stage27j,
 }
 
 impl SpecLayout {
@@ -116,6 +117,7 @@ impl SpecLayout {
             Self::Auto => "auto",
             Self::Stage27g => "27g",
             Self::Stage27h => "27h",
+            Self::Stage27j => "27j",
         }
     }
 
@@ -135,6 +137,14 @@ impl SpecLayout {
                     && header.pfb_taps == 0
                     && (header.spec_status_flags & SPEC_FFT_ONLY_FLAG) != 0
             }
+            Self::Stage27j => {
+                header.block_count == SPEC_BLOCK_COUNT_27H
+                    && header.chan_count == SPEC_BLOCK_CHANS_27H
+                    && header.time_count == SPEC_TIME_COUNT_27H
+                    && header.pfb_taps >= 4
+                    && (header.spec_status_flags & SPEC_FFT_ONLY_FLAG) == 0
+                    && (header.spec_status_flags & SPEC_PFB_ACTIVE_FLAG) != 0
+            }
         }
     }
 }
@@ -149,7 +159,7 @@ fn parse_u16_auto(value: &str) -> Result<u16, String> {
 }
 
 #[derive(Debug, Parser, Clone)]
-#[command(author, version, about = "T510 Stage 27h TIME/SPEC receiver and production FFT-only F-engine preview")]
+#[command(author, version, about = "T510 Stage 27h/27j TIME/SPEC receiver and production F-engine preview")]
 struct Args {
     #[arg(long, default_value = "ens2f0np0")]
     interface: String,
@@ -218,7 +228,7 @@ impl Args {
 
     fn spec_flow_count_clamped(&self) -> usize {
         let max_spec = match self.spec_layout {
-            SpecLayout::Stage27h => DEFAULT_SPEC_FLOW_COUNT_27H,
+            SpecLayout::Stage27h | SpecLayout::Stage27j => DEFAULT_SPEC_FLOW_COUNT_27H,
             SpecLayout::Auto | SpecLayout::Stage27g => MAX_SPEC_FLOW_COUNT_27G,
         };
         self.spec_flow_count
@@ -5452,7 +5462,7 @@ const HTML: &str = r#"<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>T510 Stage 27h TIME/SPEC FFT-only F-engine Receiver</title>
+<title>T510 Stage 27h/27j TIME/SPEC F-engine Receiver</title>
 <style>
 :root{color-scheme:dark;--bg:#090b0d;--panel:#151616;--panel2:#1d1f1f;--line:#343838;--text:#edf1ee;--muted:#a7b0aa;--ok:#6ee7a8;--warn:#f4c76b;--bad:#ff7b7b;--cyan:#57c7ff}
 *{box-sizing:border-box}
@@ -5501,7 +5511,7 @@ pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regul
 <body>
 <div class="app">
   <header class="topbar">
-    <div class="brand">T510 Stage 27h TIME/SPEC FFT-only F-engine</div>
+    <div class="brand">T510 Stage 27h/27j TIME/SPEC F-engine</div>
     <div id="backendStatus" class="pill">backend --</div>
     <div id="wsStatus" class="pill warn">waveform connecting</div>
     <div id="specWsStatus" class="pill warn">spectrum connecting</div>
@@ -5564,7 +5574,7 @@ pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regul
       </section>
       <section class="group">
         <h2>Production Gate</h2>
-        <div class="science-note"><b>Stage 27h.</b> Production gate is TIME_SPEC 100MHz with 8 TIME flows and 16 FFT-only SPEC flows, ports 4300..4323, and combined T510 UDP payload above 63Gbps. SPEC bins are complex voltage X=I+jQ from the FFT-only F-engine; amplitude is |X|, phase history is target-bin relative atan2(Q,I), power is 10log10(I^2+Q^2), and waterfall is power history.</div>
+        <div class="science-note"><b>Stage 27h/27j.</b> Production gate is TIME_SPEC 100MHz with 8 TIME flows and 16 SPEC flows, ports 4300..4323, and combined T510 UDP payload above 63Gbps. Stage 27h is FFT-only; Stage 27j requires active 4-tap PFB. SPEC bins are complex voltage X=I+jQ; amplitude is |X|, phase history is target-bin relative atan2(Q,I), power is 10log10(I^2+Q^2), and waterfall is power history.</div>
         <div id="summary" class="summary"></div>
         <div id="flows" class="flows"></div>
       </section>
@@ -6230,14 +6240,15 @@ function drawSpectrum(){
   drawWaterfallCanvas(waterfall.ctx,waterfall.size,waterfallRows);
   const fftOnly=((current.specFlags||0)&0x100)!==0 && (current.pfbTaps||0)===0;
   const aa100=((current.specFlags||0)&0x200)!==0;
-  drawAxisLabels(amp.ctx,amp.size,`amp |X| ${fftOnly?'FFT-only':'layout check'} ${aa100?'AA100 active':''}`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
+  const pfbActive=((current.specFlags||0)&0x400)!==0 && (current.pfbTaps||0)>=4;
+  drawAxisLabels(amp.ctx,amp.size,`amp |X| ${fftOnly?'FFT-only':(pfbActive?'PFB':'layout check')} ${aa100?'AA100 active':''}`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
   const latestPhase=phaseHistory.length?phaseHistory[phaseHistory.length-1]:null;
   drawAxisLabels(phase.ctx,phase.size,`relative phase vs CH${currentPhaseRef()} deg / ${PHASE_HISTORY_SECONDS}s`,latestPhase?`bin ${latestPhase.bin} ${fmt(latestPhase.binMhz,3)} MHz err ${fmt(latestPhase.binErrorKhz,2)} kHz SNR ${fmt(latestPhase.snrDb,1)}dB`:phaseHistoryStatus);
   const complete=(current.coverageBlocks||0)>=(current.blockCount||16);
   drawAxisLabels(power.ctx,power.size,`power dB peak-preserved ${complete?'complete':'partial'} ${current.coverageBlocks||0}/${current.blockCount||16} blocks`,peak?`peak ${fmt(peak.rfMhz,3)} MHz CH0 phase ${fmt(peak.ch0Phase,2)} rad`:`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
   drawAxisLabels(waterfall.ctx,waterfall.size,`waterfall max-pool ${specLane.value==='avg'?'avg':('input '+specLane.value)} power history`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
   const laneMetrics=peakLaneMetrics(current,peak);
-  document.getElementById('specPlotStatus').textContent=`${complete?'complete':'partial'} 4096 bins coverage ${current.coverageBlocks||0}/${current.blockCount||16}${aa100?' AA100 active':' AA100 off'}${target?` target ${fmt(target.targetMhz,3)}MHz bin ${target.idx} err ${fmt(target.binErrorKhz,2)}kHz width ${fmt(target.binWidthKhz,2)}kHz`:''}${peak?` peak ${fmt(peak.rfMhz,3)}MHz bin ${peak.idx} power ${fmt(peak.powerDb,1)}dB`:''} phase ref CH${currentPhaseRef()} history ${phaseHistory.length} display peak-preserved/max-pool`;
+  document.getElementById('specPlotStatus').textContent=`${complete?'complete':'partial'} 4096 bins coverage ${current.coverageBlocks||0}/${current.blockCount||16}${pfbActive?' PFB active':(fftOnly?' FFT-only':' layout check')}${aa100?' AA100 active':' AA100 off'}${target?` target ${fmt(target.targetMhz,3)}MHz bin ${target.idx} err ${fmt(target.binErrorKhz,2)}kHz width ${fmt(target.binWidthKhz,2)}kHz`:''}${peak?` peak ${fmt(peak.rfMhz,3)}MHz bin ${peak.idx} power ${fmt(peak.powerDb,1)}dB`:''} phase ref CH${currentPhaseRef()} history ${phaseHistory.length} display peak-preserved/max-pool`;
   if(latestPhase){
     document.getElementById('channelStats').innerHTML=Array.from({length:8},(_,i)=>metric(`SPEC CH${i}`,`amp ${fmt(latestPhase.amp[i],0)} ph ${fmt(latestPhase.phaseRad[i]*180/Math.PI,1)}deg rel ${fmt(latestPhase.relDeg[i],1)}deg`)).join('');
   }else if(laneMetrics.length){

@@ -1,0 +1,1887 @@
+{
+  "center_mhz": 100.0,
+  "classification": "STAGE27J_CENTER100_DAC60_AMP_SWEEP",
+  "dac_mhz": 60.0,
+  "results": [
+    {
+      "amplitude": 0,
+      "derived": {
+        "p120_minus_main_db": -5.9231474187752,
+        "p140_minus_main_db": -5.865708614745305,
+        "right_minus_main_db": -4.5052184172712515,
+        "right_minus_noise_db": 1.8712230129159604
+      },
+      "host_state_after_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.28617264738011,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 480888.90400351596,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 480097.8911319197,
+          "spectrum_update_hz": 6.999957179669516
+        }
+      },
+      "host_state_before_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.21365759418309,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 480018.1178981492,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 479884.6803884907,
+          "spectrum_update_hz": 4.998835241810321
+        }
+      },
+      "remote_config": {
+        "after": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 0,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 834992,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 835079,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "amplitude": 0,
+        "before": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 0,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 353337,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 353420,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "download": true,
+        "observation": {
+          "amplitude": 0,
+          "dac_signal_hz": 60000000.0,
+          "enable_mask": 255,
+          "observe_center_hz": 100000000.0
+        },
+        "one_second_deltas": {
+          "pfb_data_halt_count": 0,
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 481655,
+          "time_dropped_count": 0,
+          "time_packet_count": 481659,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "science": {
+          "fengine_taps": 4,
+          "fft_only": false,
+          "stage": "27j"
+        }
+      },
+      "spectrum": {
+        "bin_width_khz": 30.0,
+        "frame_count": 20,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "block_index": 0,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "coverage_mask_hi": 0,
+          "coverage_mask_lo": 65535,
+          "dst_port": 4311,
+          "fft_shift": 1366,
+          "frame_id": 3673411,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "ninput": 8,
+          "pfb_taps": 4,
+          "product_id": 61697,
+          "sample0": 2851550608,
+          "sample_rate_hz": 122880000,
+          "seq_no": 3673411,
+          "spec_status_flags": 1591,
+          "src_port": 4011,
+          "time_count": 1,
+          "version": 2
+        },
+        "main_around_60mhz": {
+          "bin": 2811,
+          "power_db": 12.181414472086855,
+          "rf_mhz": 61.45,
+          "signed_bin": -1285
+        },
+        "noise_median_db": 5.804973041899643,
+        "peak_around_120mhz": {
+          "bin": 642,
+          "power_db": 6.258267053311656,
+          "rf_mhz": 119.26,
+          "signed_bin": 642
+        },
+        "peak_around_140mhz": {
+          "bin": 1309,
+          "power_db": 6.31570585734155,
+          "rf_mhz": 139.27,
+          "signed_bin": 1309
+        },
+        "right_of_center_peak": {
+          "bin": 763,
+          "power_db": 7.676196054815604,
+          "rf_mhz": 122.89,
+          "signed_bin": 763
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 763,
+            "power_db": 7.676196054815604,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 264,
+            "power_db": 6.9240622711900235,
+            "rf_mhz": 107.92,
+            "signed_bin": 264
+          },
+          {
+            "bin": 239,
+            "power_db": 6.834973162492193,
+            "rf_mhz": 107.17,
+            "signed_bin": 239
+          },
+          {
+            "bin": 28,
+            "power_db": 6.78404554219189,
+            "rf_mhz": 100.84,
+            "signed_bin": 28
+          },
+          {
+            "bin": 1584,
+            "power_db": 6.772646721433744,
+            "rf_mhz": 147.52,
+            "signed_bin": 1584
+          },
+          {
+            "bin": 204,
+            "power_db": 6.738269667460786,
+            "rf_mhz": 106.12,
+            "signed_bin": 204
+          },
+          {
+            "bin": 907,
+            "power_db": 6.703618346611099,
+            "rf_mhz": 127.21000000000001,
+            "signed_bin": 907
+          },
+          {
+            "bin": 220,
+            "power_db": 6.668688294290855,
+            "rf_mhz": 106.6,
+            "signed_bin": 220
+          }
+        ],
+        "top_peaks": [
+          {
+            "bin": 2811,
+            "power_db": 12.181414472086855,
+            "rf_mhz": 61.45,
+            "signed_bin": -1285
+          },
+          {
+            "bin": 2338,
+            "power_db": 7.763379021064532,
+            "rf_mhz": 47.26,
+            "signed_bin": -1758
+          },
+          {
+            "bin": 763,
+            "power_db": 7.676196054815604,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 2433,
+            "power_db": 7.55398384939101,
+            "rf_mhz": 50.11,
+            "signed_bin": -1663
+          },
+          {
+            "bin": 2351,
+            "power_db": 7.515677617108104,
+            "rf_mhz": 47.65,
+            "signed_bin": -1745
+          },
+          {
+            "bin": 2401,
+            "power_db": 7.4963970401385644,
+            "rf_mhz": 49.15,
+            "signed_bin": -1695
+          },
+          {
+            "bin": 2483,
+            "power_db": 7.418407123953217,
+            "rf_mhz": 51.61,
+            "signed_bin": -1613
+          },
+          {
+            "bin": 2315,
+            "power_db": 7.393745252508062,
+            "rf_mhz": 46.57,
+            "signed_bin": -1781
+          },
+          {
+            "bin": 2453,
+            "power_db": 7.33899110605404,
+            "rf_mhz": 50.71,
+            "signed_bin": -1643
+          },
+          {
+            "bin": 2374,
+            "power_db": 7.3239375540704685,
+            "rf_mhz": 48.34,
+            "signed_bin": -1722
+          },
+          {
+            "bin": 2508,
+            "power_db": 7.293673041086471,
+            "rf_mhz": 52.36,
+            "signed_bin": -1588
+          },
+          {
+            "bin": 2573,
+            "power_db": 7.293673027576643,
+            "rf_mhz": 54.31,
+            "signed_bin": -1523
+          },
+          {
+            "bin": 2419,
+            "power_db": 7.288608361201078,
+            "rf_mhz": 49.69,
+            "signed_bin": -1677
+          },
+          {
+            "bin": 2532,
+            "power_db": 7.247877072933452,
+            "rf_mhz": 53.08,
+            "signed_bin": -1564
+          },
+          {
+            "bin": 2284,
+            "power_db": 7.211921044251829,
+            "rf_mhz": 45.64,
+            "signed_bin": -1812
+          },
+          {
+            "bin": 2469,
+            "power_db": 7.211921022954297,
+            "rf_mhz": 51.19,
+            "signed_bin": -1627
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 1024,
+      "derived": {
+        "p120_minus_main_db": -44.317160293205816,
+        "p140_minus_main_db": -64.69712180589202,
+        "right_minus_main_db": -44.317160293205816,
+        "right_minus_noise_db": 20.86753220844752
+      },
+      "host_state_after_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.22665548521292,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 480048.80910787,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 480048.28915230883,
+          "spectrum_update_hz": 3.9999916020267863
+        }
+      },
+      "host_state_before_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.23031268804336,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 480011.3219514288,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 480140.4462864833,
+          "spectrum_update_hz": 3.9999958570075926
+        }
+      },
+      "remote_config": {
+        "after": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 1024,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 843472,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 843553,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "amplitude": 1024,
+        "before": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 1024,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 361811,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 361897,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "download": true,
+        "observation": {
+          "amplitude": 1024,
+          "dac_signal_hz": 60000000.0,
+          "enable_mask": 255,
+          "observe_center_hz": 100000000.0
+        },
+        "one_second_deltas": {
+          "pfb_data_halt_count": 0,
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 481661,
+          "time_dropped_count": 0,
+          "time_packet_count": 481656,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "science": {
+          "fengine_taps": 4,
+          "fft_only": false,
+          "stage": "27j"
+        }
+      },
+      "spectrum": {
+        "bin_width_khz": 30.0,
+        "frame_count": 20,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "block_index": 0,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "coverage_mask_hi": 0,
+          "coverage_mask_lo": 65535,
+          "dst_port": 4323,
+          "fft_shift": 1366,
+          "frame_id": 3679823,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "ninput": 8,
+          "pfb_taps": 4,
+          "product_id": 61697,
+          "sample0": 2690449220,
+          "sample_rate_hz": 122880000,
+          "seq_no": 3679823,
+          "spec_status_flags": 1655,
+          "src_port": 4023,
+          "time_count": 1,
+          "version": 2
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 70.96821886667966,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.783526365026324,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 26.651058573473847,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1335,
+          "power_db": 6.271097060787643,
+          "rf_mhz": 140.05,
+          "signed_bin": 1335
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 26.651058573473847,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 26.651058573473847,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 763,
+            "power_db": 9.22984802880711,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 1147,
+            "power_db": 7.348997887496691,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          },
+          {
+            "bin": 256,
+            "power_db": 6.7783498031233025,
+            "rf_mhz": 107.68,
+            "signed_bin": 256
+          },
+          {
+            "bin": 187,
+            "power_db": 6.755492176923285,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 972,
+            "power_db": 6.73251357505534,
+            "rf_mhz": 129.16,
+            "signed_bin": 972
+          },
+          {
+            "bin": 43,
+            "power_db": 6.715199493521373,
+            "rf_mhz": 101.29,
+            "signed_bin": 43
+          },
+          {
+            "bin": 313,
+            "power_db": 6.507930338807576,
+            "rf_mhz": 109.39,
+            "signed_bin": 313
+          }
+        ],
+        "top_peaks": [
+          {
+            "bin": 2763,
+            "power_db": 70.96821886667966,
+            "rf_mhz": 60.01,
+            "signed_bin": -1333
+          },
+          {
+            "bin": 667,
+            "power_db": 26.651058573473847,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 2811,
+            "power_db": 11.901565350696398,
+            "rf_mhz": 61.45,
+            "signed_bin": -1285
+          },
+          {
+            "bin": 763,
+            "power_db": 9.22984802880711,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 2378,
+            "power_db": 7.736036137454857,
+            "rf_mhz": 48.46,
+            "signed_bin": -1718
+          },
+          {
+            "bin": 2531,
+            "power_db": 7.731462276221012,
+            "rf_mhz": 53.05,
+            "signed_bin": -1565
+          },
+          {
+            "bin": 2716,
+            "power_db": 7.591955246273747,
+            "rf_mhz": 58.6,
+            "signed_bin": -1380
+          },
+          {
+            "bin": 2584,
+            "power_db": 7.442929783420185,
+            "rf_mhz": 54.64,
+            "signed_bin": -1512
+          },
+          {
+            "bin": 2356,
+            "power_db": 7.41348599590812,
+            "rf_mhz": 47.8,
+            "signed_bin": -1740
+          },
+          {
+            "bin": 1147,
+            "power_db": 7.348997887496691,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          },
+          {
+            "bin": 2514,
+            "power_db": 7.343997382149077,
+            "rf_mhz": 52.54,
+            "signed_bin": -1582
+          },
+          {
+            "bin": 2548,
+            "power_db": 7.258095751516031,
+            "rf_mhz": 53.56,
+            "signed_bin": -1548
+          },
+          {
+            "bin": 2493,
+            "power_db": 7.2580957221445885,
+            "rf_mhz": 51.91,
+            "signed_bin": -1603
+          },
+          {
+            "bin": 2475,
+            "power_db": 7.227367233063423,
+            "rf_mhz": 51.37,
+            "signed_bin": -1621
+          },
+          {
+            "bin": 2310,
+            "power_db": 7.201592964389556,
+            "rf_mhz": 46.42,
+            "signed_bin": -1786
+          },
+          {
+            "bin": 2399,
+            "power_db": 7.196419787727354,
+            "rf_mhz": 49.09,
+            "signed_bin": -1697
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 2048,
+      "derived": {
+        "p120_minus_main_db": -54.398827426507175,
+        "p140_minus_main_db": -70.38784444272481,
+        "right_minus_main_db": -54.398827426507175,
+        "right_minus_noise_db": 16.77844389228592
+      },
+      "host_state_after_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.13168758138886,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 478688.11474238284,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 479989.34850487957,
+          "spectrum_update_hz": 6.999953526899941
+        }
+      },
+      "host_state_before_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.20677807914404,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 480000.9234990471,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 479799.03582802846,
+          "spectrum_update_hz": 1.9976250076474078
+        }
+      },
+      "remote_config": {
+        "after": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 2048,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 843664,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 843750,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "amplitude": 2048,
+        "before": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 2048,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 361992,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 362075,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "download": true,
+        "observation": {
+          "amplitude": 2048,
+          "dac_signal_hz": 60000000.0,
+          "enable_mask": 255,
+          "observe_center_hz": 100000000.0
+        },
+        "one_second_deltas": {
+          "pfb_data_halt_count": 0,
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 481672,
+          "time_dropped_count": 0,
+          "time_packet_count": 481675,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "science": {
+          "fengine_taps": 4,
+          "fft_only": false,
+          "stage": "27j"
+        }
+      },
+      "spectrum": {
+        "bin_width_khz": 30.0,
+        "frame_count": 20,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "block_index": 0,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "coverage_mask_hi": 0,
+          "coverage_mask_lo": 65535,
+          "dst_port": 4320,
+          "fft_shift": 1366,
+          "frame_id": 3693948,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "ninput": 8,
+          "pfb_taps": 4,
+          "product_id": 61697,
+          "sample0": 2752811864,
+          "sample_rate_hz": 122880000,
+          "seq_no": 3693948,
+          "spec_status_flags": 1655,
+          "src_port": 4020,
+          "time_count": 1,
+          "version": 2
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 76.96795837884292,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.790687060049825,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 22.569130952335748,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1344,
+          "power_db": 6.580113936118114,
+          "rf_mhz": 140.32,
+          "signed_bin": 1344
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 22.569130952335748,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 22.569130952335748,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 187,
+            "power_db": 11.266994694819623,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 763,
+            "power_db": 8.836614271521134,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 1147,
+            "power_db": 8.64436903526661,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          },
+          {
+            "bin": 257,
+            "power_db": 7.086333228201598,
+            "rf_mhz": 107.71,
+            "signed_bin": 257
+          },
+          {
+            "bin": 233,
+            "power_db": 6.90749668135004,
+            "rf_mhz": 106.99,
+            "signed_bin": 233
+          },
+          {
+            "bin": 1027,
+            "power_db": 6.885310508770783,
+            "rf_mhz": 130.81,
+            "signed_bin": 1027
+          },
+          {
+            "bin": 22,
+            "power_db": 6.621673585146901,
+            "rf_mhz": 100.66,
+            "signed_bin": 22
+          }
+        ],
+        "top_peaks": [
+          {
+            "bin": 2763,
+            "power_db": 76.96795837884292,
+            "rf_mhz": 60.01,
+            "signed_bin": -1333
+          },
+          {
+            "bin": 667,
+            "power_db": 22.569130952335748,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 2283,
+            "power_db": 12.283682546050727,
+            "rf_mhz": 45.61,
+            "signed_bin": -1813
+          },
+          {
+            "bin": 2811,
+            "power_db": 11.46709282581858,
+            "rf_mhz": 61.45,
+            "signed_bin": -1285
+          },
+          {
+            "bin": 187,
+            "power_db": 11.266994694819623,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 763,
+            "power_db": 8.836614271521134,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 1147,
+            "power_db": 8.64436903526661,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          },
+          {
+            "bin": 2923,
+            "power_db": 7.731462217623087,
+            "rf_mhz": 64.81,
+            "signed_bin": -1173
+          },
+          {
+            "bin": 2339,
+            "power_db": 7.62959748249862,
+            "rf_mhz": 47.29,
+            "signed_bin": -1757
+          },
+          {
+            "bin": 2255,
+            "power_db": 7.544438931591739,
+            "rf_mhz": 44.77,
+            "signed_bin": -1841
+          },
+          {
+            "bin": 2454,
+            "power_db": 7.5252859478302785,
+            "rf_mhz": 50.74,
+            "signed_bin": -1642
+          },
+          {
+            "bin": 2354,
+            "power_db": 7.3838411766482315,
+            "rf_mhz": 47.74,
+            "signed_bin": -1742
+          },
+          {
+            "bin": 2378,
+            "power_db": 7.258095737728327,
+            "rf_mhz": 48.46,
+            "signed_bin": -1718
+          },
+          {
+            "bin": 2402,
+            "power_db": 7.258095698457501,
+            "rf_mhz": 49.18,
+            "signed_bin": -1694
+          },
+          {
+            "bin": 2318,
+            "power_db": 7.201593004191763,
+            "rf_mhz": 46.66,
+            "signed_bin": -1778
+          },
+          {
+            "bin": 2242,
+            "power_db": 7.191240334282196,
+            "rf_mhz": 44.38,
+            "signed_bin": -1854
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 4096,
+      "derived": {
+        "p120_minus_main_db": -69.13684748771743,
+        "p140_minus_main_db": -76.5567305288675,
+        "right_minus_main_db": -69.13684748771743,
+        "right_minus_noise_db": 7.9865846645422796
+      },
+      "host_state_after_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.23337062262395,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 480054.51843156986,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 480142.9615765618,
+          "spectrum_update_hz": 10.990572701553521
+        }
+      },
+      "host_state_before_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.20716039728237,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 480034.27396572183,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 479771.4004734429,
+          "spectrum_update_hz": 1.9999800703836839
+        }
+      },
+      "remote_config": {
+        "after": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 4096,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 845104,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 845190,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "amplitude": 4096,
+        "before": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 4096,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 363450,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 363533,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "download": true,
+        "observation": {
+          "amplitude": 4096,
+          "dac_signal_hz": 60000000.0,
+          "enable_mask": 255,
+          "observe_center_hz": 100000000.0
+        },
+        "one_second_deltas": {
+          "pfb_data_halt_count": 0,
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 481654,
+          "time_dropped_count": 0,
+          "time_packet_count": 481657,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "science": {
+          "fengine_taps": 4,
+          "fft_only": false,
+          "stage": "27j"
+        }
+      },
+      "spectrum": {
+        "bin_width_khz": 30.0,
+        "frame_count": 20,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "block_index": 0,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "coverage_mask_hi": 0,
+          "coverage_mask_lo": 65535,
+          "dst_port": 4319,
+          "fft_shift": 1366,
+          "frame_id": 3686699,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "ninput": 8,
+          "pfb_taps": 4,
+          "product_id": 61697,
+          "sample0": 2742098196,
+          "sample_rate_hz": 122880000,
+          "seq_no": 3686699,
+          "spec_status_flags": 1591,
+          "src_port": 4019,
+          "time_count": 1,
+          "version": 2
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 82.98508390285949,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.861651750599782,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 13.848236415142061,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1351,
+          "power_db": 6.428353373991987,
+          "rf_mhz": 140.53,
+          "signed_bin": 1351
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 13.848236415142061,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 13.848236415142061,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 187,
+            "power_db": 9.484740854648878,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 763,
+            "power_db": 7.222224565602737,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 1147,
+            "power_db": 6.962471423765713,
+            "rf_mhz": 134.41,
+            "signed_bin": 1147
+          },
+          {
+            "bin": 864,
+            "power_db": 6.703618303225731,
+            "rf_mhz": 125.92,
+            "signed_bin": 864
+          },
+          {
+            "bin": 273,
+            "power_db": 6.692006154139345,
+            "rf_mhz": 108.19,
+            "signed_bin": 273
+          },
+          {
+            "bin": 173,
+            "power_db": 6.6920061413934695,
+            "rf_mhz": 105.19,
+            "signed_bin": 173
+          },
+          {
+            "bin": 1239,
+            "power_db": 6.633475000256616,
+            "rf_mhz": 137.17000000000002,
+            "signed_bin": 1239
+          }
+        ],
+        "top_peaks": [
+          {
+            "bin": 2763,
+            "power_db": 82.98508390285949,
+            "rf_mhz": 60.01,
+            "signed_bin": -1333
+          },
+          {
+            "bin": 667,
+            "power_db": 13.848236415142061,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 2811,
+            "power_db": 11.671326323053009,
+            "rf_mhz": 61.45,
+            "signed_bin": -1285
+          },
+          {
+            "bin": 187,
+            "power_db": 9.484740854648878,
+            "rf_mhz": 105.61,
+            "signed_bin": 187
+          },
+          {
+            "bin": 3243,
+            "power_db": 8.36482349368743,
+            "rf_mhz": 74.41,
+            "signed_bin": -853
+          },
+          {
+            "bin": 2283,
+            "power_db": 7.638957305260146,
+            "rf_mhz": 45.61,
+            "signed_bin": -1813
+          },
+          {
+            "bin": 2426,
+            "power_db": 7.601396413847242,
+            "rf_mhz": 49.9,
+            "signed_bin": -1670
+          },
+          {
+            "bin": 2413,
+            "power_db": 7.6013964028347925,
+            "rf_mhz": 49.51,
+            "signed_bin": -1683
+          },
+          {
+            "bin": 2259,
+            "power_db": 7.577754856857325,
+            "rf_mhz": 44.89,
+            "signed_bin": -1837
+          },
+          {
+            "bin": 2368,
+            "power_db": 7.53008211706527,
+            "rf_mhz": 48.16,
+            "signed_bin": -1728
+          },
+          {
+            "bin": 2300,
+            "power_db": 7.477030499067943,
+            "rf_mhz": 46.12,
+            "signed_bin": -1796
+          },
+          {
+            "bin": 2320,
+            "power_db": 7.343997348680499,
+            "rf_mhz": 46.72,
+            "signed_bin": -1776
+          },
+          {
+            "bin": 2496,
+            "power_db": 7.3439973349799175,
+            "rf_mhz": 52.0,
+            "signed_bin": -1600
+          },
+          {
+            "bin": 2562,
+            "power_db": 7.3339790266622105,
+            "rf_mhz": 53.98,
+            "signed_bin": -1534
+          },
+          {
+            "bin": 2338,
+            "power_db": 7.323937544832723,
+            "rf_mhz": 47.26,
+            "signed_bin": -1758
+          },
+          {
+            "bin": 2400,
+            "power_db": 7.318908054781601,
+            "rf_mhz": 49.12,
+            "signed_bin": -1696
+          }
+        ]
+      }
+    },
+    {
+      "amplitude": 8192,
+      "derived": {
+        "p120_minus_main_db": -67.35733427590914,
+        "p140_minus_main_db": -82.45136472048873,
+        "right_minus_main_db": -67.35733427590914,
+        "right_minus_noise_db": 15.81681137196352
+      },
+      "host_state_after_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.22799435420389,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 480049.75602149067,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 480067.3564247527,
+          "spectrum_update_hz": 9.999854792273895
+        }
+      },
+      "host_state_before_capture": {
+        "config": {
+          "bandwidth_mhz": 100,
+          "center_mhz": 100.0,
+          "channel_mask": 255,
+          "dac_mhz": 60.0,
+          "display_points": 1024,
+          "expected_mhz": 60.0,
+          "paused": false,
+          "phase_deg_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time_window_us": 0.25,
+          "vertical_scale": 4096.0,
+          "waveform_view_mode": "dual"
+        },
+        "stats": {
+          "active_worker_count": 24,
+          "gbps": 64.23075783722128,
+          "last_spec_chan0": 1536,
+          "last_spec_chan_count": 256,
+          "rx_processed_packets_per_sec": 480029.2308309481,
+          "spec_layout": "27j",
+          "spec_processed_packets_per_sec": 480129.19175367994,
+          "spectrum_update_hz": 0.999999577000179
+        }
+      },
+      "remote_config": {
+        "after": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 8192,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 832564,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 832650,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "amplitude": 8192,
+        "before": {
+          "core_version": 65580,
+          "dac_enable_mask": 255,
+          "dac_tone_amplitude": 8192,
+          "dac_tone_control": 1,
+          "dac_tone_phase_step": 0,
+          "pfb_active": 1,
+          "pfb_coeff_active_taps": 4,
+          "pfb_coeff_active_valid": 1,
+          "pfb_coeff_checksum": 536870912,
+          "pfb_data_halt_count": 0,
+          "pfb_overflow": 0,
+          "pfb_overflow_count": 0,
+          "pfb_taps": 4,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "rfdc_active_mask": 65535,
+          "rfdc_current_valid_mask": 65535,
+          "science_antialias_100m_active": 1,
+          "science_antialias_100m_primed": 1,
+          "science_bandwidth_mhz": 100,
+          "science_output_mode_name": "TIME_SPEC",
+          "science_sample_rate_hz": 122880000,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 350907,
+          "streaming": 1,
+          "time_dropped_count": 0,
+          "time_packet_count": 350990,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "download": true,
+        "observation": {
+          "amplitude": 8192,
+          "dac_signal_hz": 60000000.0,
+          "enable_mask": 255,
+          "observe_center_hz": 100000000.0
+        },
+        "one_second_deltas": {
+          "pfb_data_halt_count": 0,
+          "pfb_overflow_count": 0,
+          "pfb_xfft_event_count": 0,
+          "pfb_xfft_fft_overflow_count": 0,
+          "pfb_xfft_tlast_missing_count": 0,
+          "pfb_xfft_tlast_unexpected_count": 0,
+          "spec_dropped_count": 0,
+          "spec_packet_count": 481657,
+          "time_dropped_count": 0,
+          "time_packet_count": 481660,
+          "tx_route_error_count": 0,
+          "tx_route_miss_count": 0
+        },
+        "science": {
+          "fengine_taps": 4,
+          "fft_only": false,
+          "stage": "27j"
+        }
+      },
+      "spectrum": {
+        "bin_width_khz": 30.0,
+        "frame_count": 20,
+        "header": {
+          "bins": 4096,
+          "block_count": 16,
+          "block_index": 0,
+          "chan0": 0,
+          "chan_count": 4096,
+          "coverage_blocks": 16,
+          "coverage_mask_hi": 0,
+          "coverage_mask_lo": 65535,
+          "dst_port": 4316,
+          "fft_shift": 1366,
+          "frame_id": 3683160,
+          "gap_before": 0,
+          "header_len": 128,
+          "lane_count": 8,
+          "nchan": 4096,
+          "ninput": 8,
+          "pfb_taps": 4,
+          "product_id": 61697,
+          "sample0": 2698593044,
+          "sample_rate_hz": 122880000,
+          "seq_no": 3683160,
+          "spec_status_flags": 1655,
+          "src_port": 4016,
+          "time_count": 1,
+          "version": 2
+        },
+        "main_around_60mhz": {
+          "bin": 2763,
+          "power_db": 89.00755053607608,
+          "rf_mhz": 60.01,
+          "signed_bin": -1333
+        },
+        "noise_median_db": 5.833404888203421,
+        "peak_around_120mhz": {
+          "bin": 667,
+          "power_db": 21.650216260166943,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "peak_around_140mhz": {
+          "bin": 1316,
+          "power_db": 6.5561858155873605,
+          "rf_mhz": 139.48,
+          "signed_bin": 1316
+        },
+        "right_of_center_peak": {
+          "bin": 667,
+          "power_db": 21.650216260166943,
+          "rf_mhz": 120.01,
+          "signed_bin": 667
+        },
+        "right_of_center_top_peaks": [
+          {
+            "bin": 667,
+            "power_db": 21.650216260166943,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 587,
+            "power_db": 10.361795857500141,
+            "rf_mhz": 117.61,
+            "signed_bin": 587
+          },
+          {
+            "bin": 747,
+            "power_db": 10.133639529734555,
+            "rf_mhz": 122.41,
+            "signed_bin": 747
+          },
+          {
+            "bin": 1067,
+            "power_db": 9.17767995403177,
+            "rf_mhz": 132.01,
+            "signed_bin": 1067
+          },
+          {
+            "bin": 267,
+            "power_db": 8.199550018855692,
+            "rf_mhz": 108.01,
+            "signed_bin": 267
+          },
+          {
+            "bin": 763,
+            "power_db": 7.786033978463232,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 107,
+            "power_db": 7.408559205661778,
+            "rf_mhz": 103.21,
+            "signed_bin": 107
+          },
+          {
+            "bin": 173,
+            "power_db": 7.222224593484377,
+            "rf_mhz": 105.19,
+            "signed_bin": 173
+          }
+        ],
+        "top_peaks": [
+          {
+            "bin": 2763,
+            "power_db": 89.00755053607608,
+            "rf_mhz": 60.01,
+            "signed_bin": -1333
+          },
+          {
+            "bin": 667,
+            "power_db": 21.650216260166943,
+            "rf_mhz": 120.01,
+            "signed_bin": 667
+          },
+          {
+            "bin": 2811,
+            "power_db": 11.733683896115021,
+            "rf_mhz": 61.45,
+            "signed_bin": -1285
+          },
+          {
+            "bin": 2843,
+            "power_db": 10.812122237693789,
+            "rf_mhz": 62.41,
+            "signed_bin": -1253
+          },
+          {
+            "bin": 587,
+            "power_db": 10.361795857500141,
+            "rf_mhz": 117.61,
+            "signed_bin": 587
+          },
+          {
+            "bin": 3163,
+            "power_db": 10.159880948687183,
+            "rf_mhz": 72.01,
+            "signed_bin": -933
+          },
+          {
+            "bin": 747,
+            "power_db": 10.133639529734555,
+            "rf_mhz": 122.41,
+            "signed_bin": 747
+          },
+          {
+            "bin": 2363,
+            "power_db": 9.805714431601247,
+            "rf_mhz": 48.01,
+            "signed_bin": -1733
+          },
+          {
+            "bin": 2683,
+            "power_db": 9.472498554381643,
+            "rf_mhz": 57.61,
+            "signed_bin": -1413
+          },
+          {
+            "bin": 1067,
+            "power_db": 9.17767995403177,
+            "rf_mhz": 132.01,
+            "signed_bin": 1067
+          },
+          {
+            "bin": 267,
+            "power_db": 8.199550018855692,
+            "rf_mhz": 108.01,
+            "signed_bin": 267
+          },
+          {
+            "bin": 763,
+            "power_db": 7.786033978463232,
+            "rf_mhz": 122.89,
+            "signed_bin": 763
+          },
+          {
+            "bin": 3243,
+            "power_db": 7.648296931822932,
+            "rf_mhz": 74.41,
+            "signed_bin": -853
+          },
+          {
+            "bin": 2464,
+            "power_db": 7.457577192366568,
+            "rf_mhz": 51.04,
+            "signed_bin": -1632
+          },
+          {
+            "bin": 2593,
+            "power_db": 7.447817694129779,
+            "rf_mhz": 54.91,
+            "signed_bin": -1503
+          },
+          {
+            "bin": 3323,
+            "power_db": 7.418407202680244,
+            "rf_mhz": 76.81,
+            "signed_bin": -773
+          }
+        ]
+      }
+    }
+  ]
+}

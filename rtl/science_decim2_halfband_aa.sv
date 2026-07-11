@@ -36,7 +36,6 @@ module science_decim2_halfband_aa #(
     localparam integer HIST_DEPTH = 44;
     localparam integer COEFF_FRAC = 17;
     localparam signed [17:0] CENTER_COEFF = 18'sd65552;
-    localparam signed [47:0] ROUND_TERM = 48'sd65536;
     localparam [31:0] COEFF_VERSION = 32'hAA10_0041;
     localparam [SAMPLE0_W-1:0] DELAY_SAMPLE0 = DELAY;
 
@@ -121,14 +120,18 @@ module science_decim2_halfband_aa #(
     endfunction
 
     function automatic signed [15:0] round_sat_q17(input signed [47:0] acc);
-        logic signed [47:0] rounded;
-        logic signed [47:0] scaled;
+        logic signed [48:0] extended;
+        logic signed [48:0] scaled;
         begin
-            rounded = (acc >= 0) ? (acc + ROUND_TERM) : (acc - ROUND_TERM);
-            scaled = rounded >>> COEFF_FRAC;
-            if (scaled > 48'sd32767) begin
+            extended = {acc[47], acc};
+            if (extended < 0) begin
+                scaled = -(((-extended) + 49'sd65536) >>> COEFF_FRAC);
+            end else begin
+                scaled = (extended + 49'sd65536) >>> COEFF_FRAC;
+            end
+            if (scaled > 49'sd32767) begin
                 round_sat_q17 = 16'sd32767;
-            end else if (scaled < -48'sd32768) begin
+            end else if (scaled < -49'sd32768) begin
                 round_sat_q17 = -16'sd32768;
             end else begin
                 round_sat_q17 = scaled[15:0];

@@ -160,6 +160,11 @@ module tb_science_rate_selector;
     endtask
 
     initial begin
+        `TB_CHECK_EQ($signed(dut.u_science_decim2_halfband_aa.round_sat_q17(48'sd65535)), 16'sd0, "AA100 positive sub-half-LSB rounds to zero")
+        `TB_CHECK_EQ($signed(dut.u_science_decim2_halfband_aa.round_sat_q17(-48'sd65535)), 16'sd0, "AA100 negative sub-half-LSB rounds to zero")
+        `TB_CHECK_EQ($signed(dut.u_science_decim2_halfband_aa.round_sat_q17(48'sd65536)), 16'sd1, "AA100 positive half-LSB rounds away from zero")
+        `TB_CHECK_EQ($signed(dut.u_science_decim2_halfband_aa.round_sat_q17(-48'sd65536)), -16'sd1, "AA100 negative half-LSB rounds away from zero")
+
         reset_case(2'd2);
         drive_beats(4);
         `TB_CHECK_EQ(out_count, 4, "200MHz selector output count")

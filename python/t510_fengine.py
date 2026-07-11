@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from ipaddress import IPv4Address
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -399,6 +400,14 @@ class RegisterMap:
     PFB_XFFT_STATUS_HALT_COUNT: int = 0x0950
     PFB_CAPTURE_BACKPRESSURE_COUNT: int = 0x0954
     PFB_FRAME_SAMPLE0_OVERFLOW_COUNT: int = 0x0958
+    PFB_COEFF_CONTROL: int = 0x0960
+    PFB_COEFF_STATUS: int = 0x0964
+    PFB_COEFF_INDEX: int = 0x0968
+    PFB_COEFF_DATA: int = 0x096C
+    PFB_COEFF_LOADED_COUNT: int = 0x0970
+    PFB_COEFF_ID: int = 0x0974
+    PFB_COEFF_CHECKSUM: int = 0x0978
+    PFB_COEFF_ERROR_COUNT: int = 0x097C
     TX_CONTROL: int = 0xB000
     TX_STATUS: int = 0xB004
     TX_FRAME_BUILT_COUNT: int = 0xB008
@@ -613,6 +622,24 @@ class T510FEngine:
         "excluded_from_gate": (
             "PFB filter/delay datapath",
             "SPEC decimation/thinning",
+            "legacy 64b SPEC bridge",
+            "dry-run packet scaffolds",
+            "raw witness captures",
+            "1024-point debug FFT observer",
+            "reduced/windowed SPEC preview",
+        ),
+    }
+    STAGE27J_PRODUCTION_SCOPE = {
+        "data_streams": "TIME native 512b + SPEC/F-engine FENGINE_IQ16 4-tap RTL PFB 4096-channel science streams",
+        "control_preview": "Jupyter notebook 15_stage27h_time_spec_fft_fullrate_control.ipynb",
+        "production_preview": "RF reconstructed waveform + PFB spectrum",
+        "production_modes": ("TIME_SPEC",),
+        "convergence_gate": "TIME_SPEC 100MHz board counters plus 24-flow host Rust/Web receive at 63Gbps+ T510 UDP payload",
+        "spec_contract": "4096 channels, 16 blocks x 256 channels x 1 spectrum-time x 8 inputs x IQ16, 8192B payload",
+        "pfb_contract": "4-tap programmable Q1.17 coefficient bank, stopped/idle commit only",
+        "excluded_from_gate": (
+            "20MHz acceptance",
+            "200MHz SPEC_ONLY backpressure closure",
             "legacy 64b SPEC bridge",
             "dry-run packet scaffolds",
             "raw witness captures",
@@ -3719,6 +3746,123 @@ class T510FEngine:
         result["convergence_target"] = "TIME_SPEC_100MHZ_BOARD_AND_HOST"
         return result
 
+    @staticmethod
+    def generate_stage27j_default_pfb_coefficients(*, nchan: int = 4096, taps: int = 4) -> list[int]:
+        """Generate tap-major 4-tap Hamming-windowed sinc PFB coefficients in signed Q1.17."""
+        if int(nchan) != 4096:
+            raise ValueError("Stage 27j default coefficients require nchan=4096")
+        if int(taps) != 4:
+            raise ValueError("Stage 27j supports exactly 4 PFB taps")
+        total = int(nchan) * int(taps)
+        center = (total - 1) / 2.0
+        coeff_by_tap = [[0 for _ in range(int(nchan))] for _ in range(int(taps))]
+        for phase in range(int(nchan)):
+            values: list[float] = []
+            for tap in range(int(taps)):
+                sample = tap * int(nchan) + phase
+                x = (sample - center) / float(nchan)
+                sinc = 1.0 if abs(x) < 1.0e-15 else math.sin(math.pi * x) / (math.pi * x)
+                window = 0.54 - 0.46 * math.cos((2.0 * math.pi * sample) / float(total - 1))
+                values.append(sinc * window)
+            phase_sum = sum(values)
+            if abs(phase_sum) < 1.0e-18:
+                raise ValueError(f"Stage 27j default coefficient phase {phase} has near-zero normalization")
+            quantized = [
+                max(-131_072, min(131_071, int(round((value / phase_sum) * 131_072.0))))
+                for value in values
+            ]
+            delta = 131_072 - sum(quantized)
+            while delta:
+                moved = False
+                for idx in sorted(range(int(taps)), key=lambda i: abs(values[i]), reverse=True):
+                    if delta > 0 and quantized[idx] < 131_071:
+                        step = min(delta, 131_071 - quantized[idx])
+                        quantized[idx] += step
+                        delta -= step
+                        moved = True
+                    elif delta < 0 and quantized[idx] > -131_072:
+                        step = min(-delta, quantized[idx] + 131_072)
+                        quantized[idx] -= step
+                        delta += step
+                        moved = True
+                    if delta == 0:
+                        break
+                if not moved:
+                    raise ValueError(f"Stage 27j default coefficient phase {phase} cannot be quantized to unity sum")
+            if sum(quantized) != 131_072:
+                raise ValueError(f"Stage 27j default coefficient phase {phase} quantized sum is not unity")
+            for tap, value in enumerate(quantized):
+                coeff_by_tap[tap][phase] = int(value)
+        return [coeff_by_tap[tap][phase] for tap in range(int(taps)) for phase in range(int(nchan))]
+
+    @staticmethod
+    def pfb_coefficients_checksum(coefficients: Iterable[int]) -> int:
+        checksum = 0
+        count = 0
+        for coeff in coefficients:
+            value = int(coeff)
+            if value < -131_072 or value > 131_071:
+                raise ValueError(f"PFB coefficient {count} out of signed Q1.17 range: {value}")
+            checksum = (checksum + value) & 0xFFFF_FFFF
+            count += 1
+        if count != 16_384:
+            raise ValueError(f"Stage 27j requires 16384 coefficients, got {count}")
+        return checksum
+
+    def load_pfb_coefficients(
+        self,
+        coefficients: Iterable[int] | None = None,
+        *,
+        coeff_id: int = 0x27A4_0001,
+        stop_first: bool = True,
+        verify: bool = True,
+        settle_s: float = 0.01,
+    ) -> dict[str, Any]:
+        """Load Stage 27j 4-tap PFB coefficients into the shadow bank and commit while idle."""
+        coeffs = list(coefficients) if coefficients is not None else self.generate_stage27j_default_pfb_coefficients()
+        checksum = self.pfb_coefficients_checksum(coeffs)
+        if stop_first:
+            self.stop()
+            time.sleep(max(float(settle_s), 0.0))
+        self.ctrl.write(self.regs.PFB_COEFF_ID, int(coeff_id) & 0xFFFF_FFFF)
+        self.ctrl.write(self.regs.PFB_COEFF_CONTROL, (4 << 4) | (1 << 3) | 0x1)
+        self.ctrl.write(self.regs.PFB_COEFF_INDEX, 0)
+        for coeff in coeffs:
+            self.ctrl.write(self.regs.PFB_COEFF_DATA, int(coeff) & 0x3FFFF)
+        loaded_count = int(self.ctrl.read(self.regs.PFB_COEFF_LOADED_COUNT))
+        status_before_commit = self.read_channelizer_status()
+        self.ctrl.write(self.regs.PFB_COEFF_CONTROL, (4 << 4) | (1 << 3) | 0x2)
+        deadline = time.monotonic() + 2.0
+        status_after_commit = self.read_channelizer_status()
+        while time.monotonic() < deadline:
+            status_after_commit = self.read_channelizer_status()
+            if int(status_after_commit.get("pfb_coeff_active_valid", 0)):
+                break
+            time.sleep(0.01)
+        if verify:
+            if loaded_count != 16_384:
+                raise RuntimeError(f"PFB coefficient load count mismatch: {loaded_count} != 16384")
+            if not int(status_after_commit.get("pfb_coeff_active_valid", 0)):
+                raise RuntimeError("PFB coefficient commit did not make an active bank valid")
+            if int(status_after_commit.get("pfb_coeff_active_taps", 0)) != 4:
+                raise RuntimeError(f"PFB active taps mismatch: {status_after_commit.get('pfb_coeff_active_taps')}")
+            if int(status_after_commit.get("pfb_coeff_active_id", 0)) != (int(coeff_id) & 0xFFFF_FFFF):
+                raise RuntimeError("PFB active coefficient id mismatch")
+            if int(status_after_commit.get("pfb_coeff_checksum", 0)) != checksum:
+                raise RuntimeError(
+                    f"PFB coefficient checksum mismatch: 0x{int(status_after_commit.get('pfb_coeff_checksum', 0)):08x} != 0x{checksum:08x}"
+                )
+            if int(status_after_commit.get("pfb_coeff_error_count", 0)) != 0:
+                raise RuntimeError(f"PFB coefficient command errors: {status_after_commit.get('pfb_coeff_error_count')}")
+        return {
+            "coeff_id": int(coeff_id) & 0xFFFF_FFFF,
+            "coeff_count": len(coeffs),
+            "checksum": checksum,
+            "loaded_count": loaded_count,
+            "status_before_commit": status_before_commit,
+            "status_after_commit": status_after_commit,
+        }
+
     def configure_science_27h(
         self,
         *,
@@ -3834,6 +3978,112 @@ class T510FEngine:
             "dac_gate": (raw >> 16) & 0x1,
             "disabled": int(raw) == 0x0000_FF00,
         }
+
+    def configure_science_27j(
+        self,
+        *,
+        bandwidth_mhz: int | float | str = 100,
+        output_mode: str | int = "time_spec",
+        dst_ip: str = "10.0.1.16",
+        dst_mac: str = "08:c0:eb:d5:95:b2",
+        src_ip: str = "10.0.1.1",
+        src_mac: str = "02:00:00:00:00:01",
+        time_dst_port_base: int = 4300,
+        spec_dst_port_base: int = 4308,
+        time_src_port_base: int = 4000,
+        spec_src_port_base: int = 4008,
+        time_endpoint_base: int = 0,
+        spec_endpoint_base: int = 8,
+        time_flow_count: int = 8,
+        spec_route_count: int = 16,
+        spec_chan_count: int = 256,
+        spec_time_count: int = 1,
+        spec_chan0_stride: int = 256,
+        pfb_fft_shift: int = FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT,
+        pfb_coefficients: Iterable[int] | None = None,
+        pfb_coeff_id: int = 0x27A4_0001,
+        load_coefficients: bool = True,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Configure Stage 27j TIME_SPEC 100MHz production routing with active 4-tap RTL PFB."""
+        mode_name, mode_code = self._normalize_science_output_mode(output_mode)
+        bandwidth = self._normalize_science_bandwidth_mhz(bandwidth_mhz)
+        if mode_code != self.SCIENCE_OUTPUT_MODES["time_spec"]:
+            raise ValueError("Stage 27j gate supports TIME_SPEC only")
+        if bandwidth != 100:
+            raise ValueError("Stage 27j gate is TIME_SPEC 100MHz only")
+        if int(pfb_fft_shift) < 0 or int(pfb_fft_shift) > 0x0FFF:
+            raise ValueError("Stage 27j XFFT scale schedule is 12-bit and must be in 0x000..0xfff")
+        if int(spec_route_count) != 16 or int(spec_chan_count) != 256 or int(spec_time_count) != 1 or int(spec_chan0_stride) != 256:
+            raise ValueError("Stage 27j full-rate SPEC requires 16 routes of 256 channels x 1 spectrum-time")
+        start_requested = bool(kwargs.pop("start", True))
+        settle_s = float(kwargs.get("settle_s", 0.05))
+        result = self.configure_science_live_27e(
+            bandwidth_mhz=bandwidth,
+            output_mode=mode_name,
+            dst_ip=dst_ip,
+            dst_mac=dst_mac,
+            src_ip=src_ip,
+            src_mac=src_mac,
+            time_dst_port_base=time_dst_port_base,
+            spec_dst_port_base=spec_dst_port_base,
+            time_src_port_base=time_src_port_base,
+            spec_src_port_base=spec_src_port_base,
+            time_endpoint_base=time_endpoint_base,
+            spec_endpoint_base=spec_endpoint_base,
+            time_flow_count=time_flow_count,
+            spec_route_count=spec_route_count,
+            spec_chan_count=spec_chan_count,
+            spec_time_count=spec_time_count,
+            spec_chan0_stride=spec_chan0_stride,
+            start=False,
+            **kwargs,
+        )
+        coeff_result = None
+        if load_coefficients:
+            coeff_result = self.load_pfb_coefficients(
+                pfb_coefficients,
+                coeff_id=pfb_coeff_id,
+                stop_first=True,
+            )
+        self.ctrl.write(self.regs.PFB_TAPS, 4)
+        self.ctrl.write(self.regs.PFB_FFT_SHIFT, int(pfb_fft_shift))
+        self.ctrl.write(self.regs.PFB_CONTROL, 0x3)
+        if start_requested:
+            self.start()
+            time.sleep(max(settle_s, 0.0))
+        result["science_status"] = self.read_science_output_status()
+        result["tx_status"] = self.read_tx_status()
+        result["channelizer_status"] = self.read_channelizer_status()
+        result["stage"] = "27j"
+        result["science_product"] = "FENGINE_IQ16_COMPLEX_VOLTAGE_4TAP_RTL_PFB"
+        result["production_scope"] = dict(self.STAGE27J_PRODUCTION_SCOPE)
+        result["convergence_target"] = "TIME_SPEC_100MHZ_4TAP_RTL_PFB_FULL_RATE_BOARD_AND_HOST"
+        result["fengine_nchan"] = 4096
+        result["fengine_taps"] = 4
+        result["fengine_fft_shift"] = int(pfb_fft_shift)
+        result["fft_only"] = False
+        result["pfb_coefficients"] = coeff_result
+        result["spec_ports"] = f"{int(spec_dst_port_base)}..{int(spec_dst_port_base) + int(spec_route_count) - 1}"
+        result["host_flow_count"] = int(time_flow_count) + int(spec_route_count)
+        result["expected_packet_rates"] = {
+            "time_pps": 480_000.0,
+            "spec_pps": 480_000.0,
+            "combined_t510_udp_payload_mbps": 63_897.6,
+        }
+        result["payload_contract"] = {
+            "product": "FENGINE_IQ16",
+            "nchan": 4096,
+            "block_count": 16,
+            "chan_count": 256,
+            "time_count": 1,
+            "ninput": 8,
+            "iq_bits": 16,
+            "payload_bytes": 8192,
+            "pfb_taps": 4,
+        }
+        result["started"] = bool(start_requested)
+        return result
 
     def configure_stage27i_diag(
         self,
@@ -4441,6 +4691,294 @@ class T510FEngine:
             "blockers": blockers,
         }
 
+    def run_stage27j_time_spec_pfb_validation(
+        self,
+        *,
+        configure: bool = True,
+        expected_core_version: int = 0x0001_002C,
+        seconds: float = 10.0,
+        min_time_pps: float = 470_000.0,
+        min_spec_pps: float = 470_000.0,
+        min_combined_t510_udp_payload_mbps: float = 63_000.0,
+        expected_clock_ref: str | None = PRODUCTION_CLOCK_REF,
+        expected_sync_mode: str | None = PRODUCTION_SYNC_MODE,
+        measurement_ready_timeout_s: float = 10.0,
+        require_antialias_100m: bool = True,
+        **config_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Stage 27j board-side gate for TIME_SPEC 100 MHz with active 4-tap RTL PFB."""
+        config = None
+        start_requested = bool(config_kwargs.pop("start", True))
+        if configure:
+            config = self.configure_science_27j(start=False, **config_kwargs)
+            config_kwargs = {}
+        elif config_kwargs:
+            raise ValueError(f"unused Stage 27j config kwargs when configure=False: {sorted(config_kwargs)}")
+
+        ready_before_measurement = None
+        if start_requested:
+            self.start()
+            ready_before_measurement = self._wait_stage27h_measurement_ready(
+                expects_time=True,
+                expects_spec=True,
+                timeout_s=float(measurement_ready_timeout_s),
+            )
+
+        before = self.read_status()
+        time.sleep(max(float(seconds), 0.0))
+        after = self.read_status()
+        tx_after_live = self.read_tx_status()
+        tx_after = self._tx_status_from_status_snapshot(after, tx_after_live)
+        science_after = self.read_science_output_status()
+        channelizer_after = self.read_channelizer_status()
+        spec_routes = self.read_spec_route_table()
+        time_routes = self.read_time_route_table()
+        tx_after_live_disagreements = [
+            key
+            for key in (
+                "qsfp_link_up",
+                "cmac_tx_ready",
+                "udp_dry_run_active",
+                "tx_local_fault",
+                "tx_remote_fault",
+                "tx_frame_sent_count",
+            )
+            if int(tx_after.get(key, 0)) != int(tx_after_live.get(key, 0))
+        ]
+
+        elapsed = max(float(seconds), 1.0e-6)
+        delta_keys = (
+            "spec_packet_count",
+            "time_packet_count",
+            "time_dropped_count",
+            "rfdc_dropped_count",
+            "pfb_overflow_count",
+            "pfb_data_halt_count",
+            "pfb_xfft_event_count",
+            "pfb_tile_overflow_count",
+            "pfb_xfft_tlast_unexpected_count",
+            "pfb_xfft_tlast_missing_count",
+            "pfb_xfft_fft_overflow_count",
+            "pfb_xfft_data_out_halt_count",
+            "pfb_xfft_status_halt_count",
+            "pfb_capture_backpressure_count",
+            "pfb_frame_sample0_overflow_count",
+            "tx_frame_built_count",
+            "tx_frame_byte_count",
+            "tx_route_miss_count",
+            "tx_route_error_count",
+            "spec_dropped_count",
+            "science_dropped_beat_count",
+            "pfb_coeff_error_count",
+        )
+        deltas = {
+            key: self._counter_delta(after.get(key, 0), before.get(key, 0))
+            for key in delta_keys
+        }
+        rates = {
+            "time_pps": float(deltas["time_packet_count"]) / elapsed,
+            "spec_pps": float(deltas["spec_packet_count"]) / elapsed,
+            "combined_t510_udp_payload_mbps": (
+                float(deltas["time_packet_count"] + deltas["spec_packet_count"]) * 8320.0 * 8.0 / elapsed / 1_000_000.0
+            ),
+            "time_t510_udp_payload_mbps": float(deltas["time_packet_count"]) * 8320.0 * 8.0 / elapsed / 1_000_000.0,
+            "spec_t510_udp_payload_mbps": float(deltas["spec_packet_count"]) * 8320.0 * 8.0 / elapsed / 1_000_000.0,
+        }
+
+        errors: list[str] = []
+        blockers: list[str] = []
+        if int(after.get("core_version", 0)) != int(expected_core_version):
+            errors.append(
+                f"WRONG_CORE_VERSION expected 0x{int(expected_core_version):08x} got 0x{int(after.get('core_version', 0)):08x}"
+            )
+        if expected_clock_ref is not None:
+            expected_ref_code = self.CLOCK_REFS[str(expected_clock_ref)]
+            actual_ref_code = int(after.get("configured_clock_ref", -1))
+            if actual_ref_code != expected_ref_code:
+                errors.append(
+                    f"WRONG_CLOCK_REF expected {expected_clock_ref}({expected_ref_code}) got {self._clock_ref_name(actual_ref_code)}({actual_ref_code})"
+                )
+        if expected_sync_mode is not None:
+            expected_sync_code = self.SYNC_MODES[str(expected_sync_mode).lower()]
+            actual_sync_code = int(after.get("configured_sync_mode", -1))
+            actual_active_code = int(after.get("active_sync_mode", -1))
+            if actual_sync_code != expected_sync_code:
+                errors.append(
+                    f"WRONG_SYNC_MODE expected {expected_sync_mode}({expected_sync_code}) got {self._sync_mode_name(actual_sync_code)}({actual_sync_code})"
+                )
+            if actual_active_code != expected_sync_code:
+                errors.append(
+                    f"WRONG_ACTIVE_SYNC_MODE expected {expected_sync_mode}({expected_sync_code}) got {self._sync_mode_name(actual_active_code)}({actual_active_code})"
+                )
+            if str(expected_sync_mode).lower() == "external_pps":
+                if not int(after.get("pps_recent", 0)):
+                    errors.append("EXTERNAL_PPS_NOT_RECENT")
+                if int(after.get("pps_count", 0)) <= 0:
+                    errors.append("EXTERNAL_PPS_COUNT_ZERO")
+        if int(after.get("stage27i_diag_control", 0)) != 0x0000_FF00:
+            errors.append(f"STAGE27I_DIAG_ENABLED raw=0x{int(after.get('stage27i_diag_control', 0)):08x}")
+        if not int(science_after.get("time_enabled", 0)) or not int(science_after.get("spec_enabled", 0)):
+            errors.append("STAGE27J_EXPECTS_TIME_SPEC")
+        if int(science_after.get("science_bandwidth_mhz", 0)) != 100:
+            errors.append(f"STAGE27J_EXPECTS_100MHZ bandwidth_mhz={science_after.get('science_bandwidth_mhz')}")
+        if require_antialias_100m:
+            if not int(science_after.get("science_antialias_100m_active", 0)):
+                errors.append("SCIENCE_100MHZ_ANTIALIAS_NOT_ACTIVE")
+            if not int(science_after.get("science_antialias_100m_primed", 0)):
+                errors.append("SCIENCE_100MHZ_ANTIALIAS_NOT_PRIMED")
+            if int(science_after.get("science_antialias_taps", 0)) != 41:
+                errors.append(f"SCIENCE_100MHZ_ANTIALIAS_TAPS_NOT_41 taps={int(science_after.get('science_antialias_taps', 0))}")
+            if int(science_after.get("science_antialias_coeff_version", 0)) != 0xAA10_0041:
+                errors.append(
+                    "SCIENCE_100MHZ_ANTIALIAS_COEFF_VERSION_MISMATCH "
+                    f"0x{int(science_after.get('science_antialias_coeff_version', 0)):08x}"
+                )
+        for key, label in (
+            ("gt_locked", "GT_NOT_LOCKED"),
+            ("cmac_reset_done", "CMAC_RESET_NOT_DONE"),
+            ("cmac_tx_ready", "CMAC_TX_NOT_READY"),
+        ):
+            if not int(tx_after.get(key, 0)):
+                blockers.append(label)
+        if int(tx_after.get("tx_local_fault", 0)):
+            blockers.append("CMAC_LOCAL_FAULT")
+        if int(tx_after.get("tx_remote_fault", 0)):
+            blockers.append("CMAC_REMOTE_FAULT")
+        for key, label in (
+            ("udp_dry_run_active", "TX_STILL_DRY_RUN"),
+            ("cmac_enable", "CMAC_TX_NOT_ENABLED"),
+            ("frame_builder_enabled", "FRAME_BUILDER_NOT_ENABLED"),
+        ):
+            value = int(tx_after.get(key, 1 if key == "udp_dry_run_active" else 0))
+            if (key == "udp_dry_run_active" and value) or (key != "udp_dry_run_active" and not value):
+                errors.append(label)
+        if int(tx_after.get("tx_underflow", 0)):
+            errors.append("CMAC_TX_UNDERFLOW")
+        if int(tx_after.get("tx_overflow", 0)):
+            errors.append("CMAC_TX_OVERFLOW")
+        if not int(science_after.get("fengine_science_valid", 0)):
+            errors.append("FENGINE_SCIENCE_NOT_VALID")
+        if int(science_after.get("pfb_fft_not_ready", 0)):
+            errors.append("PFB_NOT_READY")
+        if int(channelizer_after.get("pfb_taps", -1)) != 4:
+            errors.append(f"PFB_TAPS_NOT_4 taps={int(channelizer_after.get('pfb_taps', -1))}")
+        if int(channelizer_after.get("pfb_chan_count", 0)) != 256:
+            errors.append("PFB_CHAN_COUNT_NOT_256")
+        if int(channelizer_after.get("pfb_time_count", 0)) != 1:
+            errors.append("PFB_TIME_COUNT_NOT_1")
+        if int(channelizer_after.get("pfb_fft_only", 1)):
+            errors.append("PFB_FFT_ONLY_STATUS_BIT_STILL_SET")
+        if not int(channelizer_after.get("pfb_active", 0)):
+            errors.append("PFB_ACTIVE_STATUS_NOT_SET")
+        if not int(channelizer_after.get("pfb_coeff_active_valid", 0)):
+            errors.append("PFB_COEFF_ACTIVE_NOT_VALID")
+        if int(channelizer_after.get("pfb_coeff_active_taps", 0)) != 4:
+            errors.append(f"PFB_COEFF_ACTIVE_TAPS_NOT_4 taps={int(channelizer_after.get('pfb_coeff_active_taps', 0))}")
+        if int(channelizer_after.get("pfb_coeff_command_error", 0)):
+            errors.append("PFB_COEFF_COMMAND_ERROR")
+        if int(channelizer_after.get("pfb_coeff_error_count", 0)) != 0 or deltas["pfb_coeff_error_count"] != 0:
+            errors.append("PFB_COEFF_ERROR_COUNT_NONZERO")
+        for key, label in (
+            ("pfb_overflow_count", "FENGINE_OVERFLOW"),
+            ("pfb_xfft_event_count", "FENGINE_XFFT_EVENT"),
+            ("pfb_tile_overflow_count", "FENGINE_TILE_OVERFLOW"),
+            ("pfb_xfft_tlast_unexpected_count", "FENGINE_XFFT_TLAST_UNEXPECTED"),
+            ("pfb_xfft_tlast_missing_count", "FENGINE_XFFT_TLAST_MISSING"),
+            ("pfb_xfft_fft_overflow_count", "FENGINE_XFFT_FFT_OVERFLOW"),
+            ("pfb_xfft_data_out_halt_count", "FENGINE_XFFT_DATA_OUT_HALT"),
+            ("pfb_xfft_status_halt_count", "FENGINE_XFFT_STATUS_HALT"),
+            ("pfb_capture_backpressure_count", "FENGINE_CAPTURE_BACKPRESSURE"),
+            ("pfb_frame_sample0_overflow_count", "FENGINE_FRAME_SAMPLE0_OVERFLOW"),
+        ):
+            if deltas[key] != 0:
+                errors.append(label)
+        if deltas["science_dropped_beat_count"] != 0:
+            errors.append("SCIENCE_RATE_DROPPED")
+        if deltas["rfdc_dropped_count"] != 0:
+            errors.append("RFDC_DROPPED")
+        if deltas["time_dropped_count"] != 0:
+            errors.append("TIME_DROPPED")
+        if deltas["spec_dropped_count"] != 0:
+            errors.append("SPEC_DROPPED")
+        if int(tx_after.get("tx_route_miss_count", 0)) != 0 or deltas["tx_route_miss_count"] != 0:
+            errors.append("TX_ROUTE_MISS")
+        if int(tx_after.get("tx_route_error_count", 0)) != 0 or deltas["tx_route_error_count"] != 0:
+            errors.append("TX_ROUTE_ERROR")
+        if int(tx_after.get("tx_frame_dropped_count", 0)) != 0:
+            errors.append("TX_FRAME_DROPPED")
+        if rates["time_pps"] < float(min_time_pps):
+            errors.append(f"TIME_PPS_LOW {rates['time_pps']:.3f} < {float(min_time_pps):.3f}")
+        if rates["spec_pps"] < float(min_spec_pps):
+            errors.append(f"SPEC_PPS_LOW {rates['spec_pps']:.3f} < {float(min_spec_pps):.3f}")
+        if rates["combined_t510_udp_payload_mbps"] < float(min_combined_t510_udp_payload_mbps):
+            errors.append(
+                "COMBINED_T510_UDP_PAYLOAD_LOW "
+                f"{rates['combined_t510_udp_payload_mbps']:.3f} < {float(min_combined_t510_udp_payload_mbps):.3f}"
+            )
+
+        active_spec_routes = spec_routes[:16]
+        inactive_spec_routes = spec_routes[16:]
+        if len(active_spec_routes) != 16:
+            errors.append("SPEC_ROUTE_TABLE_SHORT")
+        for route_id, route in enumerate(active_spec_routes):
+            expected_chan0 = route_id * 256
+            expected_endpoint = 8 + route_id
+            if not int(route.get("enable", 0)):
+                errors.append(f"SPEC_ROUTE_DISABLED id={route_id}")
+            if int(route.get("chan0", -1)) != expected_chan0:
+                errors.append(f"SPEC_ROUTE_CHAN0_BAD id={route_id} chan0={route.get('chan0')} expected={expected_chan0}")
+            if int(route.get("chan_count", 0)) != 256:
+                errors.append(f"SPEC_ROUTE_CHAN_COUNT_BAD id={route_id}")
+            if int(route.get("endpoint_id", -1)) != expected_endpoint:
+                errors.append(f"SPEC_ROUTE_ENDPOINT_BAD id={route_id} endpoint={route.get('endpoint_id')} expected={expected_endpoint}")
+            if int(route.get("hit_count", 0)) == 0:
+                errors.append(f"SPEC_ROUTE_HIT_MISSING id={route_id}")
+        enabled_inactive = [route["id"] for route in inactive_spec_routes if int(route.get("enable", 0))]
+        if enabled_inactive:
+            errors.append(f"UNUSED_SPEC_ROUTES_STILL_ENABLED ids={enabled_inactive[:8]}")
+        enabled_time_routes = [route for route in time_routes if int(route.get("enable", 0))]
+        if not enabled_time_routes:
+            errors.append("TIME_ROUTE_DISABLED")
+        elif all(int(route.get("hit_count", 0)) == 0 for route in enabled_time_routes):
+            errors.append("TIME_ROUTE_HIT_MISSING")
+
+        classification = "STAGE27J_TIME_SPEC_100MHZ_PFB_BOARD_PASS" if not blockers and not errors else "STAGE27J_TIME_SPEC_100MHZ_PFB_BOARD_FAIL"
+        return {
+            "classification": classification,
+            "ok": classification.endswith("PASS"),
+            "full_science_validated": classification.endswith("PASS"),
+            "stage": "27j",
+            "production_scope": dict(self.STAGE27J_PRODUCTION_SCOPE),
+            "convergence_target": "TIME_SPEC_100MHZ_4TAP_RTL_PFB_FULL_RATE_BOARD_AND_HOST",
+            "host_receiver_required": True,
+            "expected_core_version": f"0x{int(expected_core_version):08x}",
+            "bandwidth_mhz": 100,
+            "output_mode": "time_spec",
+            "required_rates": {
+                "time_pps_min": float(min_time_pps),
+                "spec_pps_min": float(min_spec_pps),
+                "combined_t510_udp_payload_mbps_min": float(min_combined_t510_udp_payload_mbps),
+                "time_pps_target": 480_000.0,
+                "spec_pps_target": 480_000.0,
+                "combined_t510_udp_payload_mbps_target": 63_897.6,
+            },
+            "config": config,
+            "ready_before_measurement": ready_before_measurement,
+            "before": before,
+            "after": after,
+            "tx_after": tx_after,
+            "tx_after_live": tx_after_live,
+            "tx_after_live_disagreements": tx_after_live_disagreements,
+            "science_after": science_after,
+            "channelizer_after": channelizer_after,
+            "spec_routes": spec_routes,
+            "time_routes": time_routes,
+            "deltas": deltas,
+            "rates": rates,
+            "errors": errors,
+            "blockers": blockers,
+        }
+
     def run_stage26_time_live_validation(
         self,
         *,
@@ -4994,6 +5532,95 @@ class T510FEngine:
         )
         return status
 
+    @staticmethod
+    def _tx_status_from_status_snapshot(status: Mapping[str, Any], live: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Build a read_tx_status-shaped view from one read_status() snapshot."""
+        result: dict[str, Any] = dict(live or {})
+        mapping = {
+            "tx_control": "tx_control",
+            "tx_status": "tx_status",
+            "tx_preflight_status": "tx_preflight_status",
+            "tx_link_status_flags_raw": "tx_link_status_flags",
+            "tx_preflight_qsfp_link_up": "tx_preflight_qsfp_link_up",
+            "tx_preflight_udp_dry_run_active": "tx_preflight_udp_dry_run_active",
+            "tx_preflight_cmac_reset_done": "tx_preflight_cmac_reset_done",
+            "tx_preflight_gt_locked": "tx_preflight_gt_locked",
+            "tx_preflight_cmac_tx_ready": "tx_preflight_cmac_tx_ready",
+            "qsfp_link_up": "tx_qsfp_link_up",
+            "udp_dry_run_active": "tx_udp_dry_run_active",
+            "cmac_reset_done": "tx_cmac_reset_done",
+            "gt_locked": "tx_gt_locked",
+            "cmac_tx_ready": "tx_cmac_tx_ready",
+            "tx_local_fault": "tx_local_fault",
+            "tx_remote_fault": "tx_remote_fault",
+            "route_miss_sticky": "tx_route_miss_sticky",
+            "route_error_sticky": "tx_route_error_sticky",
+            "frame_builder_enabled": "tx_frame_builder_enabled",
+            "force_dry_run": "tx_force_dry_run",
+            "cmac_enable": "tx_cmac_enable",
+            "qsfp_module_present": "tx_qsfp_module_present",
+            "gt_refclk_seen": "tx_gt_refclk_seen",
+            "gt_tx_reset_done": "tx_gt_tx_reset_done",
+            "gt_rx_reset_done": "tx_gt_rx_reset_done",
+            "tx_underflow": "tx_underflow",
+            "tx_overflow": "tx_overflow",
+            "diagnostic_ignore_link_gate": "tx_diagnostic_ignore_link_gate",
+            "cmac_rx_aligned": "tx_cmac_rx_aligned",
+            "cmac_rx_status": "tx_cmac_rx_status",
+            "cmac_rx_local_fault_detail": "tx_cmac_rx_local_fault_detail",
+            "cmac_rx_internal_local_fault": "tx_cmac_rx_internal_local_fault",
+            "cmac_tx_local_fault_detail": "tx_cmac_tx_local_fault_detail",
+            "cmac_an_autoneg_complete": "tx_cmac_an_autoneg_complete",
+            "cmac_an_lp_ability_valid": "tx_cmac_an_lp_ability_valid",
+            "cmac_an_lp_autoneg_able": "tx_cmac_an_lp_autoneg_able",
+            "cmac_an_lp_ability_100gbase_cr4": "tx_cmac_an_lp_ability_100gbase_cr4",
+            "cmac_an_rs_fec_enable": "tx_cmac_an_rs_fec_enable",
+            "cmac_lt_signal_detect_all": "tx_cmac_lt_signal_detect_all",
+            "cmac_lt_training_any": "tx_cmac_lt_training_any",
+            "cmac_lt_training_fail_any": "tx_cmac_lt_training_fail_any",
+            "cmac_lt_frame_lock_all": "tx_cmac_lt_frame_lock_all",
+            "tx_frame_built_count": "tx_frame_built_count",
+            "tx_frame_sent_count": "tx_frame_sent_count",
+            "tx_frame_dropped_count": "tx_frame_dropped_count",
+            "tx_frame_byte_count": "tx_frame_byte_count",
+            "tx_route_miss_count": "tx_route_miss_count",
+            "tx_route_error_count": "tx_route_error_count",
+            "tx_cmac_accepted_packet_count": "tx_cmac_accepted_packet_count",
+            "tx_cmac_accepted_byte_count": "tx_cmac_accepted_byte_count",
+            "tx_selected_endpoint": "tx_selected_endpoint",
+            "tx_selected_route": "tx_selected_route",
+            "tx_selected_route_is_time": "tx_selected_route_is_time",
+            "qsfp_test_interval_cycles": "qsfp_test_interval_cycles",
+            "tx_cmac_source_status": "tx_cmac_source_status",
+            "tx_cmac_mux_selected_source": "tx_cmac_mux_selected_source",
+            "tx_cmac_mux_selected_heartbeat": "tx_cmac_mux_selected_heartbeat",
+            "tx_cmac_mux_selected_time": "tx_cmac_mux_selected_time",
+            "tx_cmac_mux_selected_spec": "tx_cmac_mux_selected_spec",
+            "tx_cmac_mux_select_time": "tx_cmac_mux_select_time",
+            "tx_cmac_mux_select_spec": "tx_cmac_mux_select_spec",
+            "tx_cmac_heartbeat_enabled": "tx_cmac_heartbeat_enabled",
+            "tx_cmac_heartbeat_valid": "tx_cmac_heartbeat_valid",
+            "tx_cmac_time_valid": "tx_cmac_time_valid",
+            "tx_cmac_legacy_bridge_ready": "tx_cmac_legacy_bridge_ready",
+            "tx_time_live_requested_data": "tx_time_live_requested_data",
+            "tx_time_live_requested_cmac": "tx_time_live_requested_cmac",
+            "tx_spec_live_requested_data": "tx_spec_live_requested_data",
+            "tx_spec_live_requested_cmac": "tx_spec_live_requested_cmac",
+            "tx_legacy_bridge_requested_data": "tx_legacy_bridge_requested_data",
+            "tx_legacy_bridge_requested_cmac": "tx_legacy_bridge_requested_cmac",
+            "tx_legacy_bridge_fifo_full": "tx_legacy_bridge_fifo_full",
+            "tx_legacy_bridge_fifo_empty": "tx_legacy_bridge_fifo_empty",
+            "tx_time_live_bridge_fifo_full": "tx_time_live_bridge_fifo_full",
+            "tx_time_live_bridge_fifo_empty": "tx_time_live_bridge_fifo_empty",
+            "tx_cmac_source_mux_raw": "tx_cmac_source_mux_raw",
+            "tx_cmac_source_mux_locked": "tx_cmac_source_mux_locked",
+        }
+        for dst, src in mapping.items():
+            if src in status:
+                result[dst] = status[src]
+        result["snapshot_source"] = "read_status_after"
+        return result
+
     def capture_tx_frame_header(self, *, timeout: float = 1.0) -> dict[str, Any]:
         try:
             from .packet import EthernetIPv4UDPFrame
@@ -5120,6 +5747,12 @@ class T510FEngine:
             "pfb_frame_sample0_overflow_count": int(self.ctrl.read(self.regs.PFB_FRAME_SAMPLE0_OVERFLOW_COUNT)),
             "pfb_peak_chan": int(self.ctrl.read(self.regs.PFB_PEAK_CHAN)),
             "pfb_peak_power": int(self.ctrl.read(self.regs.PFB_PEAK_POWER)),
+            "pfb_coeff_control": int(self.ctrl.read(self.regs.PFB_COEFF_CONTROL)),
+            "pfb_coeff_status": int(self.ctrl.read(self.regs.PFB_COEFF_STATUS)),
+            "pfb_coeff_loaded_count": int(self.ctrl.read(self.regs.PFB_COEFF_LOADED_COUNT)),
+            "pfb_coeff_active_id": int(self.ctrl.read(self.regs.PFB_COEFF_ID)),
+            "pfb_coeff_checksum": int(self.ctrl.read(self.regs.PFB_COEFF_CHECKSUM)),
+            "pfb_coeff_error_count": int(self.ctrl.read(self.regs.PFB_COEFF_ERROR_COUNT)),
         }
         raw = status["pfb_status"]
         status["pfb_enabled"] = raw & 0x1
@@ -5137,6 +5770,25 @@ class T510FEngine:
         status["pfb_fft_shift_status"] = (raw >> 12) & 0xF
         status["pfb_xfft_config_done_mask"] = (raw >> 16) & 0xFF
         status["pfb_xfft_config_ready_mask"] = (raw >> 24) & 0xFF
+        coeff_control = status["pfb_coeff_control"]
+        coeff_status = status["pfb_coeff_status"]
+        status["pfb_coeff_requested_taps"] = (coeff_control >> 4) & 0xF
+        status["pfb_coeff_auto_increment"] = (coeff_control >> 3) & 0x1
+        status["pfb_coeff_active_valid"] = coeff_status & 0x1
+        status["pfb_coeff_shadow_loading"] = (coeff_status >> 1) & 0x1
+        status["pfb_coeff_shadow_full"] = (coeff_status >> 2) & 0x1
+        status["pfb_coeff_commit_pending"] = (coeff_status >> 3) & 0x1
+        status["pfb_coeff_busy"] = (coeff_status >> 4) & 0x1
+        status["pfb_coeff_command_error"] = (coeff_status >> 5) & 0x1
+        status["pfb_coeff_active_bank"] = (coeff_status >> 6) & 0x1
+        status["pfb_coeff_shadow_bank"] = (coeff_status >> 7) & 0x1
+        status["pfb_coeff_active_taps"] = (coeff_status >> 8) & 0xF
+        status["pfb_active"] = int(
+            int(status["pfb_taps"]) >= 4
+            and int(status["pfb_science_valid"])
+            and not int(status["pfb_fft_only"])
+            and int(status["pfb_coeff_active_valid"])
+        )
         return status
 
     def start(self) -> None:
@@ -5282,6 +5934,12 @@ class T510FEngine:
             "pfb_frame_sample0_overflow_count": self.regs.PFB_FRAME_SAMPLE0_OVERFLOW_COUNT,
             "pfb_peak_chan": self.regs.PFB_PEAK_CHAN,
             "pfb_peak_power": self.regs.PFB_PEAK_POWER,
+            "pfb_coeff_control": self.regs.PFB_COEFF_CONTROL,
+            "pfb_coeff_status": self.regs.PFB_COEFF_STATUS,
+            "pfb_coeff_loaded_count": self.regs.PFB_COEFF_LOADED_COUNT,
+            "pfb_coeff_active_id": self.regs.PFB_COEFF_ID,
+            "pfb_coeff_checksum": self.regs.PFB_COEFF_CHECKSUM,
+            "pfb_coeff_error_count": self.regs.PFB_COEFF_ERROR_COUNT,
             "tx_control": self.regs.TX_CONTROL,
             "tx_status": self.regs.TX_STATUS,
             "tx_frame_built_count": self.regs.TX_FRAME_BUILT_COUNT,
@@ -5542,6 +6200,25 @@ class T510FEngine:
         status["pfb_fft_shift_status"] = (pfb_status >> 12) & 0xF
         status["pfb_xfft_config_done_mask"] = (pfb_status >> 16) & 0xFF
         status["pfb_xfft_config_ready_mask"] = (pfb_status >> 24) & 0xFF
+        pfb_coeff_control = status["pfb_coeff_control"]
+        pfb_coeff_status = status["pfb_coeff_status"]
+        status["pfb_coeff_requested_taps"] = (pfb_coeff_control >> 4) & 0xF
+        status["pfb_coeff_auto_increment"] = (pfb_coeff_control >> 3) & 0x1
+        status["pfb_coeff_active_valid"] = pfb_coeff_status & 0x1
+        status["pfb_coeff_shadow_loading"] = (pfb_coeff_status >> 1) & 0x1
+        status["pfb_coeff_shadow_full"] = (pfb_coeff_status >> 2) & 0x1
+        status["pfb_coeff_commit_pending"] = (pfb_coeff_status >> 3) & 0x1
+        status["pfb_coeff_busy"] = (pfb_coeff_status >> 4) & 0x1
+        status["pfb_coeff_command_error"] = (pfb_coeff_status >> 5) & 0x1
+        status["pfb_coeff_active_bank"] = (pfb_coeff_status >> 6) & 0x1
+        status["pfb_coeff_shadow_bank"] = (pfb_coeff_status >> 7) & 0x1
+        status["pfb_coeff_active_taps"] = (pfb_coeff_status >> 8) & 0xF
+        status["pfb_active"] = int(
+            int(status["pfb_taps"]) >= 4
+            and int(status["pfb_science_valid"])
+            and not int(status["pfb_fft_only"])
+            and int(status["pfb_coeff_active_valid"])
+        )
         science_status = status["science_status"]
         science_bw = int(status["science_bandwidth_mode"]) & 0x3
         science_mode = int(status["science_output_mode"]) & 0x7

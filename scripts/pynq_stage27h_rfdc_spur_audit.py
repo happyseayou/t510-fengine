@@ -84,6 +84,18 @@ FENGINE_REQUIRED_STATUS = {
     "pfb_chan_count": 256,
     "pfb_time_count": 1,
 }
+FENGINE_REQUIRED_STATUS_27J = {
+    "pfb_enabled": 1,
+    "pfb_config_valid": 1,
+    "pfb_science_valid": 1,
+    "pfb_fft_only": 0,
+    "pfb_taps": 4,
+    "pfb_chan_count": 256,
+    "pfb_time_count": 1,
+    "pfb_active": 1,
+    "pfb_coeff_active_valid": 1,
+    "pfb_coeff_active_taps": 4,
+}
 ROOTCAUSE_STATUS_COUNTER_KEYS = (
     "time_packet_count",
     "spec_packet_count",
@@ -196,7 +208,12 @@ def _u32_delta(after: int, before: int) -> int:
     return (int(after) - int(before)) % U32_MODULUS
 
 
-def _capture_fengine_clean_gate(core: Any, seconds: float) -> dict[str, Any]:
+def _capture_fengine_clean_gate(
+    core: Any,
+    seconds: float,
+    *,
+    required_status: dict[str, int] | None = None,
+) -> dict[str, Any]:
     before = _dict_or_empty(core.read_channelizer_status())
     time.sleep(max(0.0, float(seconds)))
     after = _dict_or_empty(core.read_channelizer_status())
@@ -205,9 +222,10 @@ def _capture_fengine_clean_gate(core: Any, seconds: float) -> dict[str, Any]:
         for key in FENGINE_ERROR_COUNTER_KEYS
     }
     frame_delta = _u32_delta(int(after.get("pfb_frame_count", 0)), int(before.get("pfb_frame_count", 0)))
+    expected_status = required_status or FENGINE_REQUIRED_STATUS
     status_mismatches = {
         key: {"expected": expected, "actual": int(after.get(key, -1))}
-        for key, expected in FENGINE_REQUIRED_STATUS.items()
+        for key, expected in expected_status.items()
         if int(after.get(key, -1)) != int(expected)
     }
     active_error_latches = {
@@ -3508,6 +3526,108 @@ def _classify_stage27i_antialias_acceptance(cases: list[dict[str, Any]], *, targ
     }
 
 
+def _stage27j_pfb_spectral_purity(
+    cases: list[dict[str, Any]],
+    *,
+    min_main_to_spur_db: float,
+    main_exclusion_mhz: float,
+) -> dict[str, Any]:
+    reference_cases = [
+        case
+        for case in cases
+        if case.get("case_type") == "reference_tone_on" and not case.get("error")
+    ]
+    if not reference_cases:
+        return {
+            "ok": False,
+            "reason": "Stage 27j PFB spectral purity requires a valid reference-tone case",
+            "min_main_to_spur_db": float(min_main_to_spur_db),
+            "main_exclusion_mhz": float(main_exclusion_mhz),
+        }
+
+    reference = reference_cases[0]
+    spectrum = reference.get("rust_spectrum") if isinstance(reference.get("rust_spectrum"), dict) else {}
+    header = spectrum.get("header") if isinstance(spectrum.get("header"), dict) else {}
+    peaks = [
+        peak
+        for peak in spectrum.get("average_peaks", [])
+        if isinstance(peak, dict)
+        and peak.get("power_db") is not None
+        and peak.get("rf_mhz") is not None
+    ]
+    if not peaks:
+        return {
+            "ok": False,
+            "reason": "Stage 27j reference-tone SPEC capture has no ranked peaks",
+            "case": reference.get("name"),
+            "min_main_to_spur_db": float(min_main_to_spur_db),
+            "main_exclusion_mhz": float(main_exclusion_mhz),
+        }
+
+    main_peak = max(peaks, key=lambda peak: float(peak["power_db"]))
+    main_rf_mhz = float(main_peak["rf_mhz"])
+    main_power_db = float(main_peak["power_db"])
+    spur_peaks = [
+        peak
+        for peak in peaks
+        if abs(float(peak["rf_mhz"]) - main_rf_mhz) > float(main_exclusion_mhz)
+    ]
+    strongest_spur = max(spur_peaks, key=lambda peak: float(peak["power_db"])) if spur_peaks else None
+    main_to_spur_db = (
+        main_power_db - float(strongest_spur["power_db"])
+        if strongest_spur is not None
+        else float("inf")
+    )
+
+    near_strongest = []
+    if strongest_spur is not None:
+        strongest_spur_power_db = float(strongest_spur["power_db"])
+        near_strongest = sorted(
+            [
+                float(peak["rf_mhz"])
+                for peak in spur_peaks
+                if float(peak["power_db"]) >= strongest_spur_power_db - 8.0
+            ]
+        )
+    spacings = [
+        near_strongest[idx] - near_strongest[idx - 1]
+        for idx in range(1, len(near_strongest))
+        if near_strongest[idx] - near_strongest[idx - 1] > 0.25
+    ]
+    estimated_spacing_mhz = None
+    if spacings:
+        ordered_spacings = sorted(spacings)
+        estimated_spacing_mhz = ordered_spacings[len(ordered_spacings) // 2]
+
+    spec_flags = int(header.get("spec_flags", 0) or 0)
+    header_ok = bool(
+        int(header.get("pfb_taps", 0) or 0) == 4
+        and (spec_flags & (1 << 10)) != 0
+        and (spec_flags & (1 << 8)) == 0
+    )
+    suppression_ok = bool(main_to_spur_db >= float(min_main_to_spur_db))
+    ok = bool(header_ok and suppression_ok)
+    return {
+        "ok": ok,
+        "reason": (
+            "Stage 27j PFB header and reference-tone spectral purity pass"
+            if ok
+            else "Stage 27j PFB reference tone has an invalid header or excessive out-of-main spectral spur"
+        ),
+        "case": reference.get("name"),
+        "header_ok": header_ok,
+        "pfb_taps": int(header.get("pfb_taps", 0) or 0),
+        "spec_flags": spec_flags,
+        "main_peak": main_peak,
+        "strongest_out_of_main_spur": strongest_spur,
+        "main_to_spur_db": main_to_spur_db,
+        "min_main_to_spur_db": float(min_main_to_spur_db),
+        "main_exclusion_mhz": float(main_exclusion_mhz),
+        "estimated_strong_spur_spacing_mhz": estimated_spacing_mhz,
+        "strong_spur_rf_mhz": near_strongest,
+    }
+
+
 def _classify(cases: list[dict[str, Any]]) -> dict[str, Any]:
     invalid_cases = [
         {
@@ -3684,7 +3804,8 @@ def _run_case(core: Any, args: argparse.Namespace, case: dict[str, Any], *, init
     rfdc_readback_after_observation = _safe_call(core.read_rfdc_sync_status)
     recovery_status = _prepare_stream_after_observation(core, float(args.stream_timeout))
     science_start = not isinstance(diag_request, dict)
-    science = core.configure_science_27h(
+    configure_science = core.configure_science_27j if bool(args.stage27j_pfb) else core.configure_science_27h
+    science = configure_science(
         bandwidth_mhz=bandwidth_mhz,
         output_mode=output_mode,
         dst_ip=args.dst_ip,
@@ -3720,7 +3841,11 @@ def _run_case(core: Any, args: argparse.Namespace, case: dict[str, Any], *, init
         raise ValueError(f"unsupported sysref_action {sysref_action!r}")
     time.sleep(float(args.settle_s))
     fengine_clean_gate = (
-        _capture_fengine_clean_gate(core, float(args.fengine_clean_seconds))
+        _capture_fengine_clean_gate(
+            core,
+            float(args.fengine_clean_seconds),
+            required_status=FENGINE_REQUIRED_STATUS_27J if bool(args.stage27j_pfb) else FENGINE_REQUIRED_STATUS,
+        )
         if expects_spec
         else _capture_time_path_clean_gate(core, float(args.fengine_clean_seconds))
     )
@@ -3869,6 +3994,28 @@ def main() -> int:
     parser.add_argument("--stage27i-rfdc-mixer-sequence-audit", action="store_true", help="Run Stage 27i 100MHz RFDC EventSource/UpdateEvent/ResetNCOPhase sequence audit.")
     parser.add_argument("--stage27i-raw-lane-witness-audit", action="store_true", help="Run Stage 27i 0x0001002A pre-diag RFDC raw-lane witness audit.")
     parser.add_argument("--stage27i-antialias-acceptance", action="store_true", help="Run Stage 27i 0x0001002B 100MHz anti-alias post-fix acceptance against the 122.88MHz target.")
+    parser.add_argument(
+        "--stage27j-pfb",
+        action="store_true",
+        help="Run production TIME/SPEC cases through the Stage 27j 4-tap PFB contract instead of Stage 27h FFT-only.",
+    )
+    parser.add_argument(
+        "--stage27j-reference-only",
+        action="store_true",
+        help="Run one fresh Stage 27j reference-tone case without repeated LMK/RFDC reconfiguration.",
+    )
+    parser.add_argument(
+        "--stage27j-min-main-to-spur-db",
+        type=float,
+        default=35.0,
+        help="Minimum Stage 27j reference-tone SPEC main-to-strongest-out-of-main spur separation.",
+    )
+    parser.add_argument(
+        "--stage27j-main-exclusion-mhz",
+        type=float,
+        default=0.5,
+        help="Half-width around the Stage 27j reference-tone main peak excluded from the spur search.",
+    )
     parser.add_argument("--physical-state", default="unspecified", help="Free-form physical setup label stored in every case, e.g. adc_to_spectrum_analyzer_50ohm.")
     parser.add_argument("--clock-refs", default=_parse_str_list("external_10mhz,tcxo_10mhz"), type=_parse_str_list)
     parser.add_argument("--mode-sweep", default=_parse_mode_sweep("20:spec_only,100:time_spec,100:spec_only,100:time_only"), type=_parse_mode_sweep)
@@ -3933,6 +4080,11 @@ def main() -> int:
     parser.set_defaults(restore_dac_off=True, download_each_case=True)
     parser.add_argument("--expected-core-version", type=lambda value: int(value, 0), default=EXPECTED_CORE_VERSION)
     args = parser.parse_args()
+    if bool(args.stage27j_reference_only):
+        args.stage27j_pfb = True
+        args.no_reference_case = False
+        args.force_clock_reconfigure = True
+        args.top_count = max(int(args.top_count), 32)
     if bool(args.stage27i_diag_audit):
         args.fixed_rf_audit = True
         args.no_reference_case = True
@@ -4650,13 +4802,14 @@ def main() -> int:
                 }
             )
     else:
+        production_clock_ref = str(args.clock_refs[0])
         for center_mhz in args.centers_mhz:
             cases.append(
                 {
                     "name": f"zero_amp_enable_ff_center_{center_mhz:.3f}",
                     "case_type": "zero_amp_enable_ff",
                     "physical_state": str(args.physical_state),
-                    "clock_ref": "external_10mhz",
+                    "clock_ref": production_clock_ref,
                     "bandwidth_mhz": int(args.bandwidth_mhz),
                     "output_mode": "time_spec",
                     "center_mhz": float(center_mhz),
@@ -4672,7 +4825,7 @@ def main() -> int:
                 "name": f"zero_amp_enable_00_center_{float(args.reference_center_mhz):.3f}",
                 "case_type": "zero_amp_enable_00",
                 "physical_state": str(args.physical_state),
-                "clock_ref": "external_10mhz",
+                "clock_ref": production_clock_ref,
                 "bandwidth_mhz": int(args.bandwidth_mhz),
                 "output_mode": "time_spec",
                 "center_mhz": float(args.reference_center_mhz),
@@ -4690,7 +4843,7 @@ def main() -> int:
                         "name": f"zero_amp_dac_nco_{float(dac_nco_mhz):.6f}_center_{float(args.reference_center_mhz):.3f}",
                         "case_type": "zero_amp_dac_nco_sweep",
                         "physical_state": str(args.physical_state),
-                        "clock_ref": "external_10mhz",
+                        "clock_ref": production_clock_ref,
                         "bandwidth_mhz": int(args.bandwidth_mhz),
                         "output_mode": "time_spec",
                         "center_mhz": float(args.reference_center_mhz),
@@ -4711,7 +4864,7 @@ def main() -> int:
                 "name": f"reference_tone_center_{float(args.reference_center_mhz):.3f}_tone_{aligned_mhz:.6f}",
                 "case_type": "reference_tone_on",
                 "physical_state": str(args.physical_state),
-                "clock_ref": "external_10mhz",
+                "clock_ref": production_clock_ref,
                 "bandwidth_mhz": int(args.bandwidth_mhz),
                 "output_mode": "time_spec",
                 "center_mhz": float(args.reference_center_mhz),
@@ -4723,6 +4876,8 @@ def main() -> int:
                 "target_rf_mhz": float(args.target_rf_mhz) if bool(args.fixed_rf_audit) else None,
             }
         )
+    if bool(args.stage27j_reference_only):
+        cases = [case for case in cases if case.get("case_type") == "reference_tone_on"]
 
     results = []
     try:
@@ -4772,7 +4927,21 @@ def main() -> int:
         ):
             _safe_call(core.disable_stage27i_diag)
 
-    if bool(args.stage27i_antialias_acceptance):
+    if bool(args.stage27j_reference_only):
+        reference_invalid = [
+            {
+                "case": case.get("name"),
+                "reason": case.get("invalid_for_spur_reason") or case.get("error") or "reference case invalid",
+            }
+            for case in results
+            if case.get("valid_for_spur") is not True or case.get("error")
+        ]
+        classification = {
+            "classification": "stage27j_pfb_reference_spectral_check",
+            "reason": "single-download Stage 27j reference-tone spectral purity acquisition",
+            "invalid_cases": reference_invalid,
+        }
+    elif bool(args.stage27i_antialias_acceptance):
         classification = _classify_stage27i_antialias_acceptance(results, target_rf_mhz=float(args.target_rf_mhz), min_snr_db=float(args.target_snr_db))
     elif bool(args.stage27i_raw_lane_witness_audit):
         classification = _classify_stage27i_raw_lane_witness_audit(results, target_rf_mhz=float(args.target_rf_mhz), min_snr_db=float(args.target_snr_db))
@@ -4798,6 +4967,19 @@ def main() -> int:
         classification = _classify(results)
     classification_invalid_cases = list(classification.get("invalid_cases", [])) if isinstance(classification, dict) else []
     classification_cases_valid = not classification_invalid_cases
+    stage27j_pfb_spectral_purity = None
+    if bool(args.stage27j_pfb):
+        stage27j_pfb_spectral_purity = _stage27j_pfb_spectral_purity(
+            results,
+            min_main_to_spur_db=float(args.stage27j_min_main_to_spur_db),
+            main_exclusion_mhz=float(args.stage27j_main_exclusion_mhz),
+        )
+        if not bool(stage27j_pfb_spectral_purity.get("ok")):
+            errors.append(
+                "Stage 27j PFB spectral purity failed: "
+                f"main_to_spur_db={stage27j_pfb_spectral_purity.get('main_to_spur_db')} "
+                f"required={float(args.stage27j_min_main_to_spur_db):.3f}"
+            )
     ok = (
         not errors
         and classification.get("classification") not in (
@@ -4819,7 +5001,7 @@ def main() -> int:
         and (not bool(args.stage27i_antialias_acceptance) or classification_cases_valid)
     )
     result = {
-        "stage": "27i" if (
+        "stage": "27j" if bool(args.stage27j_pfb) else "27i" if (
             bool(args.stage27i_diag_audit)
             or bool(args.stage27i_front_end_audit)
             or bool(args.stage27i_spec_sideband_audit)
@@ -4830,13 +5012,17 @@ def main() -> int:
             or bool(args.stage27i_raw_lane_witness_audit)
             or bool(args.stage27i_antialias_acceptance)
         ) else "27h",
-        "production_stage": "27h",
+        "production_stage": "27j" if bool(args.stage27j_pfb) else "27h",
         "expected_core_version": f"0x{int(args.expected_core_version):08x}",
         "core_version": f"0x{int(initial_status.get('core_version', 0)):08x}",
         "ok": ok,
         "classification": classification,
         "classification_cases_valid": classification_cases_valid,
-        "purpose": "Separate Rust Web display correctness from real RFDC raw preview, production TIME waveform, and FFT-only SPEC spur sources.",
+        "purpose": (
+            "Validate anti-alias behavior through production TIME and Stage 27j 4-tap PFB SPEC sources."
+            if bool(args.stage27j_pfb)
+            else "Separate Rust Web display correctness from real RFDC raw preview, production TIME waveform, and FFT-only SPEC spur sources."
+        ),
         "allowed_spur_classifications": list(ALLOWED_STAGE27I_SPUR_CLASSIFICATIONS),
         "fixed_rf_audit": bool(args.fixed_rf_audit),
         "board_internal_audit": bool(args.board_internal_audit),
@@ -4849,6 +5035,9 @@ def main() -> int:
         "stage27i_rfdc_mixer_sequence_audit": bool(args.stage27i_rfdc_mixer_sequence_audit),
         "stage27i_raw_lane_witness_audit": bool(args.stage27i_raw_lane_witness_audit),
         "stage27i_antialias_acceptance": bool(args.stage27i_antialias_acceptance),
+        "stage27j_pfb": bool(args.stage27j_pfb),
+        "stage27j_reference_only": bool(args.stage27j_reference_only),
+        "stage27j_pfb_spectral_purity": stage27j_pfb_spectral_purity,
         "physical_state": str(args.physical_state),
         "sync_mode": str(args.sync_mode),
         "clock_refs": list(args.clock_refs),

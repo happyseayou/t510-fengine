@@ -282,6 +282,11 @@ module tb_axi4_to_axil_bridge;
         .pfb_input_fifo_level(32'd0),
         .pfb_peak_chan(32'd0),
         .pfb_peak_power(32'd0),
+        .pfb_coeff_status(32'd0),
+        .pfb_coeff_loaded_count(32'd0),
+        .pfb_coeff_active_id(32'd0),
+        .pfb_coeff_active_checksum(32'd0),
+        .pfb_coeff_error_count(32'd0),
         .science_aa100_active(1'b0),
         .science_aa100_primed(1'b0),
         .science_aa100_coeff_version(32'hAA10_0041),
@@ -343,6 +348,14 @@ module tb_axi4_to_axil_bridge;
         .pfb_chan0(),
         .pfb_chan_count(),
         .pfb_time_count(),
+        .pfb_coeff_load_start_pulse(),
+        .pfb_coeff_commit_pulse(),
+        .pfb_coeff_abort_pulse(),
+        .pfb_coeff_write_pulse(),
+        .pfb_coeff_requested_taps(),
+        .pfb_coeff_index(),
+        .pfb_coeff_data(),
+        .pfb_coeff_id(),
         .chan_split(chan_split),
         .src_ip(src_ip),
         .dgx_a_ip(dgx_a_ip),
@@ -518,7 +531,9 @@ module tb_axi4_to_axil_bridge;
         repeat (4) @(posedge clk);
 
         axi4_read_single(32'h8004_0000, rd);
-`ifdef T510_STAGE27I_ANTI_ALIAS
+`ifdef T510_STAGE27J_PFB
+        `TB_CHECK_EQ(rd, 32'h0001_002c, "version via AXI4 bridge Stage 27j PFB candidate")
+`elsif T510_STAGE27I_ANTI_ALIAS
         `TB_CHECK_EQ(rd, 32'h0001_002b, "version via AXI4 bridge anti-alias candidate")
 `else
         `TB_CHECK_EQ(rd, 32'h0001_0029, "version via AXI4 bridge")
@@ -536,7 +551,9 @@ module tb_axi4_to_axil_bridge;
         `TB_CHECK_EQ(rd, 32'h8004_00f0, "debug AR via AXI4 bridge")
 
         axi4_read_burst4(32'h8004_0000, b0, b1, b2, b3);
-`ifdef T510_STAGE27I_ANTI_ALIAS
+`ifdef T510_STAGE27J_PFB
+        `TB_CHECK_EQ(b0, 32'h0001_002c, "burst beat 0 version Stage 27j PFB candidate")
+`elsif T510_STAGE27I_ANTI_ALIAS
         `TB_CHECK_EQ(b0, 32'h0001_002b, "burst beat 0 version anti-alias candidate")
 `else
         `TB_CHECK_EQ(b0, 32'h0001_0029, "burst beat 0 version")

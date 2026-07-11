@@ -23,17 +23,22 @@ def _has_arg(name: str) -> bool:
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
+    stage27j_pfb = "--stage27j-pfb" in sys.argv
     if "--stage27i-antialias-acceptance" not in sys.argv:
         sys.argv.insert(1, "--stage27i-antialias-acceptance")
     defaults = {
-        "--expected-core-version": "0x0001002B",
+        "--expected-core-version": "0x0001002C" if stage27j_pfb else "0x0001002B",
         "--target-rf-mhz": "122.88",
         "--target-snr-db": "12",
         "--centers-mhz": "100",
         "--bandwidth-mhz": "100",
         "--dac-nco-sweep-mhz": "60,100",
         "--reference-amplitude": "2048",
-        "--physical-state": "dac_adc_loopback_restored_external_10mhz_pps_stage27i_antialias",
+        "--physical-state": (
+            "dac_adc_loopback_restored_external_10mhz_pps_stage27j_pfb"
+            if stage27j_pfb
+            else "dac_adc_loopback_restored_external_10mhz_pps_stage27i_antialias"
+        ),
         "--sync-mode": "external_pps",
         "--rust-time-window-us": "25",
         "--fengine-clean-seconds": "2",
@@ -49,7 +54,16 @@ def main() -> int:
         sys.argv.extend(
             [
                 "--output",
-                str(root / "reports" / "board" / f"stage27i_antialias_spur_acceptance_{date_tag}.json"),
+                str(
+                    root
+                    / "reports"
+                    / "board"
+                    / (
+                        f"stage27j_pfb_spectral_acceptance_{date_tag}.json"
+                        if stage27j_pfb
+                        else f"stage27i_antialias_spur_acceptance_{date_tag}.json"
+                    )
+                ),
             ]
         )
     return int(_load_stage27h_audit_main()())
