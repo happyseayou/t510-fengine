@@ -38,9 +38,10 @@ If local OpenSSH global config blocks publishing, retry with:
 
 Open from PYNQ Jupyter:
   t510_fengine/notebooks/15_stage27h_time_spec_fft_fullrate_control.ipynb
-Stage 27h production scope:
-  - TIME/SPEC 100MHz FFT-only full-rate science stream control and status
-  - Jupyter preview/control for RF reconstructed waveform and FFT-only spectrum
+Stage 28 production scope:
+  - 100MHz TIME_SPEC, 200MHz TIME_ONLY, and 200MHz SPEC_ONLY control/status
+  - mode-aware Jupyter preview for RF reconstructed waveform and spectrum
+  - 200MHz TIME_SPEC remains unavailable because it exceeds 100GbE capacity
 
 Older notebooks remain in the repository as archived bring-up references. This
 publisher intentionally syncs only the production notebook.

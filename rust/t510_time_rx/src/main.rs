@@ -1269,18 +1269,18 @@ fn waveform_rate_live(config: &DisplayConfig, stats: &ReceiverStats) -> bool {
         && stats.rx_processed_packets_per_sec >= preview_rate_gate_pps(config, stats)
 }
 
-fn spectrum_rate_live(config: &DisplayConfig, stats: &ReceiverStats) -> bool {
-    stats.spec_processed_packets_per_sec.is_finite()
-        && stats.spec_processed_packets_per_sec >= preview_rate_gate_pps(config, stats)
-}
-
 fn clear_stale_previews(state: &mut SharedState) {
     if !preview_live(state.waveform_updated) || !waveform_rate_live(&state.config, &state.stats) {
         state.waveform = None;
         state.waveform_binary = None;
         state.waveform_updated = None;
     }
-    if !preview_live(state.spectrum_updated) || !spectrum_rate_live(&state.config, &state.stats) {
+    // A completed spectrum is direct evidence that SPEC packets are live.  The
+    // aggregate fanout rate is reported asynchronously by each worker and can
+    // briefly read as zero while a fresh spectrum is already available.  Do
+    // not let that reporting race evict the binary frame used by the web GUI;
+    // freshness still removes it promptly when the SPEC stream really stops.
+    if !preview_live(state.spectrum_updated) {
         state.spectrum = None;
         state.spectrum_binary = None;
         state.spectrum_updated = None;
@@ -4187,7 +4187,7 @@ fn handle_http(mut stream: TcpStream, shared: Arc<Mutex<SharedState>>, web_fps: 
             let waveform_age_ms = preview_age_ms(guard.waveform_updated);
             let spectrum_age_ms = preview_age_ms(guard.spectrum_updated);
             let waveform_live = preview_live(guard.waveform_updated) && waveform_rate_live(&guard.config, &guard.stats);
-            let spectrum_live = preview_live(guard.spectrum_updated) && spectrum_rate_live(&guard.config, &guard.stats);
+            let spectrum_live = preview_live(guard.spectrum_updated);
             ApiState {
                 config: guard.config.clone(),
                 config_generation: guard.config_generation,
@@ -4690,7 +4690,7 @@ mod tests {
     }
 
     #[test]
-    fn low_rate_preview_cache_is_cleared_even_when_recent() {
+    fn recent_spectrum_survives_fanout_rate_report_lag() {
         let args = test_args();
         let mut stats = ReceiverStats::new(&args);
         stats.expected_packets_per_sec = 480_000.0;
@@ -4713,8 +4713,8 @@ mod tests {
 
         assert!(state.waveform_binary.is_none());
         assert!(state.waveform_updated.is_none());
-        assert!(state.spectrum_binary.is_none());
-        assert!(state.spectrum_updated.is_none());
+        assert!(state.spectrum_binary.is_some());
+        assert!(state.spectrum_updated.is_some());
     }
 
     #[test]
@@ -6277,10 +6277,14 @@ function renderStats(s){
   document.getElementById('backendStatus').className=`pill ${s.backend==='fanout'&&s.active_worker_count>=4?'ok':(s.backend==='fanout'?'warn':'')}`;document.getElementById('backendStatus').textContent=`${s.backend} workers ${s.active_worker_count||0}/${s.worker_count||1}`;
   document.getElementById('lossStatus').className=`pill ${statusCls}`;document.getElementById('lossStatus').textContent=`gaps T${gapTotal} S${specGapTotal} loss ${fmt(s.loss_percent,4)}%`;
   document.getElementById('rateStatus').textContent=`TIME ${fmt(s.rx_processed_gbps,2)}G / SPEC ${fmt(s.spec_processed_gbps,2)}G`;
-  const flowOk=(s.flow_count||0)===24&&(s.time_flow_count||0)===8&&(s.spec_flow_count||0)===16&&(s.active_worker_count||0)>=24;
+  const timeFlows=s.time_flow_count||0, specFlows=s.spec_flow_count||0, flowCount=s.flow_count||0;
+  const productionFlows=(flowCount===8&&timeFlows===8&&specFlows===0)||(flowCount===16&&timeFlows===0&&specFlows===16)||(flowCount===24&&timeFlows===8&&specFlows===16);
+  const flowOk=productionFlows&&(s.active_worker_count||0)>=flowCount;
   document.getElementById('flowStatus').className=`pill ${flowOk?'ok':'warn'}`;document.getElementById('flowStatus').textContent=`flows ${s.time_flow_count||0}+${s.spec_flow_count||0}/${s.flow_count||0}`;
   const dropTotal=(s.parse_errors||0)+(s.ring_drops||0)+(s.worker_ring_drops||0)+(s.kernel_drops||0)+(s.app_drops||0);document.getElementById('dropStatus').className=`pill ${dropTotal?'bad':'ok'}`;document.getElementById('dropStatus').textContent=`drops ${dropTotal} preview T${fmt(s.display_update_hz,1)} S${fmt(s.spectrum_update_hz,1)}Hz`;
-  document.getElementById('pointsStatus').className=`pill ${waveformLive?'ok':'warn'}`;document.getElementById('pointsStatus').textContent=`${waveformLive?'live':'stale'} pts ${waveform?waveform.points:'--'} age ${waveformAgeMs===null?'--':waveformAgeMs}ms / gen ${configGeneration} / fps ${fmt(s.display_update_hz,1)} / sweep ${fmt(s.spectrum_update_hz,1)}`;
+  const previewLive=(timeFlows===0||waveformLive)&&(specFlows===0||spectrumLive);
+  const previewLabel=timeFlows===0?`SPEC ${spectrumLive?'live':'stale'}`:(specFlows===0?`TIME ${waveformLive?'live':'stale'}`:`T${waveformLive?' live':' stale'} / S${spectrumLive?' live':' stale'}`);
+  document.getElementById('pointsStatus').className=`pill ${previewLive?'ok':'warn'}`;document.getElementById('pointsStatus').textContent=`${previewLabel} pts ${waveform?waveform.points:'--'} ages T${waveformAgeMs===null?'--':waveformAgeMs}/S${spectrumAgeMs===null?'--':spectrumAgeMs}ms / gen ${configGeneration} / fps ${fmt(s.display_update_hz,1)} / sweep ${fmt(s.spectrum_update_hz,1)}`;
   document.getElementById('summary').innerHTML=[
     metric('expected FPGA',`${fmt(s.expected_packets_per_sec,0)} pps each / T ${fmt(s.expected_time_gbps,2)}G S ${fmt(s.expected_spec_gbps,2)}G`),
     metric('processed TIME',`${fmt(s.rx_processed_packets_per_sec,0)} pps / ${fmt(s.rx_processed_gbps,2)} Gbps`),

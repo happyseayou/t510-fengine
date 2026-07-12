@@ -74,3 +74,5 @@ CMAC 生产配置保持 base CMAC + RS-FEC，`INCLUDE_AUTO_NEG_LT_LOGIC=0`、`IN
 ## 范围边界
 
 本阶段不声明 `200MHz TIME_SPEC`、X-engine/Beamformer、Stage 29 模块裁剪、payload 收紧、交换机/DGX、科学幅相/功率标定或更长时间 soak 已完成。
+
+生产 Jupyter 入口沿用 `notebooks/15_stage27h_time_spec_fft_fullrate_control.ipynb` 文件名，已更新为 Stage 28 三组合控制和按模式预览，并锁定 `CORE_VERSION=0x00010030`。
