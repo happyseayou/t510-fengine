@@ -44,6 +44,7 @@ module tb_pfb_channelizer;
     wire [63:0]   m_axis_sample0;
     wire          m_axis_tvalid;
     logic         m_axis_tready = 1'b1;
+    logic [31:0]  output_fifo_level = 32'd0;
     wire [31:0]   status;
     wire [31:0]   frame_count;
     wire [31:0]   overflow_count;
@@ -62,6 +63,7 @@ module tb_pfb_channelizer;
     logic zero_input_mode = 1'b0;
 `ifdef T510_STAGE27J_PFB
     integer pfb_input_cell_count = 0;
+    integer pfb_elastic_pop_push_count = 0;
 `endif
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
     logic [12:0] xfft_frame_cell_count = 13'd0;
@@ -167,6 +169,7 @@ module tb_pfb_channelizer;
         .m_axis_sample0(m_axis_sample0),
         .m_axis_tvalid(m_axis_tvalid),
         .m_axis_tready(m_axis_tready),
+        .output_fifo_level(output_fifo_level),
         .status(status),
         .frame_count(frame_count),
         .overflow_count(overflow_count),
@@ -263,6 +266,7 @@ module tb_pfb_channelizer;
     always_ff @(posedge clk) begin
         if (!rst_n || clear || !enable) begin
             pfb_input_cell_count <= 0;
+            pfb_elastic_pop_push_count <= 0;
         end else if (dut.u_feng_channelizer_4096.xfft_input_fire) begin
             `TB_CHECK_EQ(
                 dut.u_feng_channelizer_4096.xfft_data_idx,
@@ -279,6 +283,19 @@ module tb_pfb_channelizer;
                 )
             end
             pfb_input_cell_count <= pfb_input_cell_count + 1;
+        end
+        if (rst_n && enable &&
+            dut.u_feng_channelizer_4096.output_fire &&
+            dut.u_feng_channelizer_4096.xfft_output_fire) begin
+            pfb_elastic_pop_push_count <= pfb_elastic_pop_push_count + 1;
+        end
+        if (rst_n && enable && m_axis_tready &&
+            dut.u_feng_channelizer_4096.output_valid &&
+            dut.u_feng_channelizer_4096.xfft_m_axis_tvalid) begin
+            `TB_CHECK(
+                dut.u_feng_channelizer_4096.xfft_m_axis_tready,
+                "27j PFB accepts an XFFT cell while downstream consumes the previous packed beat"
+            )
         end
     end
 `endif
@@ -297,6 +314,7 @@ module tb_pfb_channelizer;
             coeff_index = 14'd0;
             coeff_data = 18'sd0;
             coeff_id = 32'h27a4_0001;
+            output_fifo_level = 32'd0;
             repeat (6) @(posedge clk);
             rst_n = 1'b1;
             repeat (2) @(posedge clk);
@@ -424,6 +442,11 @@ module tb_pfb_channelizer;
         @(negedge clk);
         s_axis_tvalid = 1'b1;
 `ifdef T510_STAGE27J_PFB
+        output_fifo_level = 32'd3500;
+        wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME * 4);
+        repeat (16) @(posedge clk);
+        `TB_CHECK_EQ(pfb_input_cell_count, 0, "27j realtime XFFT feed waits for one-frame output FIFO reservation")
+        output_fifo_level = 32'd0;
         wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME * (OUTPUT_TILES + 3));
 `elsif T510_STAGE27H_PRODUCTION_ONLY
         wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME * OUTPUT_TILES);
@@ -437,6 +460,11 @@ module tb_pfb_channelizer;
         `TB_CHECK_EQ(overflow_count, 32'd0, "PFB overflow count")
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
         `TB_CHECK_EQ(xfft_frame_gap_count, 0, "FFT-only XFFT input frame has zero internal gaps")
+`endif
+`ifdef T510_STAGE27J_PFB
+        `TB_CHECK(pfb_elastic_pop_push_count > 0, "27j PFB exercises elastic output pop/push")
+        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.xfft_data_out_halt_count, 32'd0, "27j PFB sustained-ready XFFT output halt count")
+        `TB_CHECK_EQ(dut.u_feng_channelizer_4096.capture_backpressure_count, 32'd0, "27j PFB sustained-ready capture backpressure count")
 `endif
         `TB_CHECK(peak_chan < 32'd4096, "PFB peak channel stays inside full F-engine band")
 `ifdef T510_STAGE27H_PRODUCTION_ONLY

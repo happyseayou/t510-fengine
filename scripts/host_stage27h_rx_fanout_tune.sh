@@ -15,8 +15,13 @@ FANOUT_GROUP="0x279"
 NETDEV_BUDGET=1000
 NETDEV_BUDGET_USECS=8000
 NETDEV_MAX_BACKLOG=250000
-RX_USECS=32
-RX_FRAMES=128
+# Keep the interrupt-coalescing window comfortably below the ConnectX-5 port
+# buffer fill time at the Stage 28 production payload rate.  At roughly
+# 64 Gbit/s, 32 us is about 256 KiB, which is effectively the whole 262016-byte
+# receive buffer on the validation host and caused intermittent
+# rx_prio0_discards before packets reached PACKET_MMAP/Rust.
+RX_USECS=8
+RX_FRAMES=32
 
 usage() {
   cat <<'EOF'
@@ -30,7 +35,8 @@ Defaults:
   - applies RX/TX ring 8192
   - applies CPU performance governor when cpupower is available
   - applies netdev budget/backlog tuning
-  - applies RX coalescing rx-usecs=32 rx-frames=128
+  - applies RX coalescing rx-usecs=8 rx-frames=32; this keeps the coalescing
+    window below the ConnectX-5 physical RX buffer fill time at ~64 Gbit/s
   - installs raw PREROUTING drop for UDP dst ports 4300..4323 so AF_PACKET
     receives the production stream without the normal UDP stack generating
     UdpNoPorts/ICMP work for the same packets
@@ -42,8 +48,8 @@ Optional:
   --no-governor        skip CPU governor update
   --no-coalesce        skip ethtool -C update
   --no-raw-drop        skip raw PREROUTING UDP drop
-  --rx-usecs N         RX coalescing usecs, default 32
-  --rx-frames N        RX coalescing frames, default 128
+  --rx-usecs N         RX coalescing usecs, default 8
+  --rx-frames N        RX coalescing frames, default 32
   --netdev-budget N    net.core.netdev_budget, default 1000
   --netdev-usecs N     net.core.netdev_budget_usecs, default 8000
   --netdev-backlog N   net.core.netdev_max_backlog, default 250000

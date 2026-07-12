@@ -36,7 +36,7 @@ if {[file exists $cache_dir]} {
     }
 }
 
-puts "STAGE24D_RECREATE: creating fresh no-AN/RS-FEC CMAC IP"
+puts "STAGE24D_RECREATE: creating fresh base CMAC with RS-FEC"
 create_ip -name cmac_usplus -vendor xilinx.com -library ip -version 3.1 \
     -module_name t510_cmac_usplus_0 \
     -dir [file join $repo_root demo-ant.srcs sources_1 ip]
@@ -55,12 +55,23 @@ set_property -dict [list \
     CONFIG.LANE3_GT_LOC {X0Y6} \
     CONFIG.LANE4_GT_LOC {X0Y7} \
     CONFIG.INCLUDE_RS_FEC {1} \
-    CONFIG.INCLUDE_AUTO_NEG_LT_LOGIC {0} \
-    CONFIG.INCLUDE_AN_LT_TX_TRAINER {0} \
     CONFIG.RX_EQ_MODE {AUTO} \
     CONFIG.ADD_GT_CNRL_STS_PORTS {1} \
     CONFIG.INCLUDE_SHARED_LOGIC {2} \
 ] $ip
+
+# AN/LT is an optional, separately licensed feature.  Do not configure it in
+# production CMAC creation.  The Vivado 2022.2 cmac_usplus v3.1 catalog defaults
+# both controls to zero; fail before output-product generation if that changes.
+foreach anlt_prop {
+    CONFIG.INCLUDE_AUTO_NEG_LT_LOGIC
+    CONFIG.INCLUDE_AN_LT_TX_TRAINER
+} {
+    set anlt_value [get_property $anlt_prop $ip]
+    if {$anlt_value ne "0"} {
+        error "Production CMAC requires $anlt_prop=0, got $anlt_value"
+    }
+}
 
 config_ip_cache -disable_for_ip $ip
 generate_target all $ip

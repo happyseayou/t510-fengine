@@ -1,0 +1,8 @@
+stage=28
+iteration=B-final
+core_version=0x0001002e
+run=impl_1
+design=design_1
+part=xczu47dr-ffve1156-2-i
+generated_at=2026-07-11T20:57:38+0800
+bitstreams=

@@ -404,6 +404,13 @@ module spec_udp_cmac512 #(
         s_axis_tready = 1'b0;
         case (s_state)
             S_IDLE: begin
+                if (enable) begin
+                    if (route_ok_comb) begin
+                        s_axis_tready = route_stage_ready;
+                    end else begin
+                        s_axis_tready = drop_on_route_miss;
+                    end
+                end
             end
             S_CAPTURE: begin
                 s_axis_tready = enable &&
@@ -421,7 +428,8 @@ module spec_udp_cmac512 #(
     end
 
     always_comb begin
-        data_wr_en = s_fire && (s_state == S_CAPTURE);
+        data_wr_en = s_fire && ((s_state == S_CAPTURE) ||
+                               ((s_state == S_IDLE) && route_ok_comb));
         token_wr_en = data_wr_en && final_capture_beat;
     end
 
@@ -500,50 +508,37 @@ module spec_udp_cmac512 #(
             if (s_axis_tvalid && !s_axis_tready) begin
                 backpressure_cycles <= backpressure_cycles + 32'd1;
             end
-            if (s_state == S_IDLE && enable && s_axis_tvalid) begin
-                if (route_ok_comb && route_stage_ready) begin
-                    route_id_reg <= route_id_comb;
-                    endpoint_id_reg <= endpoint_id_comb;
-                    route_miss_reg <= 1'b0;
-                    route_error_reg <= 1'b0;
-                    selected_dst_mac_reg <= selected_dst_mac_comb;
-                    selected_dst_ip_reg <= selected_dst_ip_comb;
-                    selected_src_port_reg <= selected_src_port_comb;
-                    selected_dst_port_reg <= selected_dst_port_comb;
-                    packet_chan0 <= spec_chan0;
-                    packet_chan_count <= spec_chan_count;
-                    packet_time_count <= spec_time_count;
-                    capture_idx <= 16'd0;
-                    s_state <= S_CAPTURE;
-                end else if (!route_ok_comb && drop_on_route_miss) begin
-                    route_id_reg <= route_id_comb;
-                    endpoint_id_reg <= endpoint_id_comb;
-                    route_miss_reg <= route_miss_comb;
-                    route_error_reg <= route_error_comb;
-                    selected_dst_mac_reg <= selected_dst_mac_comb;
-                    selected_dst_ip_reg <= selected_dst_ip_comb;
-                    selected_src_port_reg <= selected_src_port_comb;
-                    selected_dst_port_reg <= selected_dst_port_comb;
-                    packet_chan0 <= spec_chan0;
-                    packet_chan_count <= spec_chan_count;
-                    packet_time_count <= spec_time_count;
-                    drop_remaining <= PAYLOAD_BEATS16;
-                    drop_counted <= 1'b0;
-                    s_state <= S_DROP;
-                end
-            end
             if (s_fire) begin
                 case (s_state)
-                    S_CAPTURE: begin
-                        if (capture_idx == 16'd0) begin
-                            packet_sample0 <= s_axis_sample0;
-                            sample0_debug <= s_axis_sample0;
-                            chan0_debug <= packet_chan0;
+                    S_IDLE: begin
+                        route_id_reg <= route_id_comb;
+                        endpoint_id_reg <= endpoint_id_comb;
+                        route_miss_reg <= route_miss_comb;
+                        route_error_reg <= route_error_comb;
+                        selected_dst_mac_reg <= selected_dst_mac_comb;
+                        selected_dst_ip_reg <= selected_dst_ip_comb;
+                        selected_src_port_reg <= selected_src_port_comb;
+                        selected_dst_port_reg <= selected_dst_port_comb;
+                        packet_chan0 <= spec_chan0;
+                        packet_chan_count <= spec_chan_count;
+                        packet_time_count <= spec_time_count;
+                        packet_sample0 <= s_axis_sample0;
+                        sample0_debug <= s_axis_sample0;
+                        chan0_debug <= spec_chan0;
+                        if (route_ok_comb) begin
                             packet_count <= packet_count + 32'd1;
-                            selected_endpoint_id <= endpoint_id_reg;
-                            selected_route_id <= route_id_reg;
+                            selected_endpoint_id <= endpoint_id_comb;
+                            selected_route_id <= route_id_comb;
                             selected_route_is_time <= 1'b0;
+                            capture_idx <= 16'd1;
+                            s_state <= S_CAPTURE;
+                        end else begin
+                            drop_remaining <= PAYLOAD_BEATS16 - 16'd1;
+                            drop_counted <= 1'b0;
+                            s_state <= S_DROP;
                         end
+                    end
+                    S_CAPTURE: begin
                         if (final_capture_beat) begin
                             udp_byte_count <= udp_byte_count + UDP_PAYLOAD_BYTES32;
                             frame_built_count <= frame_built_count + 32'd1;

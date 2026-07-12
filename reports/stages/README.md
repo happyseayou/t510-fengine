@@ -2,6 +2,14 @@
 
 本目录记录落地阶段状态。`reports/arch/` 是架构输入资料；本目录是执行状态和交接入口。
 
+## Vivado MCP 等待协议（持续生效）
+
+- Vivado 综合、实现、物理优化、布线、`write_bitstream` 和报告生成必须通过已 attach 的 Vivado GUI MCP 执行；不得启动 shell 后台 Vivado，也不得使用阻塞式 Tcl `wait_on_run`。
+- run 启动或执行阶段发生变化时，从短间隔重新开始，按 `10s -> 20s -> 30s -> 60s` 阶梯轮询。
+- 如果任务状态、日志和进程活动表明 run 正常推进，并且继续等待有实际价值，可以逐级延长轮询，单次最长允许 `600s`。
+- 如果确认是长时间任务，只需确认 run 已健康启动并记录当前阶段，然后停止等待；不得取消 run、重复提交 run 或用另一个 Vivado 进程接管。
+- 用户后续要求继续或 GUI 显示完成后，再通过 Vivado MCP 检查 run 状态、时序、route status、DRC/methodology、bitstream 和报告产物；任何新阶段仍从短间隔开始轮询。
+
 ## 最新状态
 
 - 当前推进状态：Stage 27j `TIME_SPEC 100MHz` 可编程 4-tap RTL PFB 已完成本地/XSim、Vivado closure、bitstream、PYNQ 发布、10 秒 board/host gate 和最终 PFB 频谱 purity gate，可在限定范围内发布。版本为 `CORE_VERSION=0x0001002C`；SPEC wire layout 保持 `16 x 256ch x 1 time` 和 `8192B` payload，header 为 `pfb_taps=4`、FFT-only bit8 清零、AA100 bit9 保留、PFB-active bit10 置位。最终 route `WNS=+0.027ns`、`WHS=+0.009ns`、routing errors `0`，overlay SHA256 `f862dc87bcc8867ec71f5659cdac3eaaf7004186077d321a536bda1fafe651fb`。board gate 为 `STAGE27J_TIME_SPEC_100MHZ_PFB_BOARD_PASS`，TIME/SPEC `480594.5/480593.8pps`、combined `63976.693248Mbps`、PFB/XFFT/drop delta 全为 0；host gate 为 `HOST_STAGE27J_RUST_RX_PASS`，24/24 workers、TIME/SPEC `479237.64/480074.84pps`、combined `63851.838586Mbps`，应用/packet-socket drop 与 TIME/SPEC gap delta 全为 0，另保留 netdev `rx_dropped +33741` 非阻塞 advisory。修复前约 `5.13MHz` 等间隔梳状峰来自 XFFT 反压时 frame/coefficient RAM 读 pipeline 未同步冻结；最终 `60.010MHz` reference-tone 主峰到最强 main-exclusion 外峰为 `51.41dB`，梳状峰已消失。已知运行约束是 XFFT IP 无 reset，正式启动必须 fresh-download；连续多次 clock reconfiguration 还可能触发 LMK PLL1 relock timeout。`20MHz` 和 `200MHz SPEC_ONLY` 不进入 27j gate。详见 `27j_time_spec_100mhz_pfb.md`。
@@ -27,10 +35,10 @@
 - Stage 27d 基线：`PACKET_FANOUT_HASH` 仅作为探索分支；最终验收路径已切到 `PACKET_FANOUT` + `ntuple` port steering。Host Rust receiver 在 `fanout=port`、`--pin-workers off`、`4300..4307 -> RX queue 0..7` 规则下，`20/100/200MHz TIME_ONLY` 三档均 PASS，`200MHz` 实测 `960.5 kpps`、`8` 个 active workers、`seq/frame/sample0` gap 与 `ring/kernel/NIC` drop/error delta 均为 `0`。对应报告见 `27d_packet_fanout_host_rx.md`。
 - Stage 27c 历史闭环：`CORE_VERSION=0x0001001E`，DDR ring 已从 Stage 27c 数据面 compile-out，Vivado `impl_1` route clean、timing met、bitstream/export 完成；PYNQ 8-flow TIME sender 在 `20/100/200MHz` 三档板端 counters gate 均 PASS；本机 Rust/RSS receiver 在 `20MHz`、`100MHz` PASS，`200MHz` BLOCK 于 host RX/NIC path（约 `867 kpps` < `912 kpps` 门限，`rx_out_of_buffer`/`rx_missed_errors` 增长）。详见 `27c_multiflow_hardware_closure.md`。
 - Stage 26b/27 历史事实：`0x0001001D` PL-only DDR TIME 缓冲与时序优化完成；DDR disabled direct path 已通过 `20/100/200MHz TIME_ONLY` 板端 counters/gates，Rust/HTML smoke 能动态显示 8 路 TIME waveform。DDR enabled path 触发 `BLOCK_STAGE26B27_DDR_ENABLE_BOARD_UNREACHABLE`，DDR ring 修复前不要再次启用。
-- 当前本地和 PYNQ overlay 均已更新为 Stage 27j `0x0001002C` 最终产物：`overlay/t510_fengine.bit` SHA256 为 `f862dc87bcc8867ec71f5659cdac3eaaf7004186077d321a536bda1fafe651fb`，远端校验一致。
+- 当前本地和 PYNQ overlay 均已更新为 Stage 28 `0x00010030` 最终产物：bitstream SHA256 为 `7486a55b6f7e50e5875474e7d85299b107e9384cfff454316f64f2d3d7e9800d`，远端校验一致。
 - PYNQ 同步/板端状态：Stage 27h 比特流 SHA `564e34223030ee58d1a36c65bd7817804d2d76a64160c67703870736be9767cb` 已发布到 `/home/xilinx/t510_fengine_bringup` 和 `/home/xilinx/jupyter_notebooks/t510_fengine`；远端 `overlay/t510_fengine.bit` 与 bring-up root `t510_fengine.bit` SHA 均匹配。`0x00010028` 板端 10 秒门禁为 `STAGE27H_TIME_SPEC_100MHZ_FFT_FULLRATE_BOARD_PASS`。sudo 通道已确认可用；板端密码约定为“与登录用户名相同”，命令仍通过 stdin 传入凭据，不写入脚本或 notebook。
-- Vivado 状态：Stage 27j `0x0001002C` 已完成最终 PFB 对齐修复后的时序收敛、布线、`write_bitstream` 和 overlay 导出。布线后时序 `WNS=+0.027 ns`、`TNS=0.000 ns`、`WHS=+0.009 ns`、`THS=0.000 ns`，failing endpoints `0/376528`，routing errors `0`。
-- License 状态：Stage 27j `write_bitstream` 成功，但 bitgen run log 仍报历史已知 `Vivado 12-1790` evaluation license critical warning，源于 separately licensed CMAC feature use（`cmac_an_lt@2020.05 design_linking`）；`cmac_usplus@2020.05` 为 bought license。该 warning 未阻塞比特流生成，但生产验收前必须记录并确认 license 风险。
+- Vivado 状态：Stage 28 `0x00010030` 已完成综合、实现、`write_bitstream`、报告和 overlay 导出。布线后时序 `WNS=+0.051 ns`、`TNS=0.000 ns`、`WHS=+0.010 ns`、`THS=0.000 ns`，setup/hold failing endpoints 均为 0，fully routed `222232/222232`，routing errors `0`。
+- License 状态与永久规则：生产 CMAC 只允许基础 `cmac_usplus` 数据面和已验证的 RS-FEC，禁止启用 AN/LT；生产重建脚本不得主动设置 AN/LT 可选项，并必须在生成 output products 前校验 `INCLUDE_AUTO_NEG_LT_LOGIC=0`、`INCLUDE_AN_LT_TX_TRAINER=0`。Vivado 2022.2 的 `cmac_usplus v3.1` 厂商 `component.xml` 会无条件声明 `cmac_an_lt@2020.05` license key，因此 no-AN 设计的 bitgen 仍可能报历史已知 `Vivado 12-1790`；这条元数据 warning 本身不能作为 AN/LT 已启用的证据，应以两个配置值和生成 netlist 中无 AN/LT 实例为准。任何实际 AN/LT enable 非零都必须阻止综合/实现。Stage 27j 和 Stage 28 `write_bitstream` 均可在该 warning 下成功；不得把 post-hook/report Tcl 错误误报为 license 阻塞。
 - Stage 25 验收边界：只证明 `20MHz TIME_ONLY` 低速 live TIME pcap 闭环；不声明 20/100/200MHz full science、SPEC/PFB、交换机/DGX/X-engine、ARP/VLAN/PTP 或长稳通过。
 - Stage 26/26b/27 当前边界：只声明动态 `20/100/200MHz TIME_ONLY` full-rate direct path 板端 counters/gates、payload contract、本地回归、timing closure、bit/export 和 PYNQ 文件同步已落地；不声明 DDR enabled path、host pcap/Rust/HTML、SPEC/PFB、DGX/X-engine、交换机、PTP/VLAN/ARP 或长稳通过。
 - Stage 27a 当前边界：Rust receiver v2 本地实现、release build、API smoke、UI 布局改造和 200MHz 实流短测已完成。receiver v2 能正确解析 TIME、`selected=detected=200MHz`、`parse_errors=0`，但主机单队列 `TPACKET_V3` 仍只处理约 `262 kpps / 17.45 Gbps`，低于 `960 kpps / 63.9 Gbps payload` 目标，且 `nic_rx_missed_errors_delta` 增长；不声明 host/Rust/HTML 实流无损 PASS。当前 blocker：`BLOCK_STAGE27A_HOST_NIC_SINGLE_QUEUE_RX_LIMIT`。
@@ -41,6 +49,7 @@
 - Stage 27h 当前边界：声明 `0x00010028` 的 `TIME_SPEC 100MHz` 仅 FFT、全速 SPEC 生产短窗口门禁、生产 Jupyter 控制/预览和 Rust Web peak-preserving 监控显示已闭合；`0x00010026` 保留为已通过 60 秒短稳的历史基线。不声明 `0x00010028` 的 60 秒/10 分钟/1 小时/过夜长稳、production TIME 与 SPEC 频率/索引一致性根因已经闭合、科学级 4-tap PFB 幅相/功率标定、交换机/DGX/X-engine、ARP/VLAN/PTP 或全 RF 频段标定通过。
 - Stage 27i 当前边界：声明 `0x0001002B` 的 `100MHz` anti-alias production candidate 已闭合，解决 raw full-rate 端点/带外分量经裸 decim2 alias 进入 production `122.88MHz` 的问题；不声明 `20MHz` decim8 科学频谱闭合、`200MHz SPEC_ONLY` backpressure 闭合、raw/full-rate RF `0/245.76MHz` 端点分量来源闭合、长稳或最终科学标定完成。
 - Stage 27j 当前边界：声明 `0x0001002C` 的真实 4-tap RTL PFB、本地回归、Vivado timing/route、bitstream/overlay、PYNQ 10 秒 gate、host 24-flow 10 秒 gate 和 reference-tone PFB 频谱 purity gate 已完成；不声明最终科学幅相/功率标定、最终 bitstream 的完整多 case anti-alias 重跑、长时间 soak、`20MHz` 或 `200MHz SPEC_ONLY` 已完成。
+- Stage 28 当前边界：声明 `0x00010030` 的 `100MHz TIME_SPEC`、`200MHz TIME_ONLY`、`200MHz SPEC_ONLY` 已分别通过 fresh-download 板端与 Rust 主机 60 秒门禁；200MHz 两个单流均达到约 `961 kpps / 63.96Gbps`，PFB/XFFT/backpressure/drop/error 为零。主机 ConnectX-5 接收生产入口 `scripts/host_stage28_rx_fanout_tune.sh` 固化为 24 logical flows/workers 映射到 4 hardware RX queues，并使用 `rx-usecs=8`、`rx-frames=32`；连续两个 100MHz/24-worker 60 秒窗口零 physical discard、零 Rust drop、零 gap。继续拒绝 `200MHz TIME_SPEC`，不声明更长 soak、科学标定、交换机/DGX 或 X-engine 已完成。
 - Jupyter 入口：打开 `http://192.168.100.117/lab` 或 `http://192.168.100.117:9090/lab`，进入 `t510_fengine/notebooks/15_stage27h_time_spec_fft_fullrate_control.ipynb`。该 notebook 只保留生产控制和生产预览，预览包括 RF 还原波形与 4-tap PFB 生产频谱；Rust Web `:8089` 作为主机监控端，显示 TIME RF 等效波形、完整 PFB 频谱/瀑布、target-bin 相对相位滚动图、流量和丢包/间断状态。
 - 尚未完成：长时间 `TIME_SPEC 100MHz` soak、真实科学级 4096-channel 4-tap PFB 幅相/功率标定、交换机/接收节点 pcap、DGX/X-engine 收包、ARP/VLAN/PTP、长时间 FIFO/反压压力测试、`50-350 MHz` 全带 RF 频率/幅相/功率标定、浏览器端长时间 soak test。
 - PYNQ 目标：`xilinx@192.168.100.117`；默认登录用户和 sudo 密码均为 `xilinx`。自动化命令通过 stdin 传入 sudo 密码，不要把密码硬编码进脚本或 notebook。
@@ -89,27 +98,28 @@
 39. `27h_time_spec_100mhz_fft_fullrate.md`
 40. `27i_time_spec_100mhz_antialias.md`
 41. `27j_time_spec_100mhz_pfb.md`
+42. `28_200mhz_single_stream_fullrate_closure.md`
 
 ## 推荐接续入口
 
-Stage 27j 后续只按 `TIME_SPEC 100MHz + 4-tap PFB` 生产核心推进。`0x0001002C` overlay、PYNQ 10 秒、host 24-flow 10 秒和 reference-tone PFB purity gate 已完成；当前接续重点是补连续 clock reconfiguration 的 LMK 恢复流程，再重跑最终 bitstream 的完整 Stage 27i anti-alias acceptance，并进入长时间 soak 和科学幅相/功率标定。不降低 24-flow、`16x256x1`、`63Gbps+` 门槛，也不把 `200MHz SPEC_ONLY` backpressure 混入 27j gate。
+Stage 28 后续以 `0x00010030` 的三个生产组合为基线：`100MHz TIME_SPEC`、`200MHz TIME_ONLY`、`200MHz SPEC_ONLY`。三者均已完成 fresh-download 板端与 Rust 主机 60 秒门禁；主机先运行 `scripts/host_stage28_rx_fanout_tune.sh`，保持 24 logical flows/workers 到 4 hardware RX queues 的映射。继续拒绝 `200MHz TIME_SPEC`，不降低 `16x256x1`、8192B payload、`63Gbps+` 或零 drop/gap 门槛。下一步只进入更长 soak、科学幅相/功率标定或下游系统验证。
 
 1. 本地生产检查：
    ```bash
-   python3 -m py_compile python/packet.py python/t510_fengine.py scripts/pynq_stage27h_time_spec_fft_fullrate.py scripts/host_stage27h_rust_rx_validate.py
-   python3 -m json.tool notebooks/15_stage27h_time_spec_fft_fullrate_control.ipynb >/dev/null
+   python3 -m py_compile python/t510_fengine.py scripts/pynq_stage28_fullrate.py scripts/host_stage28_rust_rx_validate.py
    cargo test --manifest-path rust/t510_time_rx/Cargo.toml
    cargo build --release --manifest-path rust/t510_time_rx/Cargo.toml
-   bash -n scripts/pynq_publish_stage27h.sh scripts/pynq_publish_jupyter_instrument.sh scripts/host_stage27h_rx_fanout_tune.sh
+   bash -n scripts/pynq_publish_stage28.sh scripts/host_stage27h_rx_fanout_tune.sh scripts/host_stage28_rx_fanout_tune.sh
    ./scripts/run_xsim_batch.sh tb_pfb_channelizer tb_spec_udp_cmac512 tb_time_udp_cmac512 tb_t510_fengine_top_smoke tb_tx_route_selector tb_feng_ctrl_axi
    ```
 2. Vivado 生产比特流复现：
-   - 对后续 Stage 27h rebuild，先重新生成/校验 Stage 27h lane XFFT IP output products，再运行 `scripts/stage27h_time_spec_100mhz_fft_fullrate_bit_export_batch.tcl`，重新跑 `synth_1 -> impl_1 -> write_bitstream/export`。
-   - 最终要求布线完成、时序满足、0 errors；CMAC evaluation/license critical warning 按用户要求记录但不阻塞。
+   - attach 当前 Vivado GUI，通过 Vivado MCP 运行 `synth_1 -> impl_1 -> write_bitstream -> report/export`；不得使用 shell 后台 Vivado 或阻塞式 `wait_on_run`。
+   - 等待按 `10s -> 20s -> 30s -> 60s` 阶梯轮询；可等待任务允许延长到 600 秒，确认是健康长任务后直接停下等待用户继续。
+   - 最终要求 fully routed、WNS/WHS 非负、setup/hold failing endpoints 为 0、无新增 RTL/CDC/DRC/时序错误，并保存 bit SHA、routed DCP、timing/utilization/route reports。
 
 3. 发布到 PYNQ：
    ```bash
-   PYNQ_TARGET=xilinx@192.168.100.117 scripts/pynq_publish_stage27h.sh
+   PYNQ_TARGET=xilinx@192.168.100.117 scripts/pynq_publish_stage28.sh
    ```
 
 4. 板端生产矩阵复现：
@@ -117,21 +127,22 @@ Stage 27j 后续只按 `TIME_SPEC 100MHz + 4-tap PFB` 生产核心推进。`0x00
    ssh xilinx@192.168.100.117
    cd /home/xilinx/t510_fengine_bringup
    source /etc/profile.d/xrt_setup.sh
-   printf "%s\n" "xilinx" | sudo -S -p "" -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage27h_time_spec_fft_fullrate.py --matrix converge
+   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage28_fullrate.py --bandwidth-mhz 100 --mode time_spec --seconds 60
+   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage28_fullrate.py --bandwidth-mhz 200 --mode time_only --seconds 60
+   sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/pynq_stage28_fullrate.py --bandwidth-mhz 200 --mode spec_only --seconds 60
    ```
 
 5. 主机接收与 Web/Jupyter：
    ```bash
-   sudo scripts/host_stage27h_rx_fanout_tune.sh ens2f0np0
-   sudo rust/t510_time_rx/target/release/t510_time_rx --backend fanout --worker-count 24 --pin-workers auto --interface ens2f0np0 --dst-port-base 4300 --src-port-base 4000 --flow-count 24 --time-flow-count 8 --spec-flow-count 16 --spec-layout stage27h --fanout-mode port --fanout-group 0x279 --web 0.0.0.0:8089 --initial-bandwidth-mhz 100 --ring-mb 2048 --block-mb 4 --batch-size 8192
-   scripts/host_stage27h_rust_rx_validate.py --seconds 10
+   sudo scripts/host_stage28_rx_fanout_tune.sh ens2f0np0
+   sudo rust/t510_time_rx/target/release/t510_time_rx --backend fanout --worker-count 24 --pin-workers auto --interface ens2f0np0 --dst-port-base 4300 --src-port-base 4000 --flow-count 24 --time-flow-count 8 --spec-flow-count 16 --spec-layout stage27j --fanout-mode port --fanout-group 0x294 --web 0.0.0.0:8089 --initial-bandwidth-mhz 100 --ring-mb 2048 --block-mb 4 --batch-size 8192
+   python3 scripts/host_stage28_rust_rx_validate.py --bandwidth-mhz 100 --mode time_spec --seconds 60
    ```
-   Jupyter 生产入口只推荐 `t510_fengine/notebooks/15_stage27h_time_spec_fft_fullrate_control.ipynb`，用于控制 TIME/SPEC、接收端 IP/端口/MAC、带宽/中心频率、8 路 DAC-ADC 环回、DAC 频率/相位，并查看 RF 还原波形和 FFT-only 生产频谱。Rust Web `:8089` 用于主机监控，重点看 TIME RF 等效波形、完整 FFT-only 频谱/瀑布、target-bin 相对相位滚动图、24 流速率和 drop/gap 状态。
+   200MHz TIME_ONLY 使用 8 workers/flows、端口 `4300..4307`；SPEC_ONLY 使用 16 workers/flows、端口 `4308..4323`。Rust Web `:8089` 用于 waveform/spectrum、flow 速率和 drop/gap 监控。
 
 6. 下一步建议：
-   - 先在 `0x00010028` 上复现 60 秒 PYNQ 板端门禁和主机 24 流门禁，并把 board/host JSON 以时间戳归档。
-   - 做 10 分钟、1 小时、过夜三档 `TIME_SPEC 100MHz` 全速 soak。
-   - 在 FFT-only 速率闭合后，再决定是否恢复科学级 PFB 幅相/功率标定和下游交换机/DGX/X-engine 接收验证。
+   - 对三个生产组合做 10 分钟、1 小时、过夜三档全速 soak，并继续要求 fresh-download 模式切换和零 drop/gap。
+   - 再进入科学级 PFB 幅相/功率标定，以及交换机/DGX/X-engine 接收验证。
 
 ## AI 接续提示
 

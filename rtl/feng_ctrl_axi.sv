@@ -314,7 +314,7 @@ module feng_ctrl_axi #(
 );
 
 `ifdef T510_STAGE27J_PFB
-    localparam [31:0] CORE_VERSION = 32'h0001_002C;
+    localparam [31:0] CORE_VERSION = 32'h0001_0030;
 `elsif T510_STAGE27I_ANTI_ALIAS
     localparam [31:0] CORE_VERSION = 32'h0001_002B;
 `elsif T510_STAGE27I_RAW_WITNESS

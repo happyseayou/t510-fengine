@@ -1,0 +1,7 @@
+policy=base_cmac_plus_rsfec_no_an_lt
+cmac_ip_found=1
+include_auto_neg_lt_logic=0
+include_an_lt_tx_trainer=0
+include_rs_fec=1
+used_license_keys={{simulation {cmac_usplus@2020.05 bought} {cmac_an_lt@2020.05 design_linking}} {synthesis {cmac_usplus@2020.05 bought} {cmac_an_lt@2020.05 design_linking}} {changelog {cmac_usplus@2020.05 bought} {cmac_an_lt@2020.05 design_linking}} {instantiation_template {cmac_usplus@2020.05 bought} {cmac_an_lt@2020.05 design_linking}}}
+vivado_2022_2_cmac_v3_1_catalog_declares_cmac_an_lt_unconditionally=1

@@ -1,0 +1,8 @@
+stage=28
+iteration=D-realtime-xfft-pfb-rounding-pipeline
+core_version=0x00010030
+run=impl_1
+design=checkpoint_t510_fengine_board_top_routed
+part=xczu47dr-ffve1156-2-i
+generated_at=2026-07-12T23:08:52+0800
+bitstreams=/home/astrolab/demo-ant/demo-ant.runs/impl_1/t510_fengine_board_top.bit

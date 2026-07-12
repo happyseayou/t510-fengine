@@ -1,0 +1,8 @@
+stage=28
+iteration=C-global-pause-final
+core_version=0x0001002f
+run=impl_1
+design=design_1
+part=xczu47dr-ffve1156-2-i
+generated_at=2026-07-12T09:06:58+0800
+bitstreams=

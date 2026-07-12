@@ -44,12 +44,64 @@ module t510_cmac_qsfp0 (
     output wire [3:0]   lt_frame_lock
 );
 
+    // The host NIC uses IEEE 802.3x global pause to protect its small ingress
+    // buffer.  CMAC exposes the received pause timer as a request; stop only at
+    // an AXI packet boundary so an in-flight Ethernet frame is never truncated.
+    wire        tx_axis_tready_raw;
+    wire [8:0]  rx_pause_req;
+    logic       tx_in_frame = 1'b0;
+    logic       tx_pause_active = 1'b0;
+    wire        rx_global_pause_tx;
+    wire        tx_pause_block = tx_pause_active ||
+                                 (rx_global_pause_tx && !tx_in_frame);
+    wire        tx_axis_tvalid_gated = tx_axis_tvalid && !tx_pause_block;
+    wire        tx_axis_handshake = tx_axis_tvalid_gated &&
+                                    tx_axis_tready_raw;
+
+    assign tx_axis_tready = tx_axis_tready_raw && !tx_pause_block;
+
+    // stat_rx_pause_req is generated in the CMAC RX clock domain.  Use the
+    // Xilinx CDC primitive so implementation recognizes this single-bit path
+    // as asynchronous without declaring the complete RX/TX clock pair async.
+    xpm_cdc_single #(
+        .DEST_SYNC_FF(2),
+        .INIT_SYNC_FF(1),
+        .SIM_ASSERT_CHK(0),
+        .SRC_INPUT_REG(0)
+    ) u_rx_global_pause_cdc (
+        .src_clk(1'b0),
+        .src_in(rx_pause_req[8]),
+        .dest_clk(tx_clk),
+        .dest_out(rx_global_pause_tx)
+    );
+
+    // usr_tx_reset is synchronous to tx_clk.  Keep the packet-boundary state
+    // on synchronous reset so no LUT-driven asynchronous clear is introduced.
+    always_ff @(posedge tx_clk) begin
+        if (!tx_rst_n) begin
+            tx_in_frame <= 1'b0;
+            tx_pause_active <= 1'b0;
+        end else begin
+            if (tx_axis_handshake) begin
+                tx_in_frame <= !tx_axis_tlast;
+            end
+
+            if (!rx_global_pause_tx) begin
+                tx_pause_active <= 1'b0;
+            end else if (!tx_in_frame ||
+                         (tx_axis_handshake && tx_axis_tlast)) begin
+                tx_pause_active <= 1'b1;
+            end
+        end
+    end
+
 `ifndef SYNTHESIS
     assign gt_txp_out        = 4'd0;
     assign gt_txn_out        = 4'd0;
     assign tx_clk            = init_clk;
     assign tx_rst_n          = reset_n;
-    assign tx_axis_tready    = reset_n;
+    assign tx_axis_tready_raw = reset_n;
+    assign rx_pause_req      = 9'd0;
     assign gt_refclk_seen    = reset_n;
     assign gt_powergood      = reset_n;
     assign gt_tx_reset_done  = reset_n;
@@ -94,7 +146,6 @@ module t510_cmac_qsfp0 (
     wire        stat_tx_local_fault;
     wire        tx_unfout;
     wire        tx_ovfout;
-    wire        tx_axis_tready_int;
     wire        refclk_toggle_init;
     logic       refclk_toggle_gt = 1'b0;
     (* ASYNC_REG = "TRUE" *) logic [2:0] refclk_toggle_sync = 3'b000;
@@ -118,14 +169,13 @@ module t510_cmac_qsfp0 (
 
     assign tx_clk           = gt_txusrclk2_int;
     assign tx_rst_n         = !usr_tx_reset;
-    assign tx_axis_tready   = tx_axis_tready_int;
     assign gt_refclk_seen   = refclk_seen_latched;
     assign gt_powergood     = &gt_powergoodout;
     assign gt_tx_reset_done = &gt_txresetdone;
     assign gt_rx_reset_done = &gt_rxresetdone;
     assign gt_locked        = gt_powergood && gt_tx_reset_done && gt_rx_reset_done;
     assign cmac_reset_done  = !usr_tx_reset && !usr_rx_reset;
-    assign cmac_tx_ready    = tx_axis_tready_int && !usr_tx_reset;
+    assign cmac_tx_ready    = tx_axis_tready_raw && !usr_tx_reset;
     assign local_fault      = stat_rx_local_fault || stat_rx_internal_local_fault || stat_tx_local_fault;
     assign remote_fault     = stat_rx_remote_fault;
     assign link_up          = gt_locked && cmac_reset_done && cmac_tx_ready &&
@@ -225,11 +275,11 @@ module t510_cmac_qsfp0 (
         .ctl_rx_check_ucast_pcp(1'b0),
         .ctl_rx_check_ucast_ppp(1'b0),
         .ctl_rx_enable_gcp(1'b0),
-        .ctl_rx_enable_gpp(1'b0),
+        .ctl_rx_enable_gpp(1'b1),
         .ctl_rx_enable_pcp(1'b0),
         .ctl_rx_enable_ppp(1'b0),
-        .ctl_rx_pause_ack(9'd0),
-        .ctl_rx_pause_enable(9'd0),
+        .ctl_rx_pause_ack(rx_pause_req),
+        .ctl_rx_pause_enable(9'b1_0000_0000),
         .ctl_rx_enable(1'b1),
         .ctl_rx_force_resync(1'b0),
         .ctl_rx_test_pattern(1'b0),
@@ -244,6 +294,7 @@ module t510_cmac_qsfp0 (
         .stat_rx_aligned(stat_rx_aligned),
         .stat_rx_local_fault(stat_rx_local_fault),
         .stat_rx_internal_local_fault(stat_rx_internal_local_fault),
+        .stat_rx_pause_req(rx_pause_req),
         .stat_rx_remote_fault(stat_rx_remote_fault),
         .stat_rx_status(stat_rx_status),
         .ctl_tx_enable(1'b1),
@@ -275,8 +326,8 @@ module t510_cmac_qsfp0 (
         .ctl_tx_pause_refresh_timer8(16'd0),
         .ctl_tx_pause_req(9'd0),
         .ctl_tx_resend_pause(1'b0),
-        .tx_axis_tready(tx_axis_tready_int),
-        .tx_axis_tvalid(tx_axis_tvalid),
+        .tx_axis_tready(tx_axis_tready_raw),
+        .tx_axis_tvalid(tx_axis_tvalid_gated),
         .tx_axis_tdata(tx_axis_tdata),
         .tx_axis_tlast(tx_axis_tlast),
         .tx_axis_tkeep(tx_axis_tkeep),

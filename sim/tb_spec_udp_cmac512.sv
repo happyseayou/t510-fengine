@@ -29,6 +29,9 @@ module tb_spec_udp_cmac512;
     wire m_tvalid;
     wire m_tlast;
     logic m_tready = 1'b1;
+    logic random_m_backpressure = 1'b0;
+    logic [15:0] m_ready_lfsr = 16'h1ace;
+    integer m_stall_cycles = 0;
 
     wire [31:0] packet_count;
     wire [31:0] udp_byte_count;
@@ -67,9 +70,33 @@ module tb_spec_udp_cmac512;
     integer out_count = 0;
     integer last_count = 0;
     integer last_index = -1;
+    integer input_cycle = 0;
+    integer contiguous_accept_count = 0;
 
     always #5 s_clk = ~s_clk;
     always #3 m_clk = ~m_clk;
+
+    always_ff @(posedge m_clk) begin
+        if (!m_rst_n) begin
+            m_ready_lfsr <= 16'h1ace;
+            m_tready <= 1'b1;
+            m_stall_cycles <= 0;
+        end else begin
+            m_ready_lfsr <= {m_ready_lfsr[14:0], m_ready_lfsr[15] ^ m_ready_lfsr[13] ^ m_ready_lfsr[12] ^ m_ready_lfsr[10]};
+            m_tready <= !random_m_backpressure || m_ready_lfsr[0] || m_ready_lfsr[1];
+            if (random_m_backpressure && m_tvalid && !m_tready) begin
+                m_stall_cycles <= m_stall_cycles + 1;
+            end
+        end
+    end
+
+    always_ff @(posedge s_clk) begin
+        if (!s_rst_n) begin
+            input_cycle <= 0;
+        end else begin
+            input_cycle <= input_cycle + 1;
+        end
+    end
 
     function automatic [1023:0] make_payload(input integer packet_idx, input integer beat_idx);
         integer byte_idx;
@@ -112,6 +139,41 @@ module tb_spec_udp_cmac512;
                     @(posedge s_clk);
                 end while (!s_tready);
                 @(negedge s_clk);
+            end
+            s_tvalid = 1'b0;
+        end
+    endtask
+
+    task automatic send_payload_packets_contiguous;
+        integer packet_idx;
+        integer beat_idx;
+        integer previous_accept_cycle;
+        begin
+            previous_accept_cycle = -1;
+            contiguous_accept_count = 0;
+            @(negedge s_clk);
+            spec_chan0 = 32'd0;
+            s_tdata = make_payload(0, 0);
+            s_sample0 = SAMPLE0_BASE;
+            while (!s_tready) begin
+                @(negedge s_clk);
+            end
+            s_tvalid = 1'b1;
+            for (packet_idx = 0; packet_idx < CAPTURE_PACKETS; packet_idx = packet_idx + 1) begin
+                spec_chan0 = packet_idx * 32'd256;
+                for (beat_idx = 0; beat_idx < 64; beat_idx = beat_idx + 1) begin
+                    s_tdata = make_payload(packet_idx, beat_idx);
+                    s_sample0 = SAMPLE0_BASE + packet_idx * 64'd16384;
+                    do begin
+                        @(posedge s_clk);
+                    end while (!s_tready);
+                    if (previous_accept_cycle >= 0) begin
+                        `TB_CHECK_EQ(input_cycle, previous_accept_cycle + 1, "SPEC continuous payload accepts every adjacent beat including packet boundaries")
+                    end
+                    previous_accept_cycle = input_cycle;
+                    contiguous_accept_count = contiguous_accept_count + 1;
+                    @(negedge s_clk);
+                end
             end
             s_tvalid = 1'b0;
         end
@@ -234,9 +296,8 @@ module tb_spec_udp_cmac512;
         m_rst_n = 1'b1;
         repeat (8) @(posedge s_clk);
 
-        for (idx = 0; idx < CAPTURE_PACKETS; idx = idx + 1) begin
-            send_payload_packet(idx);
-        end
+        random_m_backpressure = 1'b1;
+        send_payload_packets_contiguous();
 
         while (last_count < CAPTURE_PACKETS) begin
             @(posedge m_clk);
@@ -300,6 +361,9 @@ module tb_spec_udp_cmac512;
             `TB_CHECK_EQ(spec_route_hit_count_vec[idx*32 +: 32], (idx < CAPTURE_PACKETS) ? 32'd1 : 32'd0, "SPEC route hit count");
         end
         `TB_CHECK_EQ(output_frame_count, 32'd16, "SPEC output frame count");
+        `TB_CHECK_EQ(contiguous_accept_count, CAPTURE_PACKETS * 64, "SPEC contiguous accepted input beat count");
+        `TB_CHECK_EQ(backpressure_cycles, 32'd0, "SPEC continuous input has no packet-boundary backpressure");
+        `TB_CHECK(m_stall_cycles > 0, "SPEC output exercises randomized downstream backpressure");
 
         `TB_PASS("tb_spec_udp_cmac512")
     end

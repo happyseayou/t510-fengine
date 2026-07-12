@@ -1,0 +1,4 @@
+stage=implementation_and_bitstream
+synth_status=synth_design Complete!
+impl_status=Queued...
+post_hook=/home/astrolab/demo-ant/tcl/stage28_final_post_bitstream.tcl

@@ -1,0 +1,7 @@
+stage=28
+iteration=A
+core_version=0x0001002d
+run=impl_1
+design=checkpoint_t510_fengine_board_top
+part=xczu47dr-ffve1156-2-i
+generated_at=2026-07-11T17:18:18+0800

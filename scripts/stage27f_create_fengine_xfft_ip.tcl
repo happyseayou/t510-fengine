@@ -143,7 +143,7 @@ if {$use_streaming_27h} {
     if {
         ($lane_prev_channels ne "1") ||
         ($lane_prev_impl ne "pipelined_streaming_io") ||
-        ($lane_prev_throttle ne "nonrealtime") ||
+        ($lane_prev_throttle ne "realtime") ||
         ($lane_prev_clock ne "325") ||
         ($lane_prev_rounding ne "convergent_rounding")
     } {
@@ -171,7 +171,7 @@ if {$use_streaming_27h} {
     set_cfg $lane_ip memory_options_reorder block_ram
     set_cfg $lane_ip complex_mult_type use_mults_resources
     set_cfg $lane_ip target_data_throughput 100 0
-    set_cfg $lane_ip throttle_scheme nonrealtime
+    set_cfg $lane_ip throttle_scheme realtime
     set_cfg $lane_ip implementation_options pipelined_streaming_io
 
     set lane_ip_file_obj [get_files -quiet [get_property IP_FILE $lane_ip]]
@@ -193,8 +193,8 @@ if {$use_streaming_27h} {
     if {$lane_actual_impl ne "pipelined_streaming_io"} {
         error "Stage 27h lane XFFT requires pipelined_streaming_io; got $lane_actual_impl"
     }
-    if {$lane_actual_throttle ne "nonrealtime"} {
-        error "Stage 27h lane XFFT requires nonrealtime throttle; got $lane_actual_throttle"
+    if {$lane_actual_throttle ne "realtime"} {
+        error "Stage 28 lane XFFT requires realtime throttle; got $lane_actual_throttle"
     }
     if {$lane_actual_clock ne "325"} {
         error "Stage 27h lane XFFT requires target_clock_frequency=325 for CMAC-domain FFT; got $lane_actual_clock"
@@ -202,7 +202,7 @@ if {$use_streaming_27h} {
     if {$lane_actual_rounding ne "convergent_rounding"} {
         error "Stage 27h lane XFFT requires convergent_rounding to avoid deterministic truncation bias; got $lane_actual_rounding"
     }
-    puts "STAGE27H_XFFT_LANE_NOTE nonrealtime pipelined streaming keeps full-rate ready/valid semantics; board SPEC 480kpps remains the production gate"
+    puts "STAGE28_XFFT_LANE_NOTE realtime mode removes the internal high-fanout CE tree; the RTL reserves one full FFT frame in the output CDC FIFO before feed"
 
     set lane_ooc_run [get_runs -quiet ${lane_ip_name}_synth_1]
     if {[llength $lane_ooc_run] == 0} {

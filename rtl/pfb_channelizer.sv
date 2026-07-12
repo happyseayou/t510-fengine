@@ -155,17 +155,13 @@ module t510_fengine_xfft_4096_8lane_streaming (
     wire [7:0]  lane_data_tlast;
     wire [7:0]  lane_status_tvalid;
     wire [63:0] lane_status_tdata;
-    wire [7:0]  lane_status_halt;
-    wire [7:0]  lane_data_out_halt;
     wire [7:0]  lane_frame_started;
     wire [7:0]  lane_tlast_unexpected;
     wire [7:0]  lane_tlast_missing;
     wire [7:0]  lane_fft_overflow;
     wire [7:0]  lane_data_in_halt;
     wire [7:0]  lane_m_axis_tvalid;
-    wire [7:0]  lane_m_axis_tready;
     wire [7:0]  lane_m_axis_tlast;
-    wire [7:0]  lane_m_axis_status_tready;
     wire [191:0] lane_m_axis_tuser;
     wire [7:0]  lane_m_axis_ovflo;
     logic [7:0] lane_cfg_done = 8'd0;
@@ -187,8 +183,6 @@ module t510_fengine_xfft_4096_8lane_streaming (
     assign s_axis_data_tready = &lane_data_tready;
     assign lane_data_tvalid = {8{s_axis_data_tvalid && s_axis_data_tready}};
     assign lane_data_tlast = {8{s_axis_data_tlast}};
-    assign lane_m_axis_tready = {8{all_lane_data_valid && m_axis_data_tready}};
-    assign lane_m_axis_status_tready = {8{all_lane_status_valid && m_axis_status_tready}};
 
     always_ff @(posedge aclk) begin
         if (!s_axis_config_tvalid) begin
@@ -223,18 +217,14 @@ module t510_fengine_xfft_4096_8lane_streaming (
                 .m_axis_data_tdata(m_axis_data_tdata[lane*32 +: 32]),
                 .m_axis_data_tuser(lane_tuser),
                 .m_axis_data_tvalid(lane_m_axis_tvalid[lane]),
-                .m_axis_data_tready(lane_m_axis_tready[lane]),
                 .m_axis_data_tlast(lane_m_axis_tlast[lane]),
                 .m_axis_status_tdata(lane_status_tdata[lane*8 +: 8]),
                 .m_axis_status_tvalid(lane_status_tvalid[lane]),
-                .m_axis_status_tready(lane_m_axis_status_tready[lane]),
                 .event_frame_started(lane_frame_started[lane]),
                 .event_tlast_unexpected(lane_tlast_unexpected[lane]),
                 .event_tlast_missing(lane_tlast_missing[lane]),
                 .event_fft_overflow(lane_fft_overflow[lane]),
-                .event_status_channel_halt(lane_status_halt[lane]),
-                .event_data_in_channel_halt(lane_data_in_halt[lane]),
-                .event_data_out_channel_halt(lane_data_out_halt[lane])
+                .event_data_in_channel_halt(lane_data_in_halt[lane])
             );
 
             assign lane_m_axis_tuser[lane*24 +: 24] = lane_tuser;
@@ -264,9 +254,12 @@ module t510_fengine_xfft_4096_8lane_streaming (
     assign event_tlast_unexpected = |lane_tlast_unexpected;
     assign event_tlast_missing = |lane_tlast_missing;
     assign event_fft_overflow = |lane_fft_overflow;
-    assign event_status_channel_halt = |lane_status_halt;
+    // Realtime XFFT lanes have no output/status TREADY ports.  Capacity is
+    // reserved before a frame enters the XFFT, so these wrapper-level events
+    // are assertions that the surrounding elastic storage stayed available.
+    assign event_status_channel_halt = m_axis_status_tvalid && !m_axis_status_tready;
     assign event_data_in_channel_halt = |lane_data_in_halt;
-    assign event_data_out_channel_halt = |lane_data_out_halt;
+    assign event_data_out_channel_halt = m_axis_data_tvalid && !m_axis_data_tready;
 
 endmodule
 `endif
@@ -1820,16 +1813,19 @@ module t510_pfb_mult_16x18_pipe2 (
         .MULTSIGNIN(1'b0),
         .OPMODE(9'b000000101),
         .PCIN(48'd0),
-        .RSTA(!rst_n),
+        // Data is qualified by the explicitly reset valid pipeline.  Keeping
+        // the DSP data registers out of reset removes a CMAC-domain reset tree
+        // from every PFB multiplier without exposing unqualified samples.
+        .RSTA(1'b0),
         .RSTALLCARRYIN(1'b0),
         .RSTALUMODE(1'b0),
-        .RSTB(!rst_n),
+        .RSTB(1'b0),
         .RSTC(1'b0),
         .RSTCTRL(1'b0),
         .RSTD(1'b0),
         .RSTINMODE(1'b0),
         .RSTM(1'b0),
-        .RSTP(!rst_n)
+        .RSTP(1'b0)
     );
 
     assign product = dsp_p[35:0];
@@ -1885,6 +1881,7 @@ module feng_channelizer_4096_streaming_27j #(
     output logic [31:0]         capture_backpressure_count,
     output logic [31:0]         frame_sample0_overflow_count,
     output wire [31:0]          input_fifo_level,
+    input  wire [31:0]          output_fifo_level,
     output logic [31:0]         peak_chan,
     output logic [31:0]         peak_power,
     output wire [31:0]          packet_chan0,
@@ -1899,6 +1896,11 @@ module feng_channelizer_4096_streaming_27j #(
     localparam integer FRAME_FIFO_AW = 4;
     localparam [FRAME_FIFO_AW:0] FRAME_FIFO_DEPTH_COUNT = FRAME_FIFO_DEPTH;
     localparam [FRAME_FIFO_AW:0] FRAME_FIFO_ZERO_COUNT = {(FRAME_FIFO_AW+1){1'b0}};
+    localparam integer OUTPUT_FIFO_DEPTH = 4096;
+    localparam integer OUTPUT_BEATS_PER_FRAME = NCHAN / CELLS_PER_BEAT;
+    localparam integer OUTPUT_FIFO_HEADROOM = 64;
+    localparam integer OUTPUT_RESERVATION_LIMIT =
+        OUTPUT_FIFO_DEPTH - OUTPUT_BEATS_PER_FRAME - OUTPUT_FIFO_HEADROOM;
 
     logic [DATA_W-1:0] fill_word;
     logic [63:0]       fill_frame_sample0;
@@ -1948,12 +1950,14 @@ module feng_channelizer_4096_streaming_27j #(
     logic              pfb_s2_valid;
     logic              pfb_s3_valid;
     logic              pfb_s4_valid;
+    logic              pfb_s5_valid;
     logic [11:0]       pfb_s0_idx;
     logic [11:0]       pfb_mul_idx;
     logic [11:0]       pfb_s1_idx;
     logic [11:0]       pfb_s2_idx;
     logic [11:0]       pfb_s3_idx;
     logic [11:0]       pfb_s4_idx;
+    logic [11:0]       pfb_s5_idx;
     logic [CELL_W-1:0] pfb_s0_d0;
     logic [CELL_W-1:0] pfb_s0_d1;
     logic [CELL_W-1:0] pfb_s0_d2;
@@ -1966,7 +1970,11 @@ module feng_channelizer_4096_streaming_27j #(
     logic signed [36:0] pfb_s2_sum01 [0:PFB_COMPONENTS-1];
     logic signed [36:0] pfb_s2_sum23 [0:PFB_COMPONENTS-1];
     logic signed [37:0] pfb_s3_acc [0:PFB_COMPONENTS-1];
-    logic [CELL_W-1:0] pfb_s4_cell;
+    logic [21:0]       pfb_s4_magnitude [0:PFB_COMPONENTS-1];
+    logic              pfb_s4_negative [0:PFB_COMPONENTS-1];
+    logic [CELL_W-1:0] pfb_s5_cell;
+    logic [12:0]       reserved_output_beats;
+    logic              output_capacity_available;
 
     wire [CELL_W-1:0] fill_cell = fill_word[fill_subidx*CELL_W +: CELL_W];
     wire input_word_fire = s_axis_tvalid && s_axis_tready;
@@ -2062,17 +2070,19 @@ module feng_channelizer_4096_streaming_27j #(
     wire [11:0] xfft_bin = xfft_m_axis_tuser[11:0];
     wire [PACK_IDX_W-1:0] pack_slot = xfft_bin[PACK_IDX_W-1:0];
     wire output_fire = output_valid && m_axis_tready;
-    wire output_slot_ready = !output_valid;
-    assign xfft_m_axis_tready = output_slot_ready;
+    // Realtime XFFT output cannot be throttled.  A complete frame is reserved
+    // in the existing 4096-beat output CDC FIFO before feed starts, so the
+    // packer is guaranteed to hand off every fourth cell without a stall.
+    assign xfft_m_axis_tready = 1'b1;
     assign xfft_m_axis_status_tready = 1'b1;
-    wire xfft_output_fire = xfft_m_axis_tvalid && xfft_m_axis_tready;
+    wire xfft_output_fire = xfft_m_axis_tvalid;
     wire xfft_q_empty = (xfft_q_count == 2'd0);
     wire xfft_q_full = (xfft_q_count == 2'd2);
     (* max_fanout = 64 *) wire pfb_pipe_advance = !xfft_q_full;
     wire xfft_data_valid = !xfft_q_empty;
     wire [CELL_W-1:0] xfft_data = xfft_q_head_data;
     wire [11:0] xfft_data_idx = xfft_q_head_idx;
-    wire xfft_q_push = pfb_pipe_advance && pfb_s4_valid;
+    wire xfft_q_push = pfb_pipe_advance && pfb_s5_valid;
     wire read_issue = feed_active && pfb_pipe_advance && (feed_read_addr < 13'd4096);
     wire feed_last_read_issue = read_issue && (feed_read_addr == 13'd4095);
     assign xfft_s_axis_tvalid = enable && config_valid && xfft_configured && xfft_data_valid;
@@ -2089,10 +2099,12 @@ module feng_channelizer_4096_streaming_27j #(
                          pfb_s1_valid ||
                          pfb_s2_valid ||
                          pfb_s3_valid ||
-                         pfb_s4_valid;
+                         pfb_s4_valid ||
+                         pfb_s5_valid;
     wire start_feed = enable && config_valid && xfft_configured &&
                       !feed_active && !pfb_pipe_busy && !xfft_data_valid &&
                       !new_frame_ready && !shift_pending &&
+                      output_capacity_available &&
                       (valid_frame_count == 3'd4);
     wire pack_first_cell = (pack_slot == {PACK_IDX_W{1'b0}});
     wire pack_last_cell = (pack_slot == (CELLS_PER_BEAT - 1));
@@ -2125,6 +2137,7 @@ module feng_channelizer_4096_streaming_27j #(
         pfb_s2_valid ||
         pfb_s3_valid ||
         pfb_s4_valid ||
+        pfb_s5_valid ||
         xfft_data_valid ||
         (valid_frame_count != 3'd0) ||
         output_valid ||
@@ -2151,23 +2164,46 @@ module feng_channelizer_4096_streaming_27j #(
         coeff_active_valid
     };
 
-    function automatic signed [15:0] round_sat_q17_38(input logic signed [37:0] acc);
-        logic signed [38:0] extended;
-        logic signed [38:0] scaled;
+    // Split symmetric rounding and saturation across two registers.  The old
+    // single function synthesized as an 11-level carry path at 322 MHz.
+    function automatic [21:0] round_magnitude_q17_38(input logic signed [37:0] acc);
+        logic [38:0] extended;
+        logic [38:0] magnitude;
+        logic [38:0] biased;
         begin
             extended = {acc[37], acc};
-            if (extended < 0) begin
-                scaled = -(((-extended) + 39'sd65536) >>> 17);
+            magnitude = acc[37] ? (~extended + 39'd1) : extended;
+            biased = magnitude + 39'd65536;
+            round_magnitude_q17_38 = biased[38:17];
+        end
+    endfunction
+
+    function automatic signed [15:0] saturate_signed_magnitude(
+        input logic negative,
+        input logic [21:0] magnitude
+    );
+        logic signed [15:0] positive_value;
+        begin
+            positive_value = $signed({1'b0, magnitude[14:0]});
+            if (negative && (magnitude >= 22'd32768)) begin
+                saturate_signed_magnitude = -16'sd32768;
+            end else if (!negative && (magnitude > 22'd32767)) begin
+                saturate_signed_magnitude = 16'sd32767;
+            end else if (negative) begin
+                saturate_signed_magnitude = -positive_value;
             end else begin
-                scaled = (extended + 39'sd65536) >>> 17;
+                saturate_signed_magnitude = positive_value;
             end
-            if (scaled > 39'sd32767) begin
-                round_sat_q17_38 = 16'sd32767;
-            end else if (scaled < -39'sd32768) begin
-                round_sat_q17_38 = -16'sd32768;
-            end else begin
-                round_sat_q17_38 = scaled[15:0];
-            end
+        end
+    endfunction
+
+    // Reference helper retained for directed simulation checks only.  The RTL
+    // datapath uses the two registered functions above.
+    function automatic signed [15:0] round_sat_q17_38(input logic signed [37:0] acc);
+        begin
+            round_sat_q17_38 = saturate_signed_magnitude(
+                acc[37], round_magnitude_q17_38(acc)
+            );
         end
     endfunction
 
@@ -2417,6 +2453,32 @@ module feng_channelizer_4096_streaming_27j #(
         end
     end
 
+    wire [13:0] output_occupancy_reserved =
+        {1'b0, output_fifo_level[12:0]} + {1'b0, reserved_output_beats};
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            reserved_output_beats <= 13'd0;
+            output_capacity_available <= 1'b0;
+        end else if (clear || !enable || !config_valid) begin
+            reserved_output_beats <= 13'd0;
+            output_capacity_available <= 1'b0;
+        end else begin
+            output_capacity_available <=
+                (output_occupancy_reserved <= OUTPUT_RESERVATION_LIMIT);
+            unique case ({start_feed, output_fire})
+                2'b10: reserved_output_beats <=
+                    reserved_output_beats + OUTPUT_BEATS_PER_FRAME;
+                2'b01: if (reserved_output_beats != 13'd0) begin
+                    reserved_output_beats <= reserved_output_beats - 13'd1;
+                end
+                2'b11: reserved_output_beats <=
+                    reserved_output_beats + OUTPUT_BEATS_PER_FRAME - 13'd1;
+                default: reserved_output_beats <= reserved_output_beats;
+            endcase
+        end
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             fill_word <= {DATA_W{1'b0}};
@@ -2466,12 +2528,14 @@ module feng_channelizer_4096_streaming_27j #(
             pfb_s2_valid <= 1'b0;
             pfb_s3_valid <= 1'b0;
             pfb_s4_valid <= 1'b0;
+            pfb_s5_valid <= 1'b0;
             pfb_s0_idx <= 12'd0;
             pfb_mul_idx <= 12'd0;
             pfb_s1_idx <= 12'd0;
             pfb_s2_idx <= 12'd0;
             pfb_s3_idx <= 12'd0;
             pfb_s4_idx <= 12'd0;
+            pfb_s5_idx <= 12'd0;
             pfb_s0_d0 <= {CELL_W{1'b0}};
             pfb_s0_d1 <= {CELL_W{1'b0}};
             pfb_s0_d2 <= {CELL_W{1'b0}};
@@ -2480,7 +2544,7 @@ module feng_channelizer_4096_streaming_27j #(
             pfb_s0_c1 <= 18'sd0;
             pfb_s0_c2 <= 18'sd0;
             pfb_s0_c3 <= 18'sd0;
-            pfb_s4_cell <= {CELL_W{1'b0}};
+            pfb_s5_cell <= {CELL_W{1'b0}};
             xfft_q_head_data <= {CELL_W{1'b0}};
             xfft_q_tail_data <= {CELL_W{1'b0}};
             xfft_q_head_idx <= 12'd0;
@@ -2594,6 +2658,7 @@ module feng_channelizer_4096_streaming_27j #(
                 pfb_s2_valid <= 1'b0;
                 pfb_s3_valid <= 1'b0;
                 pfb_s4_valid <= 1'b0;
+                pfb_s5_valid <= 1'b0;
                 xfft_q_count <= 2'd0;
                 xfft_config_tvalid <= 1'b0;
                 xfft_configured <= 1'b0;
@@ -2637,6 +2702,7 @@ module feng_channelizer_4096_streaming_27j #(
                     pfb_s2_valid <= 1'b0;
                     pfb_s3_valid <= 1'b0;
                     pfb_s4_valid <= 1'b0;
+                    pfb_s5_valid <= 1'b0;
                     xfft_q_count <= 2'd0;
                     pack_subidx <= {PACK_IDX_W{1'b0}};
                     pack_word <= {DATA_W{1'b0}};
@@ -2724,11 +2790,11 @@ module feng_channelizer_4096_streaming_27j #(
 	                    unique case ({xfft_q_push, xfft_q_pop})
 	                        2'b10: begin
 	                            if (xfft_q_empty) begin
-	                                xfft_q_head_data <= pfb_s4_cell;
-	                                xfft_q_head_idx <= pfb_s4_idx;
+	                                xfft_q_head_data <= pfb_s5_cell;
+	                                xfft_q_head_idx <= pfb_s5_idx;
 	                            end else begin
-	                                xfft_q_tail_data <= pfb_s4_cell;
-	                                xfft_q_tail_idx <= pfb_s4_idx;
+	                                xfft_q_tail_data <= pfb_s5_cell;
+	                                xfft_q_tail_idx <= pfb_s5_idx;
 	                            end
 	                            xfft_q_count <= xfft_q_count + 2'd1;
 	                        end
@@ -2740,8 +2806,8 @@ module feng_channelizer_4096_streaming_27j #(
 	                            xfft_q_count <= xfft_q_count - 2'd1;
 	                        end
 	                        2'b11: begin
-	                            xfft_q_head_data <= pfb_s4_cell;
-	                            xfft_q_head_idx <= pfb_s4_idx;
+	                            xfft_q_head_data <= pfb_s5_cell;
+	                            xfft_q_head_idx <= pfb_s5_idx;
 	                        end
 	                        default: xfft_q_count <= xfft_q_count;
 	                    endcase
@@ -2809,11 +2875,26 @@ module feng_channelizer_4096_streaming_27j #(
 
 	                        pfb_s4_valid <= pfb_s3_valid;
 	                        pfb_s4_idx <= pfb_s3_idx;
+	                        for (pfb_comp_idx = 0; pfb_comp_idx < PFB_COMPONENTS; pfb_comp_idx = pfb_comp_idx + 1) begin
+	                            pfb_s4_magnitude[pfb_comp_idx] <=
+	                                round_magnitude_q17_38(pfb_s3_acc[pfb_comp_idx]);
+	                            pfb_s4_negative[pfb_comp_idx] <=
+	                                pfb_s3_acc[pfb_comp_idx][37];
+	                        end
+
+	                        pfb_s5_valid <= pfb_s4_valid;
+	                        pfb_s5_idx <= pfb_s4_idx;
 	                        for (pfb_lane_idx = 0; pfb_lane_idx < NINPUT; pfb_lane_idx = pfb_lane_idx + 1) begin
-	                            pfb_s4_cell[pfb_lane_idx*32 +: 16] <=
-	                                round_sat_q17_38(pfb_s3_acc[pfb_lane_idx*2]);
-	                            pfb_s4_cell[pfb_lane_idx*32 + 16 +: 16] <=
-	                                round_sat_q17_38(pfb_s3_acc[pfb_lane_idx*2 + 1]);
+	                            pfb_s5_cell[pfb_lane_idx*32 +: 16] <=
+	                                saturate_signed_magnitude(
+	                                    pfb_s4_negative[pfb_lane_idx*2],
+	                                    pfb_s4_magnitude[pfb_lane_idx*2]
+	                                );
+	                            pfb_s5_cell[pfb_lane_idx*32 + 16 +: 16] <=
+	                                saturate_signed_magnitude(
+	                                    pfb_s4_negative[pfb_lane_idx*2 + 1],
+	                                    pfb_s4_magnitude[pfb_lane_idx*2 + 1]
+	                                );
 	                        end
 
 	                    end
@@ -2975,6 +3056,7 @@ module pfb_channelizer #(
     output wire [31:0]          capture_backpressure_count,
     output wire [31:0]          frame_sample0_overflow_count,
     output wire [31:0]          input_fifo_level,
+    input  wire [31:0]          output_fifo_level,
     output wire [31:0]          peak_chan,
     output wire [31:0]          peak_power,
     output wire [31:0]          packet_chan0,
@@ -3032,6 +3114,7 @@ module pfb_channelizer #(
         .capture_backpressure_count(capture_backpressure_count),
         .frame_sample0_overflow_count(frame_sample0_overflow_count),
         .input_fifo_level(input_fifo_level),
+        .output_fifo_level(output_fifo_level),
         .peak_chan(peak_chan),
         .peak_power(peak_power),
         .packet_chan0(packet_chan0),

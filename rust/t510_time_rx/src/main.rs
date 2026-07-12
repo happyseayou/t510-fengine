@@ -223,7 +223,7 @@ impl Args {
     }
 
     fn time_flow_count_clamped(&self) -> usize {
-        self.time_flow_count.clamp(1, self.flow_count_clamped().min(8))
+        self.time_flow_count.min(self.flow_count_clamped().min(8))
     }
 
     fn spec_flow_count_clamped(&self) -> usize {
@@ -3086,7 +3086,8 @@ impl ReceiverRuntime {
             let time_count = self.stats.last_time_count.unwrap_or(DEFAULT_TIME_COUNT).max(1) as f64;
             self.stats.expected_packets_per_sec =
                 (RAW_SAMPLE_RATE_HZ / mode.decimation() as f64) / (time_count * 4.0);
-            let expected_streams = 1.0 + if self.spec_flow_count > 0 { 1.0 } else { 0.0 };
+            let expected_streams = (self.time_flow_count > 0) as u8 as f64
+                + (self.spec_flow_count > 0) as u8 as f64;
             self.stats.expected_time_gbps =
                 if self.time_flow_count > 0 { self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
             self.stats.expected_spec_gbps =
@@ -3883,7 +3884,8 @@ fn aggregate_fanout_stats(
     let mode = config.bandwidth_mode();
     stats.expected_packets_per_sec =
         (RAW_SAMPLE_RATE_HZ / mode.decimation() as f64) / (time_count * 4.0);
-    let expected_streams = 1.0 + if stats.spec_flow_count > 0 { 1.0 } else { 0.0 };
+    let expected_streams = (stats.time_flow_count > 0) as u8 as f64
+        + (stats.spec_flow_count > 0) as u8 as f64;
     stats.expected_time_gbps =
         if stats.time_flow_count > 0 { stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
     stats.expected_spec_gbps =
@@ -4588,6 +4590,18 @@ mod tests {
         args.initial_bandwidth_mhz = 1234;
         let stats = ReceiverStats::new(&args);
         assert_eq!(stats.selected_bandwidth_mhz, 100);
+    }
+
+    #[test]
+    fn stage28_spec_only_allows_all_sixteen_flows_without_time() {
+        let mut args = test_args();
+        args.flow_count = 16;
+        args.time_flow_count = 0;
+        args.spec_flow_count = 16;
+        args.spec_layout = SpecLayout::Stage27j;
+
+        assert_eq!(args.time_flow_count_clamped(), 0);
+        assert_eq!(args.spec_flow_count_clamped(), 16);
     }
 
     #[test]

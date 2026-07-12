@@ -647,6 +647,21 @@ class T510FEngine:
             "reduced/windowed SPEC preview",
         ),
     }
+    STAGE28_PRODUCTION_SCOPE = {
+        "data_streams": "TIME native 512b + SPEC/F-engine FENGINE_IQ16 4-tap RTL PFB 4096-channel science streams",
+        "control_preview": "Jupyter notebook 16_stage28_time_spec_fullrate_control.ipynb",
+        "production_preview": "mode-selective RF reconstructed waveform and/or 4096-bin PFB spectrum",
+        "production_modes": ("100MHz TIME_SPEC", "200MHz TIME_ONLY", "200MHz SPEC_ONLY"),
+        "convergence_gate": "fresh-download board counters plus mode-sized Rust/Web receive at 63Gbps+ T510 UDP payload",
+        "spec_contract": "4096 channels, 16 blocks x 256 channels x 1 spectrum-time x 8 inputs x IQ16, 8192B payload",
+        "pfb_contract": "4-tap programmable Q1.17 coefficient bank, stopped/idle commit only",
+        "excluded_from_gate": (
+            "200MHz TIME_SPEC (exceeds the 100GbE capacity)",
+            "Stage 29 module pruning",
+            "payload tightening",
+            "X-engine/beamformer interfaces",
+        ),
+    }
 
     @staticmethod
     def ensure_xrt_dri_ready() -> dict[str, Any]:
@@ -4085,6 +4100,140 @@ class T510FEngine:
         result["started"] = bool(start_requested)
         return result
 
+    def configure_science_28(
+        self,
+        *,
+        bandwidth_mhz: int | float | str = 100,
+        output_mode: str | int = "time_spec",
+        dst_ip: str = "10.0.1.16",
+        dst_mac: str = "08:c0:eb:d5:95:b2",
+        src_ip: str = "10.0.1.1",
+        src_mac: str = "02:00:00:00:00:01",
+        time_dst_port_base: int = 4300,
+        spec_dst_port_base: int = 4308,
+        time_src_port_base: int = 4000,
+        spec_src_port_base: int = 4008,
+        time_endpoint_base: int = 0,
+        spec_endpoint_base: int = 8,
+        time_flow_count: int = 8,
+        spec_route_count: int = 16,
+        spec_chan_count: int = 256,
+        spec_time_count: int = 1,
+        spec_chan0_stride: int = 256,
+        pfb_fft_shift: int = FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT,
+        pfb_coefficients: Iterable[int] | None = None,
+        pfb_coeff_id: int = 0x28A4_0001,
+        load_coefficients: bool = True,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Configure one of the three Stage 28 production combinations."""
+        mode_name, mode_code = self._normalize_science_output_mode(output_mode)
+        bandwidth = self._normalize_science_bandwidth_mhz(bandwidth_mhz)
+        allowed = {
+            (100, self.SCIENCE_OUTPUT_MODES["time_spec"]),
+            (200, self.SCIENCE_OUTPUT_MODES["time_only"]),
+            (200, self.SCIENCE_OUTPUT_MODES["spec_only"]),
+        }
+        if (bandwidth, mode_code) not in allowed:
+            raise ValueError(
+                "Stage 28 production supports only 100MHz TIME_SPEC, "
+                "200MHz TIME_ONLY, and 200MHz SPEC_ONLY"
+            )
+        if int(pfb_fft_shift) < 0 or int(pfb_fft_shift) > 0x0FFF:
+            raise ValueError("Stage 28 XFFT scale schedule is 12-bit and must be in 0x000..0xfff")
+        if int(spec_route_count) != 16 or int(spec_chan_count) != 256 or int(spec_time_count) != 1 or int(spec_chan0_stride) != 256:
+            raise ValueError("Stage 28 full-rate SPEC requires 16 routes of 256 channels x 1 spectrum-time")
+
+        start_requested = bool(kwargs.pop("start", True))
+        settle_s = float(kwargs.get("settle_s", 0.05))
+        result = self.configure_science_live_27e(
+            bandwidth_mhz=bandwidth,
+            output_mode=mode_name,
+            dst_ip=dst_ip,
+            dst_mac=dst_mac,
+            src_ip=src_ip,
+            src_mac=src_mac,
+            time_dst_port_base=time_dst_port_base,
+            spec_dst_port_base=spec_dst_port_base,
+            time_src_port_base=time_src_port_base,
+            spec_src_port_base=spec_src_port_base,
+            time_endpoint_base=time_endpoint_base,
+            spec_endpoint_base=spec_endpoint_base,
+            time_flow_count=time_flow_count,
+            spec_route_count=spec_route_count,
+            spec_chan_count=spec_chan_count,
+            spec_time_count=spec_time_count,
+            spec_chan0_stride=spec_chan0_stride,
+            start=False,
+            **kwargs,
+        )
+        expects_spec = mode_code in (
+            self.SCIENCE_OUTPUT_MODES["spec_only"],
+            self.SCIENCE_OUTPUT_MODES["time_spec"],
+        )
+        expects_time = mode_code in (
+            self.SCIENCE_OUTPUT_MODES["time_only"],
+            self.SCIENCE_OUTPUT_MODES["time_spec"],
+        )
+        if not expects_spec:
+            self.configure_spec_routes([], clear_unlisted=True)
+        if not expects_time:
+            self.configure_time_routes([], clear_unlisted=True)
+        coeff_result = None
+        if expects_spec:
+            if load_coefficients:
+                coeff_result = self.load_pfb_coefficients(
+                    pfb_coefficients,
+                    coeff_id=pfb_coeff_id,
+                    stop_first=True,
+                )
+            self.ctrl.write(self.regs.PFB_TAPS, 4)
+            self.ctrl.write(self.regs.PFB_FFT_SHIFT, int(pfb_fft_shift))
+            self.ctrl.write(self.regs.PFB_CONTROL, 0x3)
+        else:
+            self.ctrl.write(self.regs.PFB_CONTROL, 0x0)
+        if start_requested:
+            self.start()
+            time.sleep(max(settle_s, 0.0))
+
+        result.update(
+            {
+                "science_status": self.read_science_output_status(),
+                "tx_status": self.read_tx_status(),
+                "channelizer_status": self.read_channelizer_status(),
+                "stage": "28",
+                "science_product": "FENGINE_IQ16_COMPLEX_VOLTAGE_4TAP_RTL_PFB",
+                "production_scope": dict(self.STAGE28_PRODUCTION_SCOPE),
+                "convergence_target": "STAGE28_THREE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
+                "fengine_nchan": 4096,
+                "fengine_taps": 4 if expects_spec else None,
+                "fengine_fft_shift": int(pfb_fft_shift) if expects_spec else None,
+                "fft_only": False,
+                "pfb_coefficients": coeff_result,
+                "spec_ports": f"{int(spec_dst_port_base)}..{int(spec_dst_port_base) + int(spec_route_count) - 1}",
+                "host_flow_count": (int(time_flow_count) if mode_code != self.SCIENCE_OUTPUT_MODES["spec_only"] else 0)
+                + (int(spec_route_count) if expects_spec else 0),
+                "expected_packet_rates": {
+                    "time_pps": 480_000.0 if mode_name == "time_spec" else (960_000.0 if mode_name == "time_only" else None),
+                    "spec_pps": 480_000.0 if mode_name == "time_spec" else (960_000.0 if mode_name == "spec_only" else None),
+                    "combined_t510_udp_payload_mbps": 63_897.6,
+                },
+                "payload_contract": {
+                    "product": "FENGINE_IQ16",
+                    "nchan": 4096,
+                    "block_count": 16,
+                    "chan_count": 256,
+                    "time_count": 1,
+                    "ninput": 8,
+                    "iq_bits": 16,
+                    "payload_bytes": 8192,
+                    "pfb_taps": 4,
+                },
+                "started": bool(start_requested),
+            }
+        )
+        return result
+
     def configure_stage27i_diag(
         self,
         *,
@@ -4245,7 +4394,7 @@ class T510FEngine:
             errors.append("CMAC_TX_UNDERFLOW")
         if int(tx_after.get("tx_overflow", 0)):
             errors.append("CMAC_TX_OVERFLOW")
-        if expects_spec and not int(science_after.get("fengine_science_valid", 0)):
+        if not int(science_after.get("fengine_science_valid", 0)):
             errors.append("FENGINE_SCIENCE_NOT_VALID")
         if expects_spec and int(science_after.get("pfb_fft_not_ready", 0)):
             errors.append("PFB_FFT_NOT_READY")
@@ -4728,7 +4877,10 @@ class T510FEngine:
         time.sleep(max(float(seconds), 0.0))
         after = self.read_status()
         tx_after_live = self.read_tx_status()
-        tx_after = self._tx_status_from_status_snapshot(after, tx_after_live)
+        tx_after = self._prefer_coherent_live_tx_status(
+            self._tx_status_from_status_snapshot(after, tx_after_live),
+            tx_after_live,
+        )
         science_after = self.read_science_output_status()
         channelizer_after = self.read_channelizer_status()
         spec_routes = self.read_spec_route_table()
@@ -4969,6 +5121,261 @@ class T510FEngine:
             "tx_after": tx_after,
             "tx_after_live": tx_after_live,
             "tx_after_live_disagreements": tx_after_live_disagreements,
+            "science_after": science_after,
+            "channelizer_after": channelizer_after,
+            "spec_routes": spec_routes,
+            "time_routes": time_routes,
+            "deltas": deltas,
+            "rates": rates,
+            "errors": errors,
+            "blockers": blockers,
+        }
+
+    def run_stage28_validation(
+        self,
+        *,
+        configure: bool = True,
+        expected_core_version: int = 0x0001_0030,
+        bandwidth_mhz: int | float | str = 100,
+        output_mode: str | int = "time_spec",
+        seconds: float = 10.0,
+        min_time_pps: float | None = None,
+        min_spec_pps: float | None = None,
+        min_combined_t510_udp_payload_mbps: float = 63_000.0,
+        expected_clock_ref: str | None = PRODUCTION_CLOCK_REF,
+        expected_sync_mode: str | None = PRODUCTION_SYNC_MODE,
+        measurement_ready_timeout_s: float = 10.0,
+        require_antialias_100m: bool = True,
+        **config_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Run the board-side gate for a Stage 28 production combination."""
+        mode_name, mode_code = self._normalize_science_output_mode(output_mode)
+        bandwidth = self._normalize_science_bandwidth_mhz(bandwidth_mhz)
+        allowed = {
+            (100, self.SCIENCE_OUTPUT_MODES["time_spec"]),
+            (200, self.SCIENCE_OUTPUT_MODES["time_only"]),
+            (200, self.SCIENCE_OUTPUT_MODES["spec_only"]),
+        }
+        if (bandwidth, mode_code) not in allowed:
+            raise ValueError(
+                "Stage 28 production supports only 100MHz TIME_SPEC, "
+                "200MHz TIME_ONLY, and 200MHz SPEC_ONLY"
+            )
+        if bandwidth == 100:
+            result = self.run_stage27j_time_spec_pfb_validation(
+                configure=configure,
+                expected_core_version=expected_core_version,
+                seconds=seconds,
+                min_time_pps=470_000.0 if min_time_pps is None else float(min_time_pps),
+                min_spec_pps=470_000.0 if min_spec_pps is None else float(min_spec_pps),
+                min_combined_t510_udp_payload_mbps=min_combined_t510_udp_payload_mbps,
+                expected_clock_ref=expected_clock_ref,
+                expected_sync_mode=expected_sync_mode,
+                measurement_ready_timeout_s=measurement_ready_timeout_s,
+                require_antialias_100m=require_antialias_100m,
+                bandwidth_mhz=bandwidth,
+                output_mode=mode_name,
+                **config_kwargs,
+            )
+            ok = not result.get("errors") and not result.get("blockers")
+            result.update(
+                {
+                    "classification": "STAGE28_100MHZ_TIME_SPEC_BOARD_PASS" if ok else "STAGE28_100MHZ_TIME_SPEC_BOARD_FAIL",
+                    "ok": ok,
+                    "full_science_validated": ok,
+                    "stage": "28",
+                    "production_scope": dict(self.STAGE28_PRODUCTION_SCOPE),
+                    "convergence_target": "STAGE28_THREE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
+                }
+            )
+            return result
+
+        expects_time = mode_code == self.SCIENCE_OUTPUT_MODES["time_only"]
+        expects_spec = mode_code == self.SCIENCE_OUTPUT_MODES["spec_only"]
+        time_pps_min = (950_000.0 if expects_time else 0.0) if min_time_pps is None else float(min_time_pps)
+        spec_pps_min = (950_000.0 if expects_spec else 0.0) if min_spec_pps is None else float(min_spec_pps)
+        config = None
+        start_requested = bool(config_kwargs.pop("start", True))
+        if configure:
+            config = self.configure_science_28(
+                bandwidth_mhz=bandwidth,
+                output_mode=mode_name,
+                start=False,
+                **config_kwargs,
+            )
+            config_kwargs = {}
+        elif config_kwargs:
+            raise ValueError(f"unused Stage 28 config kwargs when configure=False: {sorted(config_kwargs)}")
+
+        ready_before_measurement = None
+        if start_requested:
+            self.start()
+            ready_before_measurement = self._wait_stage27h_measurement_ready(
+                expects_time=expects_time,
+                expects_spec=expects_spec,
+                timeout_s=float(measurement_ready_timeout_s),
+            )
+        before = self.read_status()
+        time.sleep(max(float(seconds), 0.0))
+        after = self.read_status()
+        tx_after_live = self.read_tx_status()
+        tx_after = self._prefer_coherent_live_tx_status(
+            self._tx_status_from_status_snapshot(after, tx_after_live),
+            tx_after_live,
+        )
+        science_after = self.read_science_output_status()
+        channelizer_after = self.read_channelizer_status()
+        spec_routes = self.read_spec_route_table()
+        time_routes = self.read_time_route_table()
+
+        delta_keys = (
+            "spec_packet_count", "time_packet_count", "time_dropped_count", "rfdc_dropped_count",
+            "pfb_overflow_count", "pfb_data_halt_count", "pfb_xfft_event_count", "pfb_tile_overflow_count",
+            "pfb_xfft_tlast_unexpected_count", "pfb_xfft_tlast_missing_count", "pfb_xfft_fft_overflow_count",
+            "pfb_xfft_data_out_halt_count", "pfb_xfft_status_halt_count", "pfb_capture_backpressure_count",
+            "pfb_frame_sample0_overflow_count", "tx_frame_built_count", "tx_frame_byte_count",
+            "tx_route_miss_count", "tx_route_error_count", "spec_dropped_count", "science_dropped_beat_count",
+            "pfb_coeff_error_count",
+        )
+        deltas = {key: self._counter_delta(after.get(key, 0), before.get(key, 0)) for key in delta_keys}
+        elapsed = max(float(seconds), 1.0e-6)
+        rates = {
+            "time_pps": float(deltas["time_packet_count"]) / elapsed,
+            "spec_pps": float(deltas["spec_packet_count"]) / elapsed,
+            "combined_t510_udp_payload_mbps": float(deltas["time_packet_count"] + deltas["spec_packet_count"]) * 8320.0 * 8.0 / elapsed / 1_000_000.0,
+            "time_t510_udp_payload_mbps": float(deltas["time_packet_count"]) * 8320.0 * 8.0 / elapsed / 1_000_000.0,
+            "spec_t510_udp_payload_mbps": float(deltas["spec_packet_count"]) * 8320.0 * 8.0 / elapsed / 1_000_000.0,
+        }
+
+        errors: list[str] = []
+        blockers: list[str] = []
+        if int(after.get("core_version", 0)) != int(expected_core_version):
+            errors.append(f"WRONG_CORE_VERSION expected 0x{int(expected_core_version):08x} got 0x{int(after.get('core_version', 0)):08x}")
+        if expected_clock_ref is not None:
+            expected_ref = self.CLOCK_REFS[str(expected_clock_ref)]
+            if int(after.get("configured_clock_ref", -1)) != expected_ref:
+                errors.append(f"WRONG_CLOCK_REF expected {expected_clock_ref}({expected_ref})")
+        if expected_sync_mode is not None:
+            expected_sync = self.SYNC_MODES[str(expected_sync_mode).lower()]
+            if int(after.get("configured_sync_mode", -1)) != expected_sync:
+                errors.append(f"WRONG_SYNC_MODE expected {expected_sync_mode}({expected_sync})")
+            if int(after.get("active_sync_mode", -1)) != expected_sync:
+                errors.append(f"WRONG_ACTIVE_SYNC_MODE expected {expected_sync_mode}({expected_sync})")
+            if str(expected_sync_mode).lower() == "external_pps" and not int(after.get("pps_recent", 0)):
+                errors.append("EXTERNAL_PPS_NOT_RECENT")
+        if int(after.get("stage27i_diag_control", 0)) != 0x0000_FF00:
+            errors.append(f"STAGE27I_DIAG_ENABLED raw=0x{int(after.get('stage27i_diag_control', 0)):08x}")
+        if bool(int(science_after.get("time_enabled", 0))) != expects_time:
+            errors.append("TIME_ENABLE_MISMATCH")
+        if bool(int(science_after.get("spec_enabled", 0))) != expects_spec:
+            errors.append("SPEC_ENABLE_MISMATCH")
+        if int(science_after.get("science_bandwidth_mhz", 0)) != 200:
+            errors.append(f"STAGE28_EXPECTS_200MHZ bandwidth_mhz={science_after.get('science_bandwidth_mhz')}")
+        if int(science_after.get("science_antialias_100m_active", 0)):
+            errors.append("SCIENCE_100MHZ_ANTIALIAS_ACTIVE_AT_200MHZ")
+        for key, label in (("gt_locked", "GT_NOT_LOCKED"), ("cmac_reset_done", "CMAC_RESET_NOT_DONE"), ("cmac_tx_ready", "CMAC_TX_NOT_READY")):
+            if not int(tx_after.get(key, 0)):
+                blockers.append(label)
+        if int(tx_after.get("tx_local_fault", 0)):
+            blockers.append("CMAC_LOCAL_FAULT")
+        if int(tx_after.get("tx_remote_fault", 0)):
+            blockers.append("CMAC_REMOTE_FAULT")
+        if int(tx_after.get("udp_dry_run_active", 1)):
+            errors.append("TX_STILL_DRY_RUN")
+        if not int(tx_after.get("cmac_enable", 0)) or not int(tx_after.get("frame_builder_enabled", 0)):
+            errors.append("CMAC_OR_FRAME_BUILDER_NOT_ENABLED")
+        if int(tx_after.get("tx_underflow", 0)) or int(tx_after.get("tx_overflow", 0)):
+            errors.append("CMAC_TX_FIFO_ERROR")
+        if expects_spec and not int(science_after.get("fengine_science_valid", 0)):
+            errors.append("FENGINE_SCIENCE_NOT_VALID")
+
+        if expects_spec:
+            if int(science_after.get("pfb_fft_not_ready", 0)):
+                errors.append("PFB_NOT_READY")
+            for condition, label in (
+                (int(channelizer_after.get("pfb_taps", -1)) != 4, "PFB_TAPS_NOT_4"),
+                (int(channelizer_after.get("pfb_chan_count", 0)) != 256, "PFB_CHAN_COUNT_NOT_256"),
+                (int(channelizer_after.get("pfb_time_count", 0)) != 1, "PFB_TIME_COUNT_NOT_1"),
+                (bool(int(channelizer_after.get("pfb_fft_only", 1))), "PFB_FFT_ONLY_STATUS_BIT_STILL_SET"),
+                (not bool(int(channelizer_after.get("pfb_active", 0))), "PFB_ACTIVE_STATUS_NOT_SET"),
+                (not bool(int(channelizer_after.get("pfb_coeff_active_valid", 0))), "PFB_COEFF_ACTIVE_NOT_VALID"),
+                (int(channelizer_after.get("pfb_coeff_active_taps", 0)) != 4, "PFB_COEFF_ACTIVE_TAPS_NOT_4"),
+                (bool(int(channelizer_after.get("pfb_coeff_command_error", 0))), "PFB_COEFF_COMMAND_ERROR"),
+            ):
+                if condition:
+                    errors.append(label)
+        elif int(channelizer_after.get("pfb_active", 0)):
+            errors.append("PFB_ACTIVE_IN_TIME_ONLY")
+
+        zero_delta_labels = {
+            "time_dropped_count": "TIME_DROPPED", "rfdc_dropped_count": "RFDC_DROPPED",
+            "pfb_overflow_count": "FENGINE_OVERFLOW", "pfb_data_halt_count": "FENGINE_DATA_HALT",
+            "pfb_xfft_event_count": "FENGINE_XFFT_EVENT", "pfb_tile_overflow_count": "FENGINE_TILE_OVERFLOW",
+            "pfb_xfft_tlast_unexpected_count": "FENGINE_XFFT_TLAST_UNEXPECTED",
+            "pfb_xfft_tlast_missing_count": "FENGINE_XFFT_TLAST_MISSING",
+            "pfb_xfft_fft_overflow_count": "FENGINE_XFFT_FFT_OVERFLOW",
+            "pfb_xfft_data_out_halt_count": "FENGINE_XFFT_DATA_OUT_HALT",
+            "pfb_xfft_status_halt_count": "FENGINE_XFFT_STATUS_HALT",
+            "pfb_capture_backpressure_count": "FENGINE_CAPTURE_BACKPRESSURE",
+            "pfb_frame_sample0_overflow_count": "FENGINE_FRAME_SAMPLE0_OVERFLOW",
+            "tx_route_miss_count": "TX_ROUTE_MISS", "tx_route_error_count": "TX_ROUTE_ERROR",
+            "spec_dropped_count": "SPEC_DROPPED", "science_dropped_beat_count": "SCIENCE_RATE_DROPPED",
+            "pfb_coeff_error_count": "PFB_COEFF_ERROR",
+        }
+        for key, label in zero_delta_labels.items():
+            if deltas[key] != 0:
+                errors.append(label)
+        if expects_time and deltas["spec_packet_count"] != 0:
+            errors.append("SPEC_PACKETS_PRESENT_IN_TIME_ONLY")
+        if expects_spec and deltas["time_packet_count"] != 0:
+            errors.append("TIME_PACKETS_PRESENT_IN_SPEC_ONLY")
+        if rates["time_pps"] < time_pps_min:
+            errors.append(f"TIME_PPS_LOW {rates['time_pps']:.3f} < {time_pps_min:.3f}")
+        if rates["spec_pps"] < spec_pps_min:
+            errors.append(f"SPEC_PPS_LOW {rates['spec_pps']:.3f} < {spec_pps_min:.3f}")
+        if rates["combined_t510_udp_payload_mbps"] < float(min_combined_t510_udp_payload_mbps):
+            errors.append(f"COMBINED_T510_UDP_PAYLOAD_LOW {rates['combined_t510_udp_payload_mbps']:.3f} < {float(min_combined_t510_udp_payload_mbps):.3f}")
+
+        active_spec_routes = spec_routes[:16]
+        if expects_spec:
+            for route_id, route in enumerate(active_spec_routes):
+                if not int(route.get("enable", 0)) or int(route.get("chan0", -1)) != route_id * 256 or int(route.get("chan_count", 0)) != 256 or int(route.get("endpoint_id", -1)) != 8 + route_id:
+                    errors.append(f"SPEC_ROUTE_CONFIG_BAD id={route_id}")
+                if int(route.get("hit_count", 0)) == 0:
+                    errors.append(f"SPEC_ROUTE_HIT_MISSING id={route_id}")
+        elif any(int(route.get("enable", 0)) for route in spec_routes):
+            errors.append("SPEC_ROUTE_ENABLED_IN_TIME_ONLY")
+        enabled_time_routes = [route for route in time_routes if int(route.get("enable", 0))]
+        if expects_time:
+            if not enabled_time_routes or all(int(route.get("hit_count", 0)) == 0 for route in enabled_time_routes):
+                errors.append("TIME_ROUTE_HIT_MISSING")
+        elif enabled_time_routes:
+            errors.append("TIME_ROUTE_ENABLED_IN_SPEC_ONLY")
+
+        classification_base = f"STAGE28_200MHZ_{mode_name.upper()}_BOARD"
+        classification = f"{classification_base}_PASS" if not blockers and not errors else f"{classification_base}_FAIL"
+        return {
+            "classification": classification,
+            "ok": classification.endswith("PASS"),
+            "full_science_validated": classification.endswith("PASS"),
+            "stage": "28",
+            "production_scope": dict(self.STAGE28_PRODUCTION_SCOPE),
+            "convergence_target": "STAGE28_THREE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
+            "host_receiver_required": True,
+            "expected_core_version": f"0x{int(expected_core_version):08x}",
+            "bandwidth_mhz": bandwidth,
+            "output_mode": mode_name,
+            "required_rates": {
+                "time_pps_min": time_pps_min,
+                "spec_pps_min": spec_pps_min,
+                "combined_t510_udp_payload_mbps_min": float(min_combined_t510_udp_payload_mbps),
+            },
+            "config": config,
+            "ready_before_measurement": ready_before_measurement,
+            "before": before,
+            "after": after,
+            "tx_after": tx_after,
+            "tx_after_live": tx_after_live,
             "science_after": science_after,
             "channelizer_after": channelizer_after,
             "spec_routes": spec_routes,
@@ -5619,6 +6026,31 @@ class T510FEngine:
             if src in status:
                 result[dst] = status[src]
         result["snapshot_source"] = "read_status_after"
+        return result
+
+    @staticmethod
+    def _prefer_coherent_live_tx_status(snapshot: Mapping[str, Any], live: Mapping[str, Any]) -> dict[str, Any]:
+        """Use a self-consistent live CMAC sample when the bulk snapshot races it."""
+        result = dict(snapshot)
+        live_ready = (
+            bool(int(live.get("gt_locked", 0)))
+            and bool(int(live.get("cmac_reset_done", 0)))
+            and bool(int(live.get("cmac_tx_ready", 0)))
+            and bool(int(live.get("qsfp_link_up", 0)))
+            and bool(int(live.get("cmac_enable", 0)))
+            and bool(int(live.get("frame_builder_enabled", 0)))
+            and not bool(int(live.get("udp_dry_run_active", 1)))
+            and not bool(int(live.get("tx_local_fault", 0)))
+            and not bool(int(live.get("tx_remote_fault", 0)))
+        )
+        if live_ready:
+            for key in (
+                "gt_locked", "cmac_reset_done", "cmac_tx_ready", "qsfp_link_up",
+                "cmac_enable", "frame_builder_enabled", "udp_dry_run_active",
+                "tx_local_fault", "tx_remote_fault", "tx_underflow", "tx_overflow",
+            ):
+                result[key] = live.get(key, result.get(key, 0))
+            result["snapshot_source"] = "coherent_live_after_snapshot_race"
         return result
 
     def capture_tx_frame_header(self, *, timeout: float = 1.0) -> dict[str, Any]:
