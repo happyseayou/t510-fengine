@@ -66,9 +66,13 @@ impl BandwidthMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfig {
     pub bandwidth_mhz: u32,
+    #[serde(default = "default_output_mode")]
+    pub output_mode: String,
     pub center_mhz: f64,
     pub expected_mhz: f64,
     pub dac_mhz: f64,
+    #[serde(default = "default_target_mhz_by_channel")]
+    pub target_mhz_by_channel: [f64; TIME_NINPUT],
     pub waveform_view_mode: String,
     pub phase_deg_by_channel: [f64; TIME_NINPUT],
     pub channel_mask: u16,
@@ -82,9 +86,11 @@ impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             bandwidth_mhz: 100,
+            output_mode: "time_spec".to_string(),
             center_mhz: 100.0,
             expected_mhz: 60.010,
             dac_mhz: 60.010,
+            target_mhz_by_channel: [60.010; TIME_NINPUT],
             waveform_view_mode: "dual".to_string(),
             phase_deg_by_channel: [0.0; TIME_NINPUT],
             channel_mask: 0x00ff,
@@ -100,6 +106,38 @@ impl DisplayConfig {
     pub fn bandwidth_mode(&self) -> BandwidthMode {
         BandwidthMode::from_mhz(self.bandwidth_mhz).unwrap_or(BandwidthMode::Mhz100)
     }
+
+    pub fn needs_time(&self) -> bool {
+        matches!(self.output_mode.as_str(), "time_only" | "time_spec")
+    }
+
+    pub fn needs_spec(&self) -> bool {
+        matches!(self.output_mode.as_str(), "spec_only" | "time_spec")
+    }
+
+    pub fn target_hz(&self, channel: usize) -> f64 {
+        let target = self.target_mhz_by_channel[channel.min(TIME_NINPUT - 1)];
+        let legacy_only = self
+            .target_mhz_by_channel
+            .iter()
+            .all(|value| (*value - 60.010).abs() < 1.0e-12);
+        if legacy_only && (self.expected_mhz - 60.010).abs() >= 1.0e-12 {
+            return expected_signal_hz(self);
+        }
+        if target.is_finite() && target > 0.0 {
+            target * 1_000_000.0
+        } else {
+            expected_signal_hz(self)
+        }
+    }
+}
+
+fn default_output_mode() -> String {
+    "time_spec".to_string()
+}
+
+fn default_target_mhz_by_channel() -> [f64; TIME_NINPUT] {
+    [60.010; TIME_NINPUT]
 }
 
 fn waveform_carrier_hz(config: &DisplayConfig) -> f64 {
@@ -814,7 +852,7 @@ pub fn build_waveform(
     let selected_bandwidth = config.bandwidth_mode();
     let waveform_bandwidth = detected_bandwidth.unwrap_or(selected_bandwidth);
         let projection_hz = waveform_carrier_hz(config);
-        let expected_hz = expected_signal_hz(config);
+    let expected_hz = config.target_hz(0);
     let center_hz = config.center_mhz * 1_000_000.0;
     let expected_baseband_hz = expected_hz - center_hz;
     let display_points = config.display_points.clamp(64, 16384);

@@ -159,7 +159,11 @@ fn parse_u16_auto(value: &str) -> Result<u16, String> {
 }
 
 #[derive(Debug, Parser, Clone)]
-#[command(author, version, about = "T510 Stage 27h/27j TIME/SPEC receiver and production F-engine preview")]
+#[command(
+    author,
+    version,
+    about = "T510 Stage 29 TIME/SPEC receiver and production F-engine preview"
+)]
 struct Args {
     #[arg(long, default_value = "ens2f0np0")]
     interface: String,
@@ -407,6 +411,9 @@ struct ReceiverStats {
     flow_count: usize,
     time_flow_count: usize,
     spec_flow_count: usize,
+    active_flow_count: usize,
+    active_time_flow_count: usize,
+    active_spec_flow_count: usize,
     spec_layout: String,
     worker_count: usize,
     active_worker_count: usize,
@@ -497,6 +504,9 @@ impl ReceiverStats {
             flow_count: args.flow_count_clamped(),
             time_flow_count: args.time_flow_count_clamped(),
             spec_flow_count: args.spec_flow_count_clamped(),
+            active_flow_count: args.flow_count_clamped(),
+            active_time_flow_count: args.time_flow_count_clamped(),
+            active_spec_flow_count: args.spec_flow_count_clamped(),
             spec_layout: args.spec_layout.label().to_string(),
             worker_count: args.worker_count_clamped(),
             active_worker_count: 0,
@@ -601,7 +611,7 @@ fn per_flow_detected_consensus(flows: &[FlowStats]) -> Option<u32> {
 }
 
 fn spectrum_preview_enabled(config: &DisplayConfig) -> bool {
-    !config.paused
+    config.needs_spec() && !config.paused
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1151,9 +1161,11 @@ struct SharedState {
 #[derive(Debug, Deserialize)]
 struct DisplayConfigPatch {
     bandwidth_mhz: Option<u32>,
+    output_mode: Option<String>,
     center_mhz: Option<f64>,
     expected_mhz: Option<f64>,
     dac_mhz: Option<f64>,
+    target_mhz_by_channel: Option<Vec<f64>>,
     waveform_view_mode: Option<String>,
     phase_deg_by_channel: Option<Vec<f64>>,
     channel_mask: Option<u16>,
@@ -1167,8 +1179,12 @@ struct DisplayConfigPatch {
 
 impl DisplayConfigPatch {
     fn apply_to(self, config: &mut DisplayConfig) {
+        let scalar_target = self.expected_mhz.or(self.dac_mhz);
         if let Some(value) = self.bandwidth_mhz {
             config.bandwidth_mhz = value;
+        }
+        if let Some(value) = self.output_mode {
+            config.output_mode = value;
         }
         if let Some(value) = self.center_mhz {
             config.center_mhz = value;
@@ -1179,11 +1195,19 @@ impl DisplayConfigPatch {
         if let Some(value) = self.dac_mhz {
             config.dac_mhz = value;
         }
+        if let Some(value) = scalar_target {
+            config.target_mhz_by_channel.fill(value);
+        }
+        if let Some(targets) = self.target_mhz_by_channel {
+            for (dst, src) in config.target_mhz_by_channel.iter_mut().zip(targets) {
+                *dst = src;
+            }
+        }
         if let Some(value) = self.waveform_view_mode {
             config.waveform_view_mode = value;
         }
         if let Some(phases) = self.phase_deg_by_channel {
-            for (dst, src) in config.phase_deg_by_channel.iter_mut().zip(phases.into_iter()) {
+            for (dst, src) in config.phase_deg_by_channel.iter_mut().zip(phases) {
                 *dst = src;
             }
         }
@@ -1210,6 +1234,9 @@ fn sanitize_config(config: &mut DisplayConfig) {
     if BandwidthMode::from_mhz(config.bandwidth_mhz).is_none() {
         config.bandwidth_mhz = 100;
     }
+    if !matches!(config.output_mode.as_str(), "time_only" | "spec_only" | "time_spec") {
+        config.output_mode = "time_spec".to_string();
+    }
     config.display_points = config.display_points.clamp(64, 16384);
     if !matches!(config.waveform_view_mode.as_str(), "dual" | "samples" | "curve") {
         config.waveform_view_mode = "dual".to_string();
@@ -1219,6 +1246,12 @@ fn sanitize_config(config: &mut DisplayConfig) {
     config.channel_mask &= 0x00ff;
     if config.channel_mask == 0 {
         config.channel_mask = 0x0001;
+    }
+    let fallback = expected_signal_hz(config) / 1_000_000.0;
+    for target in &mut config.target_mhz_by_channel {
+        if !target.is_finite() || !(0.0..=100_000.0).contains(target) {
+            *target = fallback;
+        }
     }
 }
 
@@ -1265,12 +1298,16 @@ fn preview_rate_gate_pps(config: &DisplayConfig, stats: &ReceiverStats) -> f64 {
 }
 
 fn waveform_rate_live(config: &DisplayConfig, stats: &ReceiverStats) -> bool {
-    stats.rx_processed_packets_per_sec.is_finite()
+    config.needs_time()
+        && stats.rx_processed_packets_per_sec.is_finite()
         && stats.rx_processed_packets_per_sec >= preview_rate_gate_pps(config, stats)
 }
 
 fn clear_stale_previews(state: &mut SharedState) {
-    if !preview_live(state.waveform_updated) || !waveform_rate_live(&state.config, &state.stats) {
+    if !state.config.needs_time()
+        || !preview_live(state.waveform_updated)
+        || !waveform_rate_live(&state.config, &state.stats)
+    {
         state.waveform = None;
         state.waveform_binary = None;
         state.waveform_updated = None;
@@ -1280,7 +1317,7 @@ fn clear_stale_previews(state: &mut SharedState) {
     // briefly read as zero while a fresh spectrum is already available.  Do
     // not let that reporting race evict the binary frame used by the web GUI;
     // freshness still removes it promptly when the SPEC stream really stops.
-    if !preview_live(state.spectrum_updated) {
+    if !state.config.needs_spec() || !preview_live(state.spectrum_updated) {
         state.spectrum = None;
         state.spectrum_binary = None;
         state.spectrum_updated = None;
@@ -1641,8 +1678,12 @@ impl MmapPacketSocket {
         }
         match self.packet_statistics() {
             Ok(packet_stats) => {
-            stats.kernel_drops = stats.kernel_drops.saturating_add(packet_stats.tp_drops as u64);
-            stats.ring_drops = stats.ring_drops.saturating_add(packet_stats.tp_drops as u64);
+                stats.kernel_drops = stats
+                    .kernel_drops
+                    .saturating_add(packet_stats.tp_drops as u64);
+                stats.ring_drops = stats
+                    .ring_drops
+                    .saturating_add(packet_stats.tp_drops as u64);
             stats.ring_freeze_q_count = stats
                 .ring_freeze_q_count
                 .saturating_add(packet_stats.tp_freeze_q_cnt as u64);
@@ -1660,11 +1701,11 @@ impl MmapPacketSocket {
         }
         match self.packet_statistics() {
             Ok(packet_stats) => {
-                stats.kernel_drops = stats.kernel_drops.saturating_add(packet_stats.tp_drops as u64);
-                stats.ring_drops = stats.ring_drops.saturating_add(packet_stats.tp_drops as u64);
-                stats.ring_freeze_q_count = stats
-                    .ring_freeze_q_count
-                    .saturating_add(packet_stats.tp_freeze_q_cnt as u64);
+            stats.kernel_drops = stats.kernel_drops.saturating_add(packet_stats.tp_drops as u64);
+            stats.ring_drops = stats.ring_drops.saturating_add(packet_stats.tp_drops as u64);
+            stats.ring_freeze_q_count = stats
+                .ring_freeze_q_count
+                .saturating_add(packet_stats.tp_freeze_q_cnt as u64);
             }
             Err(err) => {
                 stats.last_error = Some(format!("PACKET_STATISTICS failed: {err}"));
@@ -2140,19 +2181,20 @@ fn estimate_time_raw_baseband_hz(
     packets: &[PacketCopy],
     config: &DisplayConfig,
     decim: u64,
+    target_channel: usize,
 ) -> Option<f64> {
     let decim = decim.max(1);
     let mut prev: [Option<(u64, f64, f64)>; TIME_NINPUT] = [None; TIME_NINPUT];
     let mut weighted_hz_sum = 0.0f64;
     let mut weight_sum = 0.0f64;
     let mut pair_count = 0usize;
+    let channel = target_channel.min(TIME_NINPUT - 1);
 
     for packet in packets {
         for beat in 0..packet.header.time_count as usize {
             for sub in 0..TIME_SUBSAMPLES_PER_BEAT {
                 let logical_idx = beat * TIME_SUBSAMPLES_PER_BEAT + sub;
                 let sample_index = packet.header.sample0 + logical_idx as u64 * decim;
-                for channel in 0..TIME_NINPUT {
                     if (config.channel_mask & (1u16 << channel)) == 0 {
                         continue;
                     }
@@ -2162,8 +2204,10 @@ fn estimate_time_raw_baseband_hz(
                     if offset + 4 > packet.payload.len() {
                         continue;
                     }
-                    let i = i16::from_le_bytes([packet.payload[offset], packet.payload[offset + 1]]) as f64;
-                    let q = i16::from_le_bytes([packet.payload[offset + 2], packet.payload[offset + 3]]) as f64;
+                let i =
+                    i16::from_le_bytes([packet.payload[offset], packet.payload[offset + 1]]) as f64;
+                let q = i16::from_le_bytes([packet.payload[offset + 2], packet.payload[offset + 3]])
+                    as f64;
                     let power = i * i + q * q;
                     if power < 16.0 {
                         prev[channel] = Some((sample_index, i, q));
@@ -2191,7 +2235,6 @@ fn estimate_time_raw_baseband_hz(
                 }
             }
         }
-    }
 
     if pair_count >= 4 && weight_sum > 0.0 {
         Some(weighted_hz_sum / weight_sum)
@@ -2324,7 +2367,9 @@ impl DisplayCapture {
         if seq_is_before(header.seq_no, start) {
             return None;
         }
-        self.packets.entry(header.seq_no).or_insert_with(|| PacketCopy {
+        self.packets
+            .entry(header.seq_no)
+            .or_insert_with(|| PacketCopy {
             header,
             payload: udp_payload.to_vec(),
             detected_bandwidth,
@@ -2370,11 +2415,7 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
         .find_map(|packet| packet.detected_bandwidth)
         .unwrap_or(selected_bandwidth);
     let decim = bandwidth.decimation();
-    let expected_hz = expected_signal_hz(config);
     let center_hz = config.center_mhz * 1_000_000.0;
-    let expected_baseband_hz = expected_hz - center_hz;
-    let raw_baseband_hz = estimate_time_raw_baseband_hz(packets, config, decim);
-    let mixer_sign = waveform_mixer_sign(raw_baseband_hz, expected_baseband_hz);
     let window_us = config.time_window_us.max(0.0);
     let target_samples = (window_us * bandwidth.sample_rate_hz() / 1_000_000.0)
         .ceil()
@@ -2388,6 +2429,10 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
         if (config.channel_mask & (1u16 << channel)) == 0 {
             continue;
         }
+        let expected_hz = config.target_hz(channel);
+        let expected_baseband_hz = expected_hz - center_hz;
+        let raw_baseband_hz = estimate_time_raw_baseband_hz(packets, config, decim, channel);
+        let mixer_sign = waveform_mixer_sign(raw_baseband_hz, expected_baseband_hz);
         let mut raw = Vec::new();
         let mut sum_sq = 0.0f64;
         let mut max_abs: i16 = 0;
@@ -2465,6 +2510,8 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
         });
     }
 
+    let expected_hz = config.target_hz(0);
+    let expected_baseband_hz = expected_hz - center_hz;
     Ok(WaveformSnapshot {
         sample0: first_sample0,
         seq_no: first.header.seq_no,
@@ -2838,7 +2885,9 @@ impl ReceiverRuntime {
             .map(|mode| mode.mhz() != selected.mhz())
             .unwrap_or(false);
 
-        let display_enabled = self.stats.waveform_websocket_clients > 0 && !self.config.paused;
+        let display_enabled = self.config.needs_time()
+            && self.stats.waveform_websocket_clients > 0
+            && !self.config.paused;
         if display_enabled && self.last_waveform.elapsed() >= self.waveform_interval && !self.display_capture.active {
             self.display_capture.arm();
         }
@@ -2848,23 +2897,25 @@ impl ReceiverRuntime {
             self.display_capture.packets.clear();
         }
         if display_enabled {
-            if let Some(packets) = self
-                .display_capture
-                .ingest(
+            if let Some(packets) = self.display_capture.ingest(
                     header,
                     udp_payload,
                     &self.config,
-                    self.stats.detected_bandwidth_mhz.and_then(BandwidthMode::from_mhz),
+                self.stats
+                    .detected_bandwidth_mhz
+                    .and_then(BandwidthMode::from_mhz),
                     gap_before,
                     1,
-                )
-            {
+            ) {
                 match build_waveform_from_packets(&packets, &self.config) {
                     Ok(waveform) => {
                         self.stats.waveform_updates = self.stats.waveform_updates.saturating_add(1);
                         self.rate_waveform_updates = self.rate_waveform_updates.saturating_add(1);
                         self.update_channel_stats(&waveform);
-                        let seq_end = packets.last().map(|packet| packet.header.seq_no).unwrap_or(waveform.seq_no);
+                        let seq_end = packets
+                            .last()
+                            .map(|packet| packet.header.seq_no)
+                            .unwrap_or(waveform.seq_no);
                         let binary = encode_waveform_binary(&waveform, seq_end);
                         if let Ok(mut guard) = self.shared.lock() {
                             guard.waveform = Some(waveform);
@@ -2903,18 +2954,33 @@ impl ReceiverRuntime {
         let should_decode = if display_enabled {
             self.shared
                 .lock()
-                .map(|mut guard| guard.spectrum_preview.should_decode(&header, self.spectrum_interval))
+                .map(|mut guard| {
+                    guard
+                        .spectrum_preview
+                        .should_decode(&header, self.spectrum_interval)
+                })
                 .unwrap_or(false)
         } else {
             false
         };
         if should_decode {
-            match t510_time_rx::decode_spectrum_snapshot(udp_payload, &header, src_port, dst_port, gap_before) {
+            match t510_time_rx::decode_spectrum_snapshot(
+                udp_payload,
+                &header,
+                src_port,
+                dst_port,
+                gap_before,
+            ) {
                 Ok(block) => {
                     if let Ok(mut guard) = self.shared.lock() {
-                        if let Some(spectrum) = guard.spectrum_preview.ingest(&block, self.spectrum_interval) {
-                            self.stats.spectrum_updates = self.stats.spectrum_updates.saturating_add(1);
-                            self.rate_spectrum_updates = self.rate_spectrum_updates.saturating_add(1);
+                        if let Some(spectrum) = guard
+                            .spectrum_preview
+                            .ingest(&block, self.spectrum_interval)
+                        {
+                            self.stats.spectrum_updates =
+                                self.stats.spectrum_updates.saturating_add(1);
+                            self.rate_spectrum_updates =
+                                self.rate_spectrum_updates.saturating_add(1);
                         let binary = encode_spectrum_binary(&spectrum);
                         guard.spectrum = Some(spectrum);
                         guard.spectrum_binary = Some(binary);
@@ -3061,6 +3127,12 @@ impl ReceiverRuntime {
             let seconds = elapsed.as_secs_f64();
             let mode = self.config.bandwidth_mode();
             self.stats.selected_bandwidth_mhz = mode.mhz();
+            self.stats.active_time_flow_count = if self.config.needs_time() { self.time_flow_count } else { 0 };
+            self.stats.active_spec_flow_count = if self.config.needs_spec() { self.spec_flow_count } else { 0 };
+            self.stats.active_flow_count = self
+                .stats
+                .active_time_flow_count
+                .saturating_add(self.stats.active_spec_flow_count);
             self.stats.detected_bandwidth_mhz = per_flow_detected_consensus(&self.stats.per_flow);
             self.stats.selected_detected_mismatch = self
                 .stats
@@ -3086,12 +3158,12 @@ impl ReceiverRuntime {
             let time_count = self.stats.last_time_count.unwrap_or(DEFAULT_TIME_COUNT).max(1) as f64;
             self.stats.expected_packets_per_sec =
                 (RAW_SAMPLE_RATE_HZ / mode.decimation() as f64) / (time_count * 4.0);
-            let expected_streams = (self.time_flow_count > 0) as u8 as f64
-                + (self.spec_flow_count > 0) as u8 as f64;
+            let expected_streams = self.config.needs_time() as u8 as f64
+                + self.config.needs_spec() as u8 as f64;
             self.stats.expected_time_gbps =
-                if self.time_flow_count > 0 { self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
+                if self.config.needs_time() { self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
             self.stats.expected_spec_gbps =
-                if self.spec_flow_count > 0 { self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
+                if self.config.needs_spec() { self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
             self.stats.expected_fpga_gbps =
                 self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 * expected_streams / 1.0e9;
             let denom = self.stats.time_packets.saturating_add(self.stats.app_drops);
@@ -3369,7 +3441,7 @@ impl FanoutWorkerRuntime {
             self.stats.detected_bandwidth_mhz = per_flow_detected_consensus(&self.per_flow);
         }
 
-        let display_enabled = !self.config.paused && self.is_display_owner();
+        let display_enabled = self.config.needs_time() && !self.config.paused && self.is_display_owner();
         if display_enabled && self.last_waveform.elapsed() >= self.waveform_interval && !self.display_capture.active {
             self.display_capture.arm();
         }
@@ -3796,6 +3868,11 @@ fn aggregate_fanout_stats(
     stats.waveform_websocket_clients = waveform_websocket_clients;
     stats.spectrum_websocket_clients = spectrum_websocket_clients;
     stats.selected_bandwidth_mhz = config.bandwidth_mode().mhz();
+    stats.active_time_flow_count = if config.needs_time() { stats.time_flow_count } else { 0 };
+    stats.active_spec_flow_count = if config.needs_spec() { stats.spec_flow_count } else { 0 };
+    stats.active_flow_count = stats
+        .active_time_flow_count
+        .saturating_add(stats.active_spec_flow_count);
     stats.per_worker = reports
         .iter()
         .enumerate()
@@ -3884,12 +3961,11 @@ fn aggregate_fanout_stats(
     let mode = config.bandwidth_mode();
     stats.expected_packets_per_sec =
         (RAW_SAMPLE_RATE_HZ / mode.decimation() as f64) / (time_count * 4.0);
-    let expected_streams = (stats.time_flow_count > 0) as u8 as f64
-        + (stats.spec_flow_count > 0) as u8 as f64;
+    let expected_streams = config.needs_time() as u8 as f64 + config.needs_spec() as u8 as f64;
     stats.expected_time_gbps =
-        if stats.time_flow_count > 0 { stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
+        if config.needs_time() { stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
     stats.expected_spec_gbps =
-        if stats.spec_flow_count > 0 { stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
+        if config.needs_spec() { stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
     stats.expected_fpga_gbps =
         stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 * expected_streams / 1.0e9;
     let denom = stats.time_packets.saturating_add(stats.app_drops);
@@ -4176,6 +4252,34 @@ fn handle_http(mut stream: TcpStream, shared: Arc<Mutex<SharedState>>, web_fps: 
     let first = request.lines().next().unwrap_or_default();
     if first.starts_with("GET / ") || first.starts_with("GET /index.html ") {
         write_response(&mut stream, "200 OK", "text/html; charset=utf-8", HTML.as_bytes())
+    } else if first.starts_with("GET /static/gridstack-all.js ") {
+        write_response(
+            &mut stream,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            GRIDSTACK_JS.as_bytes(),
+        )
+    } else if first.starts_with("GET /static/gridstack.min.css ") {
+        write_response(
+            &mut stream,
+            "200 OK",
+            "text/css; charset=utf-8",
+            GRIDSTACK_CSS.as_bytes(),
+        )
+    } else if first.starts_with("GET /static/echarts.min.js ") {
+        write_response(
+            &mut stream,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            ECHARTS_JS.as_bytes(),
+        )
+    } else if first.starts_with("GET /static/stage29_math.js ") {
+        write_response(
+            &mut stream,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            STAGE29_MATH_JS.as_bytes(),
+        )
     } else if first.starts_with("GET /ws/waveform ") {
         handle_waveform_ws(stream, &request, shared, web_fps)
     } else if first.starts_with("GET /ws/spectrum ") {
@@ -4576,10 +4680,12 @@ mod tests {
     fn display_defaults_to_stage27h_100mhz() {
         let config = DisplayConfig::default();
         assert_eq!(config.bandwidth_mhz, 100);
+        assert_eq!(config.output_mode, "time_spec");
         assert_eq!(config.bandwidth_mode(), BandwidthMode::Mhz100);
         assert_eq!(config.center_mhz, 100.0);
         assert_eq!(config.expected_mhz, 60.010);
         assert_eq!(config.dac_mhz, 60.010);
+        assert_eq!(config.target_mhz_by_channel, [60.010; TIME_NINPUT]);
 
         let mut invalid = config.clone();
         invalid.bandwidth_mhz = 1234;
@@ -4590,6 +4696,129 @@ mod tests {
         args.initial_bandwidth_mhz = 1234;
         let stats = ReceiverStats::new(&args);
         assert_eq!(stats.selected_bandwidth_mhz, 100);
+    }
+
+    #[test]
+    fn display_patch_supports_legacy_scalar_and_per_channel_targets() {
+        let mut config = DisplayConfig::default();
+        DisplayConfigPatch {
+            bandwidth_mhz: None,
+            output_mode: None,
+            center_mhz: None,
+            expected_mhz: Some(70.0),
+            dac_mhz: Some(70.0),
+            target_mhz_by_channel: None,
+            waveform_view_mode: None,
+            phase_deg_by_channel: None,
+            channel_mask: None,
+            time_window_us: None,
+            display_points: None,
+            vertical_scale: None,
+            paused: None,
+            pause: None,
+            freeze: None,
+        }
+        .apply_to(&mut config);
+        assert_eq!(config.target_mhz_by_channel, [70.0; TIME_NINPUT]);
+
+        DisplayConfigPatch {
+            bandwidth_mhz: None,
+            output_mode: None,
+            center_mhz: None,
+            expected_mhz: Some(71.0),
+            dac_mhz: Some(71.0),
+            target_mhz_by_channel: Some(vec![60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0, 67.0]),
+            waveform_view_mode: None,
+            phase_deg_by_channel: None,
+            channel_mask: None,
+            time_window_us: None,
+            display_points: None,
+            vertical_scale: None,
+            paused: None,
+            pause: None,
+            freeze: None,
+        }
+        .apply_to(&mut config);
+        assert_eq!(
+            config.target_mhz_by_channel,
+            [60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0, 67.0]
+        );
+        assert_eq!(config.target_hz(0), 60_000_000.0);
+        assert_eq!(config.target_hz(7), 67_000_000.0);
+    }
+
+    #[test]
+    fn stage29_web_is_echarts_seven_widget_workspace() {
+        assert_eq!(HTML.matches("class=\"grid-stack-item\"").count(), 7);
+        assert!(HTML.contains("t510-stage29-layout-v2"));
+        assert!(HTML.contains("ResizeObserver"));
+        assert!(HTML.contains("Display Controls"));
+        assert!(HTML.contains("target_mhz_by_channel"));
+        assert!(HTML.contains("SPEC phasor"));
+        assert!(HTML.contains("Ignore amplitude"));
+        assert!(HTML.contains("echarts.init"));
+        assert!(HTML.contains("WATERFALL_INTERVAL_MS=1000"));
+        assert!(HTML.contains("tooltip:{show:false}"));
+        assert!(HTML.contains("fixed RF/time axes"));
+        assert!(HTML.contains("replaceMerge:['series']"));
+        assert!(HTML.contains("type:'inside',xAxisIndex:0"));
+        assert!(HTML.contains("ampReset"));
+        assert!(HTML.contains("powerReset"));
+        assert!(HTML.contains("const chartPointer="));
+        assert!(HTML.contains("restoreTooltip('amp')"));
+        assert!(HTML.contains("Amplitude (dB code)"));
+        assert!(HTML.contains("20*Math.log10(Math.max(Number(value)||0,1))"));
+        assert!(HTML.contains("value=\"relative\" selected"));
+        assert!(HTML.contains("type:'category',data:x"));
+        assert!(GRIDSTACK_JS.contains("GridStack"));
+        assert!(GRIDSTACK_CSS.contains("grid-stack-item"));
+        assert!(ECHARTS_JS.len() > 1_000_000);
+        assert!(ECHARTS_JS.contains("echarts"));
+    }
+
+    #[test]
+    fn web_spectrum_uses_rf_mhz_ticks_and_header_sample_rate() {
+        assert!(HTML.contains("RF frequency (MHz)"));
+        assert!(HTML.contains("Stage29Math.rfForBin"));
+        assert!(HTML.contains("Stage29Math.binForRf"));
+        assert!(STAGE29_MATH_JS.contains("-signedBin(index,bins)"));
+        assert!(STAGE29_MATH_JS.contains("Number(centerMhz)-Number(rfMhz)"));
+
+        let center_mhz = 100.0_f64;
+        let nchan = 4096.0_f64;
+        for (sample_rate_hz, half_span_mhz, bin_width_khz) in
+            [(122_880_000.0, 61.44, 30.0), (245_760_000.0, 122.88, 60.0)]
+        {
+            let left = center_mhz - sample_rate_hz / 2.0 / 1.0e6;
+            let width = sample_rate_hz / nchan / 1.0e3;
+            assert!((left - (center_mhz - half_span_mhz)).abs() < 1.0e-9);
+            assert!((width - bin_width_khz).abs() < 1.0e-9);
+            let target_mhz = 60.0_f64;
+            let signed_bin = ((center_mhz - target_mhz) * 1.0e6 / (sample_rate_hz / nchan)).round();
+            let mapped_mhz = center_mhz - signed_bin * sample_rate_hz / nchan / 1.0e6;
+            assert!((mapped_mhz - target_mhz).abs() <= sample_rate_hz / nchan / 2.0 / 1.0e6);
+            assert!((mapped_mhz - 140.0).abs() > 1.0);
+        }
+    }
+
+    #[test]
+    fn output_mode_selects_active_flows_on_superset_receiver() {
+        let args = test_args();
+        let base = ReceiverStats::new(&args);
+        let reports = vec![None; args.worker_count_clamped()];
+        for (mode, time, spec, total) in [
+            ("time_only", 8, 0, 8),
+            ("spec_only", 0, 16, 16),
+            ("time_spec", 8, 16, 24),
+        ] {
+            let mut config = DisplayConfig::default();
+            config.output_mode = mode.to_string();
+            let stats = aggregate_fanout_stats(&base, &reports, &config, 0, 0, 0);
+            assert_eq!(stats.flow_count, 24);
+            assert_eq!(stats.active_time_flow_count, time);
+            assert_eq!(stats.active_spec_flow_count, spec);
+            assert_eq!(stats.active_flow_count, total);
+        }
     }
 
     #[test]
@@ -4634,9 +4863,11 @@ mod tests {
             &mut state,
             DisplayConfigPatch {
                 bandwidth_mhz: Some(20),
+                output_mode: None,
                 center_mhz: None,
                 expected_mhz: None,
                 dac_mhz: None,
+                target_mhz_by_channel: None,
                 waveform_view_mode: None,
                 phase_deg_by_channel: None,
                 channel_mask: None,
@@ -5471,877 +5702,12 @@ fn main() -> std::io::Result<()> {
     run_http(args.web, shared, args.web_fps)
 }
 
-const HTML: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>T510 Stage 27h/27j TIME/SPEC F-engine Receiver</title>
-<style>
-:root{color-scheme:dark;--bg:#090b0d;--panel:#151616;--panel2:#1d1f1f;--line:#343838;--text:#edf1ee;--muted:#a7b0aa;--ok:#6ee7a8;--warn:#f4c76b;--bad:#ff7b7b;--cyan:#57c7ff}
-*{box-sizing:border-box}
-html,body{min-height:100%}
-body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text)}
-.app{min-height:100vh;display:block;min-width:320px}
-.topbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;min-height:44px;padding:7px 12px;background:#101211;border-bottom:1px solid var(--line);font-size:13px}
-.brand{font-weight:750;color:#f7faf8;margin-right:4px}
-.pill{display:inline-flex;align-items:center;min-height:24px;padding:2px 8px;border:1px solid #3b4240;border-radius:4px;background:#191b1b;color:var(--muted)}
-.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
-.scope-wrap{padding:8px 10px;background:#060707}
-.scope-grid{display:grid;grid-template-columns:minmax(420px,0.95fr) minmax(520px,1.05fr);gap:10px;align-items:start}
-.plot{display:grid;grid-template-rows:24px minmax(0,1fr);gap:6px}
-.plot-title{display:flex;align-items:center;justify-content:space-between;color:#c9d2cd;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
-.spec-stack{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,166px);gap:8px}
-#scope,.spec-canvas{display:block;width:100%;height:100%;background:#020303;border:1px solid var(--line);border-radius:6px}
-#scope{height:340px;min-height:300px}.spec-canvas{min-height:150px}
-.bottom{background:var(--panel);border-top:1px solid var(--line);overflow:visible}
-.controls{display:grid;grid-template-columns:minmax(250px,0.9fr) minmax(300px,1fr) minmax(220px,0.8fr) minmax(360px,1.3fr);gap:10px;padding:9px 10px}
-.group{min-width:0}
-.group h2{margin:0 0 8px;font-size:12px;font-weight:760;color:#d8ded9;text-transform:uppercase;letter-spacing:0}
-.field{display:grid;grid-template-columns:96px minmax(0,1fr);align-items:center;gap:8px;margin:6px 0;font-size:12px;color:var(--muted)}
-input,select,button{width:100%;min-height:30px;background:#0d0f0f;color:var(--text);border:1px solid #414846;border-radius:4px;padding:5px 7px;font:inherit}
-button{cursor:pointer;background:#18201d}
-.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.phases{display:grid;grid-template-columns:repeat(4,minmax(64px,1fr));gap:6px}
-.phase{display:grid;grid-template-columns:34px 1fr;align-items:center;gap:5px;font-size:12px;color:var(--muted)}
-.mask{display:grid;grid-template-columns:repeat(8,minmax(32px,1fr));gap:5px;margin-top:5px}
-.mask label{display:flex;align-items:center;justify-content:center;gap:4px;min-height:28px;border:1px solid #414846;border-radius:4px;background:#0d0f0f;font-size:12px;color:var(--muted)}
-.mask input{width:auto;min-height:0}
-.summary,.flows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.flows{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:8px}
-.metric{min-width:0;padding:6px 8px;background:#0d0f0f;border:1px solid #333a38;border-radius:4px;overflow:hidden}
-.metric b{display:block;color:#f0f5f1;font-weight:680;overflow:hidden;text-overflow:ellipsis}
-.metric span{color:var(--muted)}
-.science-note{margin:8px 0 0;padding:7px;border:1px solid #333a38;border-radius:4px;background:#0d0f0f;color:#b8c2bc;font-size:12px;line-height:1.35}
-.science-note b{color:#eef4ef}
-details{border-top:1px solid var(--line);padding:8px 12px 10px}
-summary{cursor:pointer;color:#d8ded9;font-size:12px}
-pre{margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#dce3df}
-@media (max-width:1120px){.scope-grid{grid-template-columns:1fr}.spec-stack{grid-template-rows:repeat(2,170px)}.controls{grid-template-columns:1fr 1fr}.flows{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:760px){.topbar{gap:6px;padding:6px 10px}.scope-wrap{padding:8px}#scope{height:300px;min-height:280px}.spec-stack{grid-template-columns:1fr;grid-template-rows:repeat(4,150px)}.controls{grid-template-columns:1fr;padding:10px}.flows{grid-template-columns:1fr}.field{grid-template-columns:86px minmax(0,1fr)}}
-@media (max-height:820px) and (min-width:1121px){#scope{height:300px;min-height:280px}.spec-stack{grid-template-rows:repeat(2,146px)}}
-</style>
-</head>
-<body>
-<div class="app">
-  <header class="topbar">
-    <div class="brand">T510 Stage 27h/27j TIME/SPEC F-engine</div>
-    <div id="backendStatus" class="pill">backend --</div>
-    <div id="wsStatus" class="pill warn">waveform connecting</div>
-    <div id="specWsStatus" class="pill warn">spectrum connecting</div>
-    <div id="bwStatus" class="pill">selected 100 / detected --</div>
-    <div id="lossStatus" class="pill">gaps --</div>
-    <div id="rateStatus" class="pill">TIME -- / SPEC --</div>
-    <div id="flowStatus" class="pill">flows --</div>
-    <div id="dropStatus" class="pill">drops --</div>
-    <div id="pointsStatus" class="pill">points --</div>
-  </header>
-  <main class="scope-wrap">
-    <div class="scope-grid">
-      <section class="plot">
-        <div class="plot-title"><span>TIME IQ-derived measured points</span><span id="timePlotStatus">--</span></div>
-        <canvas id="scope"></canvas>
-      </section>
-      <section class="plot">
-        <div class="plot-title"><span>F-engine production science</span><span id="specPlotStatus">--</span></div>
-        <div class="spec-stack">
-          <canvas id="specAmp" class="spec-canvas"></canvas>
-          <canvas id="specPhase" class="spec-canvas"></canvas>
-          <canvas id="specPower" class="spec-canvas"></canvas>
-          <canvas id="specWaterfall" class="spec-canvas"></canvas>
-        </div>
-      </section>
-    </div>
-  </main>
-  <footer class="bottom">
-    <div class="controls">
-      <section class="group">
-        <h2>Production Preview</h2>
-        <label class="field"><span>Bandwidth</span><select id="bandwidth"><option value="100" selected>100 MHz</option><option value="20">20 MHz</option><option value="200">200 MHz</option></select></label>
-        <label class="field"><span>Center MHz</span><input id="center" type="number" step="0.5" value="100"></label>
-        <div class="row">
-          <label class="field"><span>Expected</span><input id="expected" type="number" step="0.001" value="60.010"></label>
-          <label class="field"><span>DAC</span><input id="dac" type="number" step="0.001" value="60.010"></label>
-        </div>
-        <div class="row">
-          <label class="field"><span>Window us</span><input id="timeWindow" type="number" step="0.05" value="0.25"></label>
-        <label class="field"><span>Points</span><select id="points"><option selected>1024</option><option>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label>
-        </div>
-        <label class="field"><span>Waveform</span><select id="waveMode"><option value="dual" selected>Curve+Samples</option><option value="samples">Samples only</option><option value="curve">Curve only</option></select></label>
-        <label class="field"><span>Y scale</span><input id="yscale" type="number" step="64" value="512"></label>
-        <label class="field"><span>Spectrum</span><select id="specPort"><option value="full" selected>Full 4096</option></select></label>
-        <label class="field"><span>SPEC input</span><select id="specLane"><option value="avg">Avg</option><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option></select></label>
-        <label class="field"><span>Phase ref</span><select id="phaseRef"><option value="0">CH0</option><option value="1" selected>CH1</option><option value="2">CH2</option><option value="3">CH3</option><option value="4">CH4</option><option value="5">CH5</option><option value="6">CH6</option><option value="7">CH7</option></select></label>
-      </section>
-      <section class="group">
-        <h2>Channel Phase</h2>
-        <div class="phases" id="phases"></div>
-        <h2 style="margin-top:10px">Channel Mask</h2>
-        <div class="mask" id="mask"></div>
-      </section>
-      <section class="group">
-        <h2>Controls</h2>
-        <label class="field"><span>Pause</span><input id="pause" type="checkbox"></label>
-        <button id="freeze">Freeze</button>
-        <button id="apply" style="margin-top:8px">Apply</button>
-        <div id="channelStats" class="summary" style="margin-top:10px"></div>
-      </section>
-      <section class="group">
-        <h2>Production Gate</h2>
-        <div class="science-note"><b>Stage 27h/27j.</b> Production gate is TIME_SPEC 100MHz with 8 TIME flows and 16 SPEC flows, ports 4300..4323, and combined T510 UDP payload above 63Gbps. Stage 27h is FFT-only; Stage 27j requires active 4-tap PFB. SPEC bins are complex voltage X=I+jQ; amplitude is |X|, phase history is target-bin relative atan2(Q,I), power is 10log10(I^2+Q^2), and waterfall is power history.</div>
-        <div id="summary" class="summary"></div>
-        <div id="flows" class="flows"></div>
-      </section>
-    </div>
-    <details>
-      <summary>Detailed diagnostics</summary>
-      <pre id="stats"></pre>
-    </details>
-  </footer>
-</div>
-<script>
-const RAW=245760000;
-const colors=['#57c7ff','#f4c76b','#6ee7a8','#ff7b7b','#c99cff','#f79a5f','#5ee0d2','#ef7fb0'];
-const PHASE_HISTORY_SECONDS=30;
-const PHASE_HISTORY_MAX_POINTS=2048;
-let config=null, configGeneration=0, stats=null, specPreview=null, waveformLive=false, spectrumLive=false, waveformAgeMs=null, spectrumAgeMs=null, applying=false, waveform=null, ws=null, specWs=null, wsFrames=0, specFrames=0, lastDraw=0;
-let spectrum=null, drawPending=false, specDrawPending=false, waterfallRows=[], phaseHistory=[], phaseHistoryKey='', phaseHistoryStatus='waiting for SPEC phase history';
-const plotScale={ampMax:null,powerMin:null,powerMax:null};
-const phases=document.getElementById('phases'), mask=document.getElementById('mask'), specPort=document.getElementById('specPort'), specLane=document.getElementById('specLane'), phaseRef=document.getElementById('phaseRef');
-specPort.addEventListener('change',()=>{requestAnimationFrame(drawSpectrum);});
-specLane.addEventListener('change',()=>{waterfallRows=[];requestAnimationFrame(drawSpectrum);});
-phaseRef.addEventListener('change',()=>{resetPhaseHistory('phase reference changed');requestAnimationFrame(drawSpectrum);});
-for(let i=0;i<8;i++){
-  const p=document.createElement('label'); p.className='phase'; p.innerHTML=`CH${i}<input id="ph${i}" type="number" step="1" value="0">`; phases.appendChild(p);
-  const m=document.createElement('label'); m.innerHTML=`${i}<input id="ch${i}" type="checkbox" checked>`; mask.appendChild(m);
-}
-function n(id, fallback=0){const v=Number(document.getElementById(id).value);return Number.isFinite(v)?v:fallback}
-function resetPhaseHistory(reason='waiting for SPEC phase history'){
-  phaseHistory=[];
-  phaseHistoryKey='';
-  phaseHistoryStatus=reason;
-}
-function currentPhaseRef(){
-  const v=Number(phaseRef?.value ?? 1);
-  return Math.max(0,Math.min(7,Number.isFinite(v)?v:1));
-}
-function collectConfig(){
-  const phase_deg_by_channel=[]; let channel_mask=0;
-  for(let i=0;i<8;i++){phase_deg_by_channel.push(n(`ph${i}`,0)); if(document.getElementById(`ch${i}`).checked) channel_mask|=(1<<i);}
-  return {bandwidth_mhz:Number(document.getElementById('bandwidth').value),center_mhz:n('center',100),expected_mhz:n('expected',60.010),dac_mhz:n('dac',60.010),waveform_view_mode:document.getElementById('waveMode').value,phase_deg_by_channel,channel_mask,time_window_us:n('timeWindow',0.25),display_points:Number(document.getElementById('points').value),vertical_scale:Math.max(1,n('yscale',512)),paused:document.getElementById('pause').checked};
-}
-async function applyConfig(){
-  applying=true;
-  try{
-    const res=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(collectConfig())});
-    const body=await res.json().catch(()=>({ok:false,error:'invalid JSON response'}));
-    if(!res.ok||body.ok===false)throw new Error(body.error||`HTTP ${res.status}`);
-    config=body.config||config;
-    configGeneration=body.config_generation||configGeneration;
-    waveform=null;spectrum=null;waterfallRows=[];resetPhaseHistory('configuration changed');plotScale.ampMax=null;plotScale.powerMin=null;plotScale.powerMax=null;
-    document.getElementById('timePlotStatus').textContent=`config applied gen ${configGeneration}; waiting for fresh TIME preview`;
-    document.getElementById('specPlotStatus').textContent=`config applied gen ${configGeneration}; waiting for complete SPEC frame`;
-    requestAnimationFrame(drawTime);requestAnimationFrame(drawSpectrum);
-  }catch(e){
-    document.getElementById('dropStatus').className='pill bad';
-    document.getElementById('dropStatus').textContent=`config apply failed: ${e.message||e}`;
-  }finally{setTimeout(()=>applying=false,150);}
-}
-let applyTimer=null; function scheduleApply(){clearTimeout(applyTimer);applyTimer=setTimeout(applyConfig,120)}
-document.getElementById('apply').onclick=applyConfig;
-document.getElementById('freeze').onclick=()=>{const p=document.getElementById('pause');p.checked=!p.checked;applyConfig();};
-for(const id of ['bandwidth','center','expected','dac','timeWindow','points','waveMode','yscale','pause']) document.getElementById(id).addEventListener('change',applyConfig);
-for(let i=0;i<8;i++){document.getElementById(`ph${i}`).addEventListener('input',scheduleApply);document.getElementById(`ch${i}`).addEventListener('change',applyConfig);}
-function syncControls(c){if(!c||applying)return;const active=document.activeElement;if(active&&['INPUT','SELECT'].includes(active.tagName))return;document.getElementById('bandwidth').value=String(c.bandwidth_mhz);document.getElementById('center').value=c.center_mhz;document.getElementById('expected').value=c.expected_mhz;document.getElementById('dac').value=c.dac_mhz;document.getElementById('timeWindow').value=c.time_window_us;document.getElementById('points').value=String(c.display_points);document.getElementById('waveMode').value=c.waveform_view_mode||'dual';document.getElementById('yscale').value=c.vertical_scale;document.getElementById('pause').checked=!!c.paused;for(let i=0;i<8;i++){document.getElementById(`ph${i}`).value=(c.phase_deg_by_channel||[])[i]||0;document.getElementById(`ch${i}`).checked=!!(c.channel_mask&(1<<i));}}
-function parseWave(buf){
-  const dv=new DataView(buf);
-  const magic=dv.getUint32(0,true);
-  if(magic!==0x35574654&&magic!==0x34574654&&magic!==0x33574654&&magic!==0x32574654)return null;
-  const version=dv.getUint16(4,true); const headerBytes=dv.getUint16(6,true); const sample0=dv.getBigUint64(8,true);
-  const selected=dv.getUint32(24,true), detected=dv.getUint32(28,true), flags=dv.getUint32(32,true), maskBits=dv.getUint32(36,true);
-  const points=dv.getUint32(40,true), channelCount=dv.getUint32(44,true), decim=dv.getUint32(48,true), rfPoints=version>=4?dv.getUint32(52,true):points;
-  const sampleRateHz=version>=2?dv.getFloat64(56,true):RAW/(decim||1);
-  const windowUs=version>=2?dv.getFloat64(64,true):((points>1?(points-1):0)*decim/RAW*1e6);
-  const centerMhz=version>=3?dv.getFloat64(72,true):0;
-  const expectedMhz=version>=3?dv.getFloat64(80,true):0;
-  const dacMhz=version>=3?dv.getFloat64(88,true):0;
-  const basebandMhz=version>=3?dv.getFloat64(96,true):expectedMhz-centerMhz;
-  const rfSamplesPerCycle=version>=3?dv.getFloat64(104,true):Infinity;
-  const basebandSamplesPerCycle=version>=3?dv.getFloat64(112,true):Infinity;
-  const rfWindowCycles=version>=3?dv.getFloat64(120,true):0;
-  const capturedWindowUs=version>=5?dv.getFloat64(128,true):windowUs;
-  let off=headerBytes; const channels=[];
-  for(let ch=0;ch<8;ch++){
-    if(!(maskBits&(1<<ch)))continue;
-    if(version>=5){
-      if(off+points*20+rfPoints*8>buf.byteLength)break;
-      const x=new Float32Array(buf,off,points); off+=points*4;
-      const i=new Float32Array(buf,off,points); off+=points*4;
-      const q=new Float32Array(buf,off,points); off+=points*4;
-      const mag=new Float32Array(buf,off,points); off+=points*4;
-      const sampleRf=new Float32Array(buf,off,points); off+=points*4;
-      const rfX=new Float32Array(buf,off,rfPoints); off+=rfPoints*4;
-      const rf=new Float32Array(buf,off,rfPoints); off+=rfPoints*4;
-      channels.push({channel:ch,x,i,q,mag,sampleRf,rfX,rf,y:sampleRf});
-    }else if(version>=4){
-      if(off+points*16+rfPoints*8>buf.byteLength)break;
-      const x=new Float32Array(buf,off,points); off+=points*4;
-      const i=new Float32Array(buf,off,points); off+=points*4;
-      const q=new Float32Array(buf,off,points); off+=points*4;
-      const mag=new Float32Array(buf,off,points); off+=points*4;
-      const rfX=new Float32Array(buf,off,rfPoints); off+=rfPoints*4;
-      const rf=new Float32Array(buf,off,rfPoints); off+=rfPoints*4;
-      channels.push({channel:ch,x,i,q,mag,sampleRf:rf,rfX,rf,y:rf});
-    }else if(version>=3){
-      if(off+points*20>buf.byteLength)break;
-      const x=new Float32Array(buf,off,points); off+=points*4;
-      const i=new Float32Array(buf,off,points); off+=points*4;
-      const q=new Float32Array(buf,off,points); off+=points*4;
-      const mag=new Float32Array(buf,off,points); off+=points*4;
-      const rf=new Float32Array(buf,off,points); off+=points*4;
-      channels.push({channel:ch,x,i,q,mag,rfX:x,rf,y:rf});
-    }else if(version>=2){
-      if(off+points*8>buf.byteLength)break;
-      const x=new Float32Array(buf,off,points); off+=points*4;
-      const y=new Float32Array(buf,off,points); off+=points*4;
-      channels.push({channel:ch,x,rf:y,y});
-    }else{
-      if(off+points*4>buf.byteLength)break;
-      channels.push({channel:ch,y:new Float32Array(buf,off,points)});
-      off+=points*4;
-    }
-  }
-  return {version,sample0,seqStart:dv.getUint32(16,true),seqEnd:dv.getUint32(20,true),selected,detected:detected||null,gap:!!(flags&1),mismatch:!!(flags&2),maskBits,points,rfPoints,channelCount,decim,sampleRateHz,windowUs,capturedWindowUs,centerMhz,expectedMhz,dacMhz,basebandMhz,rfSamplesPerCycle,basebandSamplesPerCycle,rfWindowCycles,channels};
-}
-function parseSpectrum(buf){
-  const dv=new DataView(buf); if(dv.getUint32(0,true)!==0x33505354)return null;
-  const headerBytes=dv.getUint16(6,true);
-  const sample0=dv.getBigUint64(8,true), frameId=dv.getBigUint64(16,true);
-  const seqNo=dv.getUint32(24,true), gap=!!dv.getUint32(28,true), chan0=dv.getUint32(32,true);
-  const chanCount=dv.getUint32(36,true), timeCount=dv.getUint32(40,true), ninput=dv.getUint32(44,true);
-  const srcPort=dv.getUint32(48,true), dstPort=dv.getUint32(52,true), laneCount=dv.getUint32(56,true), bins=dv.getUint32(60,true);
-  const productId=dv.getUint32(64,true), nchan=dv.getUint32(68,true), blockIndex=dv.getUint32(72,true), blockCount=dv.getUint32(76,true);
-  const pfbTaps=dv.getUint32(80,true), fftShift=dv.getUint32(84,true), specFlags=dv.getUint32(88,true), sampleRateHz=dv.getUint32(92,true);
-  const coverageBlocks=dv.getUint32(96,true), coverageMaskLo=dv.getBigUint64(104,true), coverageMaskHi=dv.getBigUint64(112,true);
-  let off=headerBytes;
-  const lanes=[];
-  for(let lane=0;lane<laneCount;lane++){
-    if(off+bins*12>buf.byteLength)break;
-    const amp=new Float32Array(buf,off,bins); off+=bins*4;
-    const phase=new Float32Array(buf,off,bins); off+=bins*4;
-    const power=new Float32Array(buf,off,bins); off+=bins*4;
-    lanes.push({input:lane,amplitude:amp,phase_rad:phase,power});
-  }
-  return {sample0,frameId,seqNo,gap,chan0,chanCount,timeCount,ninput,srcPort,dstPort,laneCount,bins,productId,nchan,blockIndex,blockCount,pfbTaps,fftShift,specFlags,sampleRateHz,coverageBlocks,coverageMaskLo,coverageMaskHi,lanes};
-}
-function connectWs(){
-  const proto=location.protocol==='https:'?'wss':'ws'; ws=new WebSocket(`${proto}://${location.host}/ws/waveform`); ws.binaryType='arraybuffer';
-  ws.onopen=()=>{document.getElementById('wsStatus').className='pill ok';document.getElementById('wsStatus').textContent='waveform connected';};
-  ws.onmessage=(ev)=>{const parsed=parseWave(ev.data); if(parsed){waveform=parsed; wsFrames++; if(!drawPending){drawPending=true; requestAnimationFrame(drawTime);}}};
-  ws.onclose=()=>{document.getElementById('wsStatus').className='pill warn';document.getElementById('wsStatus').textContent='waveform reconnecting';setTimeout(connectWs,700);};
-  ws.onerror=()=>{document.getElementById('wsStatus').className='pill bad';document.getElementById('wsStatus').textContent='waveform error';};
-}
-function connectSpectrumWs(){
-  const proto=location.protocol==='https:'?'wss':'ws'; specWs=new WebSocket(`${proto}://${location.host}/ws/spectrum`); specWs.binaryType='arraybuffer';
-  specWs.onopen=()=>{document.getElementById('specWsStatus').className='pill ok';document.getElementById('specWsStatus').textContent='spectrum connected';};
-  specWs.onmessage=(ev)=>{const parsed=parseSpectrum(ev.data); if(parsed){spectrum=parsed; updatePhaseHistory(parsed); specFrames++; if(!specDrawPending){specDrawPending=true; requestAnimationFrame(drawSpectrum);}}};
-  specWs.onclose=()=>{resetPhaseHistory('spectrum websocket reconnecting');document.getElementById('specWsStatus').className='pill warn';document.getElementById('specWsStatus').textContent='spectrum reconnecting';setTimeout(connectSpectrumWs,700);};
-  specWs.onerror=()=>{document.getElementById('specWsStatus').className='pill bad';document.getElementById('specWsStatus').textContent='spectrum error';};
-}
-function resizeCanvas(canvas){const dpr=Math.max(1,window.devicePixelRatio||1),r=canvas.getBoundingClientRect(),w=Math.max(320,Math.floor(r.width*dpr)),h=Math.max(240,Math.floor(r.height*dpr));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}return{dpr,w:r.width,h:r.height};}
-function drawTime(){
-  drawPending=false;
-  const canvas=document.getElementById('scope'),{dpr,w,h}=resizeCanvas(canvas),ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#020303';ctx.fillRect(0,0,w,h);ctx.strokeStyle='#1d2422';ctx.lineWidth=1;
-  const topPad=28,bottomPad=28,plotTop=topPad,plotH=Math.max(80,h-topPad-bottomPad);
-  for(let i=0;i<=6;i++){const y=plotTop+i*plotH/6;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
-  for(let i=0;i<=10;i++){const x=i*w/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}
-  ctx.fillStyle='#98a49e';ctx.font='12px ui-monospace, Menlo, monospace';
-  if(!waveform||!waveform.channels.length){const msg=waveformLive?'waiting for TIME waveform stream':'no live TIME waveform stream';ctx.fillText(msg,14,22);document.getElementById('timePlotStatus').textContent=msg;return;}
-  const requestedUs=(waveform.windowUs||config?.time_window_us||0.25);
-  const capturedUs=(waveform.capturedWindowUs||requestedUs);
-  const tmax=Math.max(requestedUs,1e-9);
-  const signalMhz=Math.abs((waveform.expectedMhz||waveform.dacMhz||0));
-  const rfCycles=signalMhz*tmax;
-  const mode=(config?.waveform_view_mode||'dual');
-  const showCurve=mode==='dual'||mode==='curve';
-  const showSamples=mode==='dual'||mode==='samples';
-  const sampleLimited=(waveform.rfSamplesPerCycle||Infinity)<4 || signalMhz>(waveform.sampleRateHz||0)/2e6;
-  let ymax=1.0;
-  for(const ch of waveform.channels){
-    if(showCurve){const rf=ch.rf||[];for(let i=0;i<rf.length;i++)ymax=Math.max(ymax,Math.abs(rf[i]));}
-    if(showSamples){const rf=ch.sampleRf||ch.y||[];for(let i=0;i<rf.length;i++)ymax=Math.max(ymax,Math.abs(rf[i]));}
-  }
-  ymax*=1.08;
-  function yPix(value){return Math.max(plotTop,Math.min(plotTop+plotH,plotTop+plotH*0.5-(value/ymax)*plotH*0.48));}
-  function xPix(t){return Math.max(0,Math.min(w,t/tmax*w));}
-  function plotCurve(ch,color,width=1.1){
-    const arr=ch.rf||[], xs=ch.rfX||null;
-    if(!arr||!arr.length)return;
-    ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();
-    let started=false;
-    for(let i=0;i<arr.length;i++){
-      const t=xs?xs[i]:(i/Math.max(arr.length-1,1))*tmax;
-      const x=xPix(t), y=yPix(arr[i]);
-      if(!started){ctx.moveTo(x,y);started=true}else ctx.lineTo(x,y);
-    }
-    ctx.stroke();
-  }
-  function plotSamples(ch,color){
-    const arr=ch.sampleRf||ch.y||[], xs=ch.x||null;
-    if(!arr||!arr.length)return;
-    ctx.fillStyle=color;ctx.strokeStyle='rgba(2,3,3,0.85)';ctx.lineWidth=1;
-    for(let i=0;i<arr.length;i++){
-      const t=xs?xs[i]:(i/Math.max(arr.length-1,1))*capturedUs;
-      if(t<0||t>tmax)continue;
-      const x=xPix(t), y=yPix(arr[i]);
-      ctx.beginPath();ctx.arc(x,y,2.1,0,Math.PI*2);ctx.fill();ctx.stroke();
-    }
-  }
-  for(const ch of waveform.channels){
-    const c=colors[ch.channel%colors.length], primary=ch.channel===0;
-    if(showCurve)plotCurve(ch,c,primary?1.35:0.9);
-    if(showSamples)plotSamples(ch,c);
-  }
-  for(let i=0;i<=4;i++){
-    const x=i*w/4;
-    const label=`${fmt(tmax*i/4,3)}us`;
-    ctx.fillText(label,Math.max(4,Math.min(w-72,x-18)),h-8);
-  }
-  ctx.fillStyle='#98a49e';
-  ctx.fillText(`TIME IQ RF preview: ${mode} ${fmt(signalMhz,3)} MHz -> ${fmt(rfCycles,2)} cycles / ${fmt(tmax,3)} us`,10,18);
-  ctx.fillText(`real samples ${waveform.points||0}, curve ${waveform.rfPoints||0}, fs ${fmt((waveform.sampleRateHz||0)/1e6,2)}MS/s, captured ${fmt(capturedUs,3)}us, center ${fmt(waveform.centerMhz,1)}MHz`,10,34);
-  for(const ch of waveform.channels){ctx.fillStyle=colors[ch.channel%colors.length];ctx.fillText(`CH${ch.channel}`,12+ch.channel*45,52);}
-  if(sampleLimited&&mode==='samples'){ctx.fillStyle='#f4c76b';ctx.fillText('samples-only view is sparse/aliased for this RF frequency',Math.max(10,w-390),20);}
-  if(waveform.gap){ctx.fillStyle='rgba(244,199,107,0.17)';ctx.fillRect(0,0,w,30);ctx.fillStyle='#f4c76b';ctx.fillText('gap before current window',w-220,20);}
-  document.getElementById('timePlotStatus').textContent=`${mode} | requested ${fmt(tmax,3)}us captured ${fmt(capturedUs,3)}us | real ${waveform.points} curve ${waveform.rfPoints||0} | ${fmt(signalMhz,1)}MHz=${fmt(rfCycles,2)} cycles${sampleLimited?' | sparse samples':''}`;
-  lastDraw=performance.now();
-}
-function prepPlot(canvas){
-  const size=resizeCanvas(canvas), ctx=canvas.getContext('2d');
-  ctx.setTransform(size.dpr,0,0,size.dpr,0,0);
-  ctx.clearRect(0,0,size.w,size.h);
-  ctx.fillStyle='#020303';
-  ctx.fillRect(0,0,size.w,size.h);
-  ctx.strokeStyle='#1d2422';
-  ctx.lineWidth=1;
-  for(let i=0;i<=6;i++){const y=i*size.h/6;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(size.w,y);ctx.stroke();}
-  for(let i=0;i<=10;i++){const x=i*size.w/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,size.h);ctx.stroke();}
-  ctx.fillStyle='#98a49e';
-  ctx.font='12px ui-monospace, Menlo, monospace';
-  return {ctx,size};
-}
-function selectedPowerSeries(current){
-  if(!current||!current.lanes.length)return null;
-  const key=specLane.value;
-  if(key!=='avg'){
-    const lane=current.lanes.find(l=>String(l.input)===key);
-    return lane?lane.power:null;
-  }
-  const bins=current.bins||0, out=new Float32Array(bins);
-  for(const lane of current.lanes){for(let i=0;i<Math.min(bins,lane.power.length);i++){const p=lane.power[i];out[i]+=Math.pow(10,(Number.isFinite(p)?p:-160)/10);}}
-  const denom=Math.max(1,current.lanes.length);
-  for(let i=0;i<out.length;i++)out[i]=10*Math.log10(Math.max(out[i]/denom,1e-16));
-  return out;
-}
-function specFreqMhz(current,bin){
-  const bins=Math.max(1,current?.bins||current?.nchan||4096);
-  const sr=spectrumSampleRateHz(current);
-  const center=config?.center_mhz||0;
-  const signed=(bin<bins/2?bin:bin-bins)*sr/bins/1e6;
-  return center+signed;
-}
-function sampleRateForBandwidthMhz(mhz){
-  const v=Number(mhz);
-  if(v===20)return RAW/8;
-  if(v===100)return RAW/2;
-  if(v===200)return RAW;
-  return Number.isFinite(v)&&v>0?v*1e6:RAW/2;
-}
-function spectrumSampleRateHz(current){
-  const headerRate=Number(current?.sampleRateHz);
-  return Number.isFinite(headerRate)&&headerRate>0?headerRate:sampleRateForBandwidthMhz(config?.bandwidth_mhz||100);
-}
-function targetRfMhz(){
-  const expected=Number(config?.expected_mhz);
-  if(Number.isFinite(expected)&&expected>0)return expected;
-  const dac=Number(config?.dac_mhz);
-  return Number.isFinite(dac)&&dac>0?dac:NaN;
-}
-function targetSpecBin(current){
-  const target=targetRfMhz();
-  if(!current||!Number.isFinite(target))return null;
-  const bins=Math.max(1,current.bins||current.nchan||4096);
-  const sr=spectrumSampleRateHz(current);
-  const center=Number(config?.center_mhz)||0;
-  const binHz=sr/bins;
-  if(!(binHz>0))return null;
-  const signedBin=Math.round(((target-center)*1e6)/binHz);
-  let idx=((signedBin%bins)+bins)%bins;
-  const alignedMhz=center+(signedBin*binHz/1e6);
-  const binErrorKhz=((target-center)*1e6-signedBin*binHz)/1e3;
-  return {idx,signedBin,targetMhz:target,binMhz:specFreqMhz(current,idx),alignedMhz,sampleRateHz:sr,binWidthKhz:binHz/1e3,binErrorKhz};
-}
-function shiftedIndex(current,idx){
-  const bins=Math.max(1,current?.bins||4096);
-  return (idx+Math.floor(bins/2))%bins;
-}
-function shiftedSeries(current,series){
-  const bins=Math.max(1,current?.bins||0);
-  const out=new Float32Array(bins);
-  for(let i=0;i<bins;i++){
-    const v=series[shiftedIndex(current,i)];
-    out[i]=v===undefined?0:v;
-  }
-  return out;
-}
-function shiftedFreqSeries(current){
-  const bins=Math.max(1,current?.bins||4096), out=new Float32Array(bins);
-  for(let i=0;i<bins;i++)out[i]=specFreqMhz(current,shiftedIndex(current,i));
-  return out;
-}
-function measuredPeak(current){
-  const power=selectedPowerSeries(current);
-  if(!power||!power.length)return null;
-  let idx=0,val=-Infinity;
-  for(let i=0;i<power.length;i++){if(Number.isFinite(power[i])&&power[i]>val){val=power[i];idx=i;}}
-  const lane0=current.lanes.find(l=>l.input===0)||current.lanes[0];
-  const ch0Phase=lane0&&lane0.phase_rad?lane0.phase_rad[idx]:NaN;
-  const ch0Amp=lane0&&lane0.amplitude?lane0.amplitude[idx]:NaN;
-  return {idx,powerDb:val,rfMhz:specFreqMhz(current,idx),ch0Phase,ch0Amp};
-}
-function wrapPhase(v){
-  if(!Number.isFinite(v))return NaN;
-  while(v>Math.PI)v-=2*Math.PI;
-  while(v<-Math.PI)v+=2*Math.PI;
-  return v;
-}
-function avgPowerDbAtBin(current,idx){
-  if(!current||!current.lanes.length)return NaN;
-  let sum=0,count=0;
-  for(const lane of current.lanes){
-    const p=lane.power?lane.power[idx]:NaN;
-    if(Number.isFinite(p)){sum+=Math.pow(10,p/10);count++;}
-  }
-  return count?10*Math.log10(Math.max(sum/count,1e-16)):NaN;
-}
-function median(values){
-  const xs=values.filter(Number.isFinite).sort((a,b)=>a-b);
-  if(!xs.length)return NaN;
-  const mid=Math.floor(xs.length/2);
-  return xs.length%2?xs[mid]:(xs[mid-1]+xs[mid])*0.5;
-}
-function noiseFloorDb(current,targetIdx){
-  if(!current||!current.lanes.length)return NaN;
-  const bins=current.bins||0, guard=Math.max(16,Math.floor(bins/128)), vals=[];
-  for(let i=0;i<bins;i++){
-    const d=Math.abs(i-targetIdx), wrapD=Math.min(d,bins-d);
-    if(wrapD<=guard)continue;
-    const p=avgPowerDbAtBin(current,i);
-    if(Number.isFinite(p))vals.push(p);
-  }
-  return median(vals);
-}
-function phaseHistoryKeyFor(current,target,ref){
-  return [
-    configGeneration,
-    fmt(config?.center_mhz,6),
-    fmt(target.targetMhz,6),
-    target.idx,
-    Math.round(target.sampleRateHz||0),
-    ref,
-    current.bins||0,
-    current.blockCount||0
-  ].join('|');
-}
-function updatePhaseHistory(current){
-  const ref=currentPhaseRef();
-  if(!current||!current.lanes||!current.lanes.length){phaseHistoryStatus='waiting for SPEC phase history';return;}
-  const blockCount=current.blockCount||16, coverage=current.coverageBlocks||0;
-  if(coverage<blockCount){phaseHistoryStatus=`partial SPEC coverage ${coverage}/${blockCount}`;return;}
-  const target=targetSpecBin(current);
-  if(!target){phaseHistoryStatus='target frequency unavailable';return;}
-  const refLane=current.lanes.find(l=>l.input===ref);
-  if(!refLane||!refLane.phase_rad||target.idx>=refLane.phase_rad.length){phaseHistoryStatus=`reference CH${ref} unavailable`;return;}
-  const targetPower=avgPowerDbAtBin(current,target.idx), noise=noiseFloorDb(current,target.idx), snr=targetPower-noise;
-  if(!Number.isFinite(snr)||snr<12.0){phaseHistoryStatus=`target bin low SNR ${fmt(snr,1)}dB`;return;}
-  const key=phaseHistoryKeyFor(current,target,ref);
-  if(key!==phaseHistoryKey)resetPhaseHistory('phase target changed');
-  phaseHistoryKey=key;
-  const refPhase=refLane.phase_rad[target.idx];
-  if(!Number.isFinite(refPhase)){phaseHistoryStatus=`reference CH${ref} phase unavailable`;return;}
-  const last=phaseHistory.length?phaseHistory[phaseHistory.length-1]:null;
-  const relRad=Array(8).fill(NaN), relDeg=Array(8).fill(NaN), phaseRad=Array(8).fill(NaN), amp=Array(8).fill(NaN), powerDb=Array(8).fill(NaN);
-  for(const lane of current.lanes){
-    const input=lane.input;
-    if(input<0||input>=8)continue;
-    const phase=lane.phase_rad?lane.phase_rad[target.idx]:NaN;
-    const raw=wrapPhase(phase-refPhase);
-    let value=raw;
-    const prev=last?.relRad?.[input];
-    if(Number.isFinite(value)&&Number.isFinite(prev)){
-      while(value-prev>Math.PI)value-=2*Math.PI;
-      while(value-prev<-Math.PI)value+=2*Math.PI;
-    }
-    phaseRad[input]=phase;
-    relRad[input]=value;
-    relDeg[input]=Number.isFinite(value)?value*180/Math.PI:NaN;
-    amp[input]=lane.amplitude?lane.amplitude[target.idx]:NaN;
-    powerDb[input]=lane.power?lane.power[target.idx]:NaN;
-  }
-  const now=performance.now()/1000;
-  phaseHistory.push({t:now,bin:target.idx,targetMhz:target.targetMhz,binMhz:target.binMhz,binErrorKhz:target.binErrorKhz,ref,relRad,relDeg,phaseRad,amp,powerDb,snrDb:snr,targetPowerDb:targetPower,noiseDb:noise,coverage,blockCount});
-  const cutoff=now-PHASE_HISTORY_SECONDS;
-  while(phaseHistory.length&&phaseHistory[0].t<cutoff)phaseHistory.shift();
-  while(phaseHistory.length>PHASE_HISTORY_MAX_POINTS)phaseHistory.shift();
-  phaseHistoryStatus=`target bin ${target.idx} ${fmt(target.binMhz,3)}MHz err ${fmt(target.binErrorKhz,2)}kHz SNR ${fmt(snr,1)}dB`;
-}
-function peakLaneMetrics(current,peak){
-  if(!current||!peak)return [];
-  const ref=current.lanes.find(l=>l.input===0)||current.lanes[0];
-  const refPhase=ref&&ref.phase_rad?ref.phase_rad[peak.idx]:NaN;
-  return current.lanes.map(l=>{
-    const amp=l.amplitude?l.amplitude[peak.idx]:NaN;
-    const phase=l.phase_rad?l.phase_rad[peak.idx]:NaN;
-    return {input:l.input,amp,phase,rel:wrapPhase(phase-refPhase)};
-  });
-}
-function gatedPhaseSeries(current,lane,peak){
-  const bins=current?.bins||0, out=new Float32Array(bins);
-  out.fill(NaN);
-  if(!lane||!lane.phase_rad||!lane.power||!peak)return out;
-  const peakPower=Number.isFinite(peak.powerDb)?peak.powerDb:-Infinity;
-  const guard=Math.max(3,Math.floor(bins/512));
-  for(let i=0;i<bins;i++){
-    const near=Math.abs(i-peak.idx)<=guard;
-    const strong=Number.isFinite(lane.power[i])&&lane.power[i]>=peakPower-18.0;
-    if(near||strong)out[i]=lane.phase_rad[i];
-  }
-  return out;
-}
-function drawAxisLabels(ctx,size,labelLeft,labelRight){
-  ctx.fillStyle='#98a49e';
-  ctx.font='12px ui-monospace, Menlo, monospace';
-  ctx.fillText(labelLeft,8,16);
-  const metrics=ctx.measureText(labelRight);
-  ctx.fillText(labelRight,Math.max(8,size.w-metrics.width-8),16);
-}
-function drawBinTicks(ctx,size,bins){
-  ctx.fillStyle='#98a49e';
-  ctx.font='11px ui-monospace, Menlo, monospace';
-  const mid=Math.floor((bins||4096)/2);
-  ctx.fillText('0',8,size.h-8);
-  ctx.fillText(String(mid),Math.max(8,size.w/2-18),size.h-8);
-  const last=String(Math.max(0,(bins||4096)-1));
-  ctx.fillText(last,Math.max(8,size.w-8-ctx.measureText(last).width),size.h-8);
-}
-function smoothMax(prev,target){
-  if(!Number.isFinite(prev)||prev<=0)return Math.max(target,1);
-  return target>prev?target:(prev*0.92+target*0.08);
-}
-function smoothRange(prevMin,prevMax,targetMin,targetMax){
-  if(!Number.isFinite(prevMin)||!Number.isFinite(prevMax))return [targetMin,targetMax];
-  const min=targetMin<prevMin?targetMin:(prevMin*0.94+targetMin*0.06);
-  const max=targetMax>prevMax?targetMax:(prevMax*0.94+targetMax*0.06);
-  return [min,max];
-}
-function drawSeries(ctx,size,seriesList,yMin,yMax){
-  const ySpan=Math.max(yMax-yMin,1e-9);
-  for(const item of seriesList){
-    const series=item.series||[];
-    ctx.strokeStyle=item.color;
-    ctx.lineWidth=item.width||1.2;
-    ctx.beginPath();
-    let started=false, n=series.length;
-    const stride=Math.max(1,Math.floor(n/Math.max(1,size.w*1.5)));
-    for(let i=0;i<n;i+=stride){
-      const x=(i/Math.max(n-1,1))*size.w;
-      const norm=(series[i]-yMin)/ySpan;
-      const y=size.h - Math.max(0,Math.min(1,norm))*size.h;
-      if(!started){ctx.moveTo(x,y);started=true;}else{ctx.lineTo(x,y);}
-    }
-    ctx.stroke();
-  }
-}
-function drawSeriesWithX(ctx,size,seriesList,xMin,xMax,yMin,yMax){
-  drawPeakPreservedSeriesWithX(ctx,size,seriesList,xMin,xMax,yMin,yMax);
-}
-function drawPeakPreservedSeriesWithX(ctx,size,seriesList,xMin,xMax,yMin,yMax){
-  const ySpan=Math.max(yMax-yMin,1e-9), xSpan=Math.max(xMax-xMin,1e-9);
-  const width=Math.max(1,Math.floor(size.w));
-  for(const item of seriesList){
-    const series=item.series||[], xs=item.x||[];
-    const colY=new Float32Array(width);
-    const colX=new Float32Array(width);
-    const seen=new Uint8Array(width);
-    for(let px=0;px<width;px++){colY[px]=-Infinity;colX[px]=px+0.5;}
-    const n=Math.min(series.length,xs.length);
-    for(let i=0;i<n;i++){
-      const value=series[i], xValue=xs[i];
-      if(!Number.isFinite(value)||!Number.isFinite(xValue))continue;
-      const px=Math.floor((xValue-xMin)/xSpan*width);
-      if(px<0||px>=width)continue;
-      if(!seen[px]||value>colY[px]){
-        colY[px]=value;
-        colX[px]=(xValue-xMin)/xSpan*size.w;
-        seen[px]=1;
-      }
-    }
-    ctx.strokeStyle=item.color;ctx.lineWidth=item.width||1.2;ctx.beginPath();
-    let started=false;
-    for(let px=0;px<width;px++){
-      if(!seen[px]){started=false;continue;}
-      const norm=(colY[px]-yMin)/ySpan;
-      const y=size.h - Math.max(0,Math.min(1,norm))*size.h;
-      const x=Math.max(0,Math.min(size.w,colX[px]));
-      if(!started){ctx.moveTo(x,y);started=true;}else{ctx.lineTo(x,y);}
-    }
-    ctx.stroke();
-  }
-}
-function drawVerticalMarker(ctx,size,x,xMin,xMax,color,label){
-  if(!Number.isFinite(x))return;
-  const px=(x-xMin)/Math.max(xMax-xMin,1e-9)*size.w;
-  if(px<0||px>size.w)return;
-  ctx.save();ctx.strokeStyle=color;ctx.lineWidth=1;ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(px,0);ctx.lineTo(px,size.h);ctx.stroke();ctx.setLineDash([]);
-  ctx.fillStyle=color;ctx.font='11px ui-monospace, Menlo, monospace';ctx.fillText(label,Math.max(2,Math.min(size.w-90,px+4)),28);ctx.restore();
-}
-function drawWaterfallCanvas(ctx,size,rows){
-  if(!rows.length){ctx.fillStyle='#98a49e';ctx.fillText('waiting for power history',14,22);return;}
-  let min=Infinity,max=-Infinity;
-  for(const row of rows){for(const v of row){if(Number.isFinite(v)){if(v<min)min=v;if(v>max)max=v;}}}
-  if(!Number.isFinite(min)||!Number.isFinite(max)||max<=min){min=0;max=1;}
-  const width=Math.max(1,Math.floor(size.w));
-  const rowH=size.h/rows.length;
-  for(let r=0;r<rows.length;r++){
-    const row=rows[r], y=size.h-(r+1)*rowH;
-    const bins=row.length;
-    for(let x=0;x<width;x++){
-      const start=Math.min(bins-1,Math.floor(x*bins/width));
-      const end=Math.min(bins,Math.max(start+1,Math.floor((x+1)*bins/width)));
-      let pooled=-Infinity;
-      for(let idx=start;idx<end;idx++){
-        const value=row[idx];
-        if(Number.isFinite(value)&&value>pooled)pooled=value;
-      }
-      if(!Number.isFinite(pooled))pooled=min;
-      const norm=Math.max(0,Math.min(1,(pooled-min)/(max-min)));
-      const red=Math.floor(25+210*norm), green=Math.floor(45+160*Math.sqrt(norm)), blue=Math.floor(70+90*(1-norm));
-      ctx.fillStyle=`rgb(${red},${green},${blue})`;
-      ctx.fillRect(x,y,1,Math.ceil(rowH)+1);
-    }
-  }
-}
-function drawPhaseHistory(ctx,size){
-  const now=performance.now()/1000;
-  const rows=phaseHistory.filter(r=>now-r.t<=PHASE_HISTORY_SECONDS);
-  if(!rows.length){
-    ctx.fillStyle='#98a49e';
-    ctx.fillText(phaseHistoryStatus||'waiting for SPEC phase history',14,22);
-    return;
-  }
-  let yMin=0,yMax=0;
-  for(const row of rows){
-    for(const v of row.relDeg||[]){
-      if(Number.isFinite(v)){yMin=Math.min(yMin,v);yMax=Math.max(yMax,v);}
-    }
-  }
-  let span=yMax-yMin;
-  if(span<10){const mid=(yMin+yMax)*0.5;yMin=mid-5;yMax=mid+5;span=10;}
-  const pad=Math.max(2,span*0.12);
-  yMin-=pad;yMax+=pad;
-  const ySpan=Math.max(yMax-yMin,1e-9);
-  function xPix(t){return size.w-(now-t)/PHASE_HISTORY_SECONDS*size.w;}
-  function yPix(v){return size.h-Math.max(0,Math.min(1,(v-yMin)/ySpan))*size.h;}
-  ctx.save();
-  ctx.strokeStyle='rgba(244,199,107,0.42)';
-  ctx.lineWidth=1;
-  ctx.setLineDash([4,4]);
-  const zero=yPix(0);
-  ctx.beginPath();ctx.moveTo(0,zero);ctx.lineTo(size.w,zero);ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle='#98a49e';
-  ctx.font='11px ui-monospace, Menlo, monospace';
-  for(let i=0;i<=3;i++){
-    const age=PHASE_HISTORY_SECONDS*(1-i/3), x=size.w*i/3;
-    ctx.fillText(`${-Math.round(age)}s`,Math.max(2,Math.min(size.w-36,x+2)),size.h-8);
-  }
-  ctx.fillText(`${fmt(yMax,0)}deg`,6,28);
-  ctx.fillText(`${fmt(yMin,0)}deg`,6,size.h-22);
-  for(let ch=0;ch<8;ch++){
-    ctx.strokeStyle=colors[ch%colors.length];
-    ctx.lineWidth=ch===0?2.2:(ch===currentPhaseRef()?1.5:1.1);
-    ctx.beginPath();
-    let started=false;
-    for(const row of rows){
-      const value=row.relDeg?.[ch];
-      if(!Number.isFinite(value)){started=false;continue;}
-      const x=xPix(row.t), y=yPix(value);
-      if(x<0||x>size.w){started=false;continue;}
-      if(!started){ctx.moveTo(x,y);started=true;}else ctx.lineTo(x,y);
-    }
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-function blockCovered(current, block){
-  if(!current)return false;
-  const b=BigInt(block);
-  if(block<64)return ((current.coverageMaskLo>>b)&1n)===1n;
-  return ((current.coverageMaskHi>>BigInt(block-64))&1n)===1n;
-}
-function shadeMissingBlocks(ctx,size,current){
-  const blockCount=Math.max(1,current.blockCount||16), bins=Math.max(1,current.bins||4096);
-  ctx.save();
-  for(let block=0;block<blockCount;block++){
-    if(blockCovered(current,block))continue;
-    const x0=block/blockCount*size.w, x1=(block+1)/blockCount*size.w;
-    ctx.fillStyle='rgba(255,123,123,0.08)';
-    ctx.fillRect(x0,0,Math.max(1,x1-x0),size.h);
-  }
-  ctx.strokeStyle='rgba(151,164,158,0.28)';
-  ctx.lineWidth=1;
-  for(let block=1;block<blockCount;block++){
-    const x=block/blockCount*size.w;
-    ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,size.h);ctx.stroke();
-  }
-  ctx.restore();
-}
-function spectrumWaitingMessage(){
-  if(!spectrumLive)return 'no live SPEC spectrum stream';
-  if(stats&&(stats.spec_packets||0)===0)return 'no SPEC packets received yet';
-  if(specPreview&&specPreview.last_error)return `SPEC preview: ${specPreview.last_error}`;
-  if(specPreview&&(specPreview.coverage_blocks||0)>0)return `partial SPEC coverage ${specPreview.coverage_blocks}/${specPreview.block_count||16}`;
-  return 'waiting for SPEC F-engine stream';
-}
-function drawSpectrum(){
-  specDrawPending=false;
-  const amp=prepPlot(document.getElementById('specAmp'));
-  const phase=prepPlot(document.getElementById('specPhase'));
-  const power=prepPlot(document.getElementById('specPower'));
-  const waterfall=prepPlot(document.getElementById('specWaterfall'));
-  const current=spectrum;
-  if(!current||!current.lanes.length){
-    const msg=spectrumWaitingMessage();
-    for(const p of [amp,phase,power,waterfall])p.ctx.fillText(msg,14,22);
-    document.getElementById('specPlotStatus').textContent=msg;
-    return;
-  }
-  let ampMax=1, pMin=Infinity, pMax=-Infinity;
-  for(const lane of current.lanes){
-    for(const v of lane.amplitude){if(v>ampMax)ampMax=v;}
-    for(const v of lane.power){if(v<pMin)pMin=v;if(v>pMax)pMax=v;}
-  }
-  if(!Number.isFinite(pMin)||!Number.isFinite(pMax)||pMax<=pMin){pMin=0;pMax=1;}
-  plotScale.ampMax=smoothMax(plotScale.ampMax,ampMax*1.08);
-  [plotScale.powerMin,plotScale.powerMax]=smoothRange(plotScale.powerMin,plotScale.powerMax,pMin-3,pMax+3);
-  ampMax=plotScale.ampMax;
-  pMin=plotScale.powerMin;
-  pMax=plotScale.powerMax;
-  for(const p of [amp,power,waterfall])shadeMissingBlocks(p.ctx,p.size,current);
-  const freq=shiftedFreqSeries(current);
-  const xMin=freq.length?freq[0]:(config?.center_mhz||0)-50, xMax=freq.length?freq[freq.length-1]:(config?.center_mhz||0)+50;
-  const peak=measuredPeak(current), target=targetSpecBin(current), expected=target?target.targetMhz:(config?.expected_mhz||config?.dac_mhz||NaN);
-  drawPeakPreservedSeriesWithX(amp.ctx,amp.size,current.lanes.map(l=>({x:freq,series:shiftedSeries(current,l.amplitude),color:colors[l.input%colors.length]})),xMin,xMax,0,ampMax);
-  drawPhaseHistory(phase.ctx,phase.size);
-  const selectedPower=selectedPowerSeries(current);
-  const shiftedPower=selectedPower?shiftedSeries(current,selectedPower):null;
-  drawPeakPreservedSeriesWithX(power.ctx,power.size,[{x:freq,series:shiftedPower||[],color:'#6ee7a8',width:1.4}],xMin,xMax,pMin,pMax);
-  for(const p of [amp,power]){drawVerticalMarker(p.ctx,p.size,expected,xMin,xMax,'#f4c76b','target');if(peak)drawVerticalMarker(p.ctx,p.size,peak.rfMhz,xMin,xMax,'#ff7b7b','peak');}
-  if(selectedPower&&selectedPower.length){
-    waterfallRows.push(new Float32Array(shiftedPower));
-    if(waterfallRows.length>96)waterfallRows.shift();
-  }
-  drawWaterfallCanvas(waterfall.ctx,waterfall.size,waterfallRows);
-  const fftOnly=((current.specFlags||0)&0x100)!==0 && (current.pfbTaps||0)===0;
-  const aa100=((current.specFlags||0)&0x200)!==0;
-  const pfbActive=((current.specFlags||0)&0x400)!==0 && (current.pfbTaps||0)>=4;
-  drawAxisLabels(amp.ctx,amp.size,`amp |X| ${fftOnly?'FFT-only':(pfbActive?'PFB':'layout check')} ${aa100?'AA100 active':''}`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
-  const latestPhase=phaseHistory.length?phaseHistory[phaseHistory.length-1]:null;
-  drawAxisLabels(phase.ctx,phase.size,`relative phase vs CH${currentPhaseRef()} deg / ${PHASE_HISTORY_SECONDS}s`,latestPhase?`bin ${latestPhase.bin} ${fmt(latestPhase.binMhz,3)} MHz err ${fmt(latestPhase.binErrorKhz,2)} kHz SNR ${fmt(latestPhase.snrDb,1)}dB`:phaseHistoryStatus);
-  const complete=(current.coverageBlocks||0)>=(current.blockCount||16);
-  drawAxisLabels(power.ctx,power.size,`power dB peak-preserved ${complete?'complete':'partial'} ${current.coverageBlocks||0}/${current.blockCount||16} blocks`,peak?`peak ${fmt(peak.rfMhz,3)} MHz CH0 phase ${fmt(peak.ch0Phase,2)} rad`:`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
-  drawAxisLabels(waterfall.ctx,waterfall.size,`waterfall max-pool ${specLane.value==='avg'?'avg':('input '+specLane.value)} power history`,`${fmt(xMin,1)}..${fmt(xMax,1)} MHz`);
-  const laneMetrics=peakLaneMetrics(current,peak);
-  document.getElementById('specPlotStatus').textContent=`${complete?'complete':'partial'} 4096 bins coverage ${current.coverageBlocks||0}/${current.blockCount||16}${pfbActive?' PFB active':(fftOnly?' FFT-only':' layout check')}${aa100?' AA100 active':' AA100 off'}${target?` target ${fmt(target.targetMhz,3)}MHz bin ${target.idx} err ${fmt(target.binErrorKhz,2)}kHz width ${fmt(target.binWidthKhz,2)}kHz`:''}${peak?` peak ${fmt(peak.rfMhz,3)}MHz bin ${peak.idx} power ${fmt(peak.powerDb,1)}dB`:''} phase ref CH${currentPhaseRef()} history ${phaseHistory.length} display peak-preserved/max-pool`;
-  if(latestPhase){
-    document.getElementById('channelStats').innerHTML=Array.from({length:8},(_,i)=>metric(`SPEC CH${i}`,`amp ${fmt(latestPhase.amp[i],0)} ph ${fmt(latestPhase.phaseRad[i]*180/Math.PI,1)}deg rel ${fmt(latestPhase.relDeg[i],1)}deg`)).join('');
-  }else if(laneMetrics.length){
-    document.getElementById('channelStats').innerHTML=laneMetrics.map(m=>metric(`SPEC CH${m.input}`,`amp ${fmt(m.amp,0)} ph ${fmt(m.phase*180/Math.PI,1)}deg rel ${fmt(m.rel*180/Math.PI,1)}deg`)).join('');
-  }
-}
-function fmt(v,d=2){return Number.isFinite(v)?Number(v).toFixed(d):'--'} function fmtInt(v){return v===null||v===undefined?'--':String(v)}
-function metric(label,value,cls=''){return `<div class="metric ${cls}"><span>${label}</span><b>${value}</b></div>`}
-function renderStats(s){
-  const detected=s.detected_bandwidth_mhz?`${s.detected_bandwidth_mhz} MHz`:'--', gapTotal=(s.seq_gaps||0)+(s.frame_gaps||0)+(s.sample0_gaps||0), specGapTotal=(s.spec_seq_gaps||0)+(s.spec_frame_gaps||0), statusCls=(gapTotal+specGapTotal)>0?'bad':(s.selected_detected_mismatch?'warn':'ok');
-  document.getElementById('bwStatus').className=`pill ${s.selected_detected_mismatch?'warn':'ok'}`;document.getElementById('bwStatus').textContent=`selected ${s.selected_bandwidth_mhz} / detected ${detected}`;
-  document.getElementById('backendStatus').className=`pill ${s.backend==='fanout'&&s.active_worker_count>=4?'ok':(s.backend==='fanout'?'warn':'')}`;document.getElementById('backendStatus').textContent=`${s.backend} workers ${s.active_worker_count||0}/${s.worker_count||1}`;
-  document.getElementById('lossStatus').className=`pill ${statusCls}`;document.getElementById('lossStatus').textContent=`gaps T${gapTotal} S${specGapTotal} loss ${fmt(s.loss_percent,4)}%`;
-  document.getElementById('rateStatus').textContent=`TIME ${fmt(s.rx_processed_gbps,2)}G / SPEC ${fmt(s.spec_processed_gbps,2)}G`;
-  const timeFlows=s.time_flow_count||0, specFlows=s.spec_flow_count||0, flowCount=s.flow_count||0;
-  const productionFlows=(flowCount===8&&timeFlows===8&&specFlows===0)||(flowCount===16&&timeFlows===0&&specFlows===16)||(flowCount===24&&timeFlows===8&&specFlows===16);
-  const flowOk=productionFlows&&(s.active_worker_count||0)>=flowCount;
-  document.getElementById('flowStatus').className=`pill ${flowOk?'ok':'warn'}`;document.getElementById('flowStatus').textContent=`flows ${s.time_flow_count||0}+${s.spec_flow_count||0}/${s.flow_count||0}`;
-  const dropTotal=(s.parse_errors||0)+(s.ring_drops||0)+(s.worker_ring_drops||0)+(s.kernel_drops||0)+(s.app_drops||0);document.getElementById('dropStatus').className=`pill ${dropTotal?'bad':'ok'}`;document.getElementById('dropStatus').textContent=`drops ${dropTotal} preview T${fmt(s.display_update_hz,1)} S${fmt(s.spectrum_update_hz,1)}Hz`;
-  const previewLive=(timeFlows===0||waveformLive)&&(specFlows===0||spectrumLive);
-  const previewLabel=timeFlows===0?`SPEC ${spectrumLive?'live':'stale'}`:(specFlows===0?`TIME ${waveformLive?'live':'stale'}`:`T${waveformLive?' live':' stale'} / S${spectrumLive?' live':' stale'}`);
-  document.getElementById('pointsStatus').className=`pill ${previewLive?'ok':'warn'}`;document.getElementById('pointsStatus').textContent=`${previewLabel} pts ${waveform?waveform.points:'--'} ages T${waveformAgeMs===null?'--':waveformAgeMs}/S${spectrumAgeMs===null?'--':spectrumAgeMs}ms / gen ${configGeneration} / fps ${fmt(s.display_update_hz,1)} / sweep ${fmt(s.spectrum_update_hz,1)}`;
-  document.getElementById('summary').innerHTML=[
-    metric('expected FPGA',`${fmt(s.expected_packets_per_sec,0)} pps each / T ${fmt(s.expected_time_gbps,2)}G S ${fmt(s.expected_spec_gbps,2)}G`),
-    metric('processed TIME',`${fmt(s.rx_processed_packets_per_sec,0)} pps / ${fmt(s.rx_processed_gbps,2)} Gbps`),
-    metric('processed SPEC',`${fmt(s.spec_processed_packets_per_sec,0)} pps / ${fmt(s.spec_processed_gbps,2)} Gbps`),
-    metric('display',`T ${fmt(s.display_update_hz,1)} Hz / S ${fmt(s.spectrum_update_hz,1)} Hz / ws ${s.websocket_clients}`),
-    metric('workers',`${s.active_worker_count||0}/${s.worker_count||1} active / drops ${s.worker_ring_drops||0}`,(s.worker_ring_drops||0)?'warn':''),
-    metric('ring',`${fmt(s.ring_fill_percent,1)}% blocks, drops ${s.ring_drops}`),
-    metric('NIC',`${fmt(s.nic_rx_packets_per_sec,0)} pps / ${fmt(s.nic_rx_gbps,2)} Gbps`),
-    metric('TIME gaps',`${s.seq_gaps}/${s.frame_gaps}/${s.sample0_gaps}`,statusCls),
-    metric('SPEC gaps',`${s.spec_seq_gaps||0}/${s.spec_frame_gaps||0}`,specGapTotal?'warn':'')
-  ].join('');
-  const sp=specPreview||{};
-  document.getElementById('summary').innerHTML+=metric('SPEC preview',`${sp.complete?'complete':'partial'} ${sp.coverage_blocks||0}/${sp.block_count||16} block=${fmtInt(sp.last_block_index)} chan0=${fmtInt(sp.last_chan0)}`,sp.complete?'ok':((s.spec_packets||0)>0?'warn':''));
-  document.getElementById('flows').innerHTML=(s.per_flow||[]).map(f=>metric(`:${f.dst_port}`,`T${f.time_packets||0} S${f.spec_packets||0} ${fmt(f.gbps,2)}G`,(f.seq_gaps||f.frame_gaps||f.sample0_gaps||f.spec_seq_gaps||f.spec_frame_gaps)?'warn':'')).join('');
-  if(!spectrum)document.getElementById('channelStats').innerHTML=Array.from({length:8},(_,i)=>metric(`TIME CH${i}`,`rms ${fmt((s.channel_rms_code||[])[i],0)} max ${fmtInt((s.channel_max_abs_code||[])[i])}${(s.channel_clipped||[])[i]?' clip':''}`,(s.channel_clipped||[])[i]?'warn':'')).join('');
-  const detailOpen=!!document.querySelector('details')?.open, statsEl=document.getElementById('stats');
-  if(!detailOpen){statsEl.textContent='';return;}
-statsEl.textContent=`backend=${s.backend} iface=${s.interface} flows=${s.flow_count} time_flows=${s.time_flow_count} spec_flows=${s.spec_flow_count} dst_port_base=${s.dst_port_base} src_port_base=${s.src_port_base}
-expected_packets_per_sec=${fmt(s.expected_packets_per_sec,3)} expected_time_gbps=${fmt(s.expected_time_gbps,6)} expected_spec_gbps=${fmt(s.expected_spec_gbps,6)} expected_fpga_gbps=${fmt(s.expected_fpga_gbps,6)}
-rx_processed_packets_per_sec=${fmt(s.rx_processed_packets_per_sec,3)} rx_processed_gbps=${fmt(s.rx_processed_gbps,6)} display_update_hz=${fmt(s.display_update_hz,3)}
-spec_processed_packets_per_sec=${fmt(s.spec_processed_packets_per_sec,3)} spec_processed_gbps=${fmt(s.spec_processed_gbps,6)} spectrum_update_hz=${fmt(s.spectrum_update_hz,3)}
-worker_count=${s.worker_count} active_worker_count=${s.active_worker_count} fanout_group=${s.fanout_group} fanout_mode=${s.fanout_mode} spec_layout=${s.spec_layout} worker_ring_drops=${s.worker_ring_drops}
-time_packets=${s.time_packets} spec_packets=${s.spec_packets} total_packets=${s.total_packets} time_bytes=${s.time_bytes} spec_bytes=${s.spec_bytes} parse_errors=${s.parse_errors} filtered=${s.filtered_packets}
-kernel_drops=${s.kernel_drops} ring_drops=${s.ring_drops} app_drops=${s.app_drops} loss_percent=${fmt(s.loss_percent,6)}
-seq_gaps=${s.seq_gaps} frame_gaps=${s.frame_gaps} sample0_gaps=${s.sample0_gaps} spec_seq_gaps=${s.spec_seq_gaps||0} spec_frame_gaps=${s.spec_frame_gaps||0}
-ring_bytes=${s.ring_bytes} block=${s.ring_block_size} blocks=${s.ring_block_count} frame=${s.ring_frame_size} frames=${s.ring_frame_count} fill=${fmt(s.ring_fill_percent,3)} freeze_q=${s.ring_freeze_q_count}
-nic_rx_packets_per_sec=${fmt(s.nic_rx_packets_per_sec,3)} nic_rx_gbps=${fmt(s.nic_rx_gbps,6)} dropped=${s.nic_rx_dropped_delta} errors=${s.nic_rx_errors_delta} missed=${s.nic_rx_missed_errors_delta} crc=${s.nic_rx_crc_errors_delta}
-selected_bw=${s.selected_bandwidth_mhz}MHz detected_bw=${s.detected_bandwidth_mhz||'unknown'}MHz mismatch=${s.selected_detected_mismatch} config_generation=${configGeneration}
-last_seq=${fmtInt(s.last_seq_no)} frame=${fmtInt(s.last_frame_id)} sample0=${fmtInt(s.last_sample0)} time_count=${fmtInt(s.last_time_count)} waveform_updates=${s.waveform_updates} ws_frames=${wsFrames}
-last_spec_seq=${fmtInt(s.last_spec_seq_no)} spec_frame=${fmtInt(s.last_spec_frame_id)} spec_sample0=${fmtInt(s.last_spec_sample0)} chan0=${fmtInt(s.last_spec_chan0)} chan_count=${fmtInt(s.last_spec_chan_count)} spectrum_updates=${s.spectrum_updates} spec_ws_frames=${specFrames}
-spec_preview=${JSON.stringify(specPreview||{},null,2)}
-per_flow=${JSON.stringify(s.per_flow||[],null,2)}
-per_worker=${JSON.stringify(s.per_worker||[],null,2)}
-last_error=${s.last_error||''}`;
-}
-function ingestState(state){
-  config=state.config;
-  configGeneration=state.config_generation||configGeneration;
-  stats=state.stats;
-  specPreview=state.spec_preview||null;
-  waveformLive=!!state.waveform_live;
-  spectrumLive=!!state.spectrum_live;
-  waveformAgeMs=state.waveform_age_ms??null;
-  spectrumAgeMs=state.spectrum_age_ms??null;
-  if(!waveformLive){waveform=null;requestAnimationFrame(drawTime);}
-  if(!spectrumLive){spectrum=null;waterfallRows=[];resetPhaseHistory('no live SPEC spectrum stream');requestAnimationFrame(drawSpectrum);}
-  syncControls(config);
-  renderStats(stats);
-}
-async function poll(){try{const res=await fetch('/api/state',{cache:'no-store'});ingestState(await res.json());}catch(e){}finally{setTimeout(poll,1000);}}
-window.addEventListener('resize',()=>{requestAnimationFrame(drawTime);requestAnimationFrame(drawSpectrum);});
-async function initPage(){
-  try{const res=await fetch('/api/state',{cache:'no-store'});ingestState(await res.json());}catch(e){}
-  connectWs();connectSpectrumWs();poll();requestAnimationFrame(drawTime);requestAnimationFrame(drawSpectrum);
-}
-initPage();
-</script>
-</body>
-</html>
-"#;
+const HTML: &str = include_str!("../static/index.html");
+const GRIDSTACK_JS: &str = include_str!("../static/gridstack-all.js");
+const GRIDSTACK_CSS: &str = include_str!("../static/gridstack.min.css");
+const ECHARTS_JS: &str = concat!(
+    include_str!("../static/echarts.part1.js"),
+    include_str!("../static/echarts.part2.js"),
+    include_str!("../static/echarts.part3.js"),
+);
+const STAGE29_MATH_JS: &str = include_str!("../static/stage29_math.js");

@@ -19,6 +19,13 @@ from .packet import (
     T510PacketHeader,
 )
 from .t510_fengine import T510FEngine
+from .stage29 import (
+    DacChannelConfig,
+    FlowDestination,
+    Stage29Config,
+    Stage29Controller,
+    Stage29Mode,
+)
 
 __all__ = [
     "HEADER_BYTES",
@@ -40,4 +47,9 @@ __all__ = [
     "STREAM_TIME",
     "T510FEngine",
     "T510PacketHeader",
+    "DacChannelConfig",
+    "FlowDestination",
+    "Stage29Config",
+    "Stage29Controller",
+    "Stage29Mode",
 ]
