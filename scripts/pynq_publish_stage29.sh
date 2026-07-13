@@ -13,7 +13,7 @@ rsync -av --delete -e "${RSYNC_RSH}" --exclude='__pycache__/' \
   "${ROOT}/overlay" "${ROOT}/python" "${TARGET}:${BRINGUP}/"
 rsync -av --delete -e "${RSYNC_RSH}" --exclude='__pycache__/' \
   "${ROOT}/overlay" "${ROOT}/python" "${TARGET}:${JUPYTER}/"
-rsync -av --delete -e "${RSYNC_RSH}" \
+rsync -av --delete -e "${RSYNC_RSH}" --exclude='.ipynb_checkpoints/' \
   "${ROOT}/notebooks/" "${TARGET}:${JUPYTER}/notebooks/"
 rsync -av -e "${RSYNC_RSH}" \
   "${ROOT}/README.md" "${TARGET}:${JUPYTER}/README.md"
@@ -28,7 +28,7 @@ rsync -av --delete --delete-excluded -e "${RSYNC_RSH}" \
   --exclude='*' \
   "${ROOT}/scripts/" "${TARGET}:${BRINGUP}/scripts/"
 ssh ${SSH_OPTS} "${TARGET}" \
-  "rm -rf '${JUPYTER}/.ipynb_checkpoints' '${JUPYTER}/docs' '${JUPYTER}/reports' '${JUPYTER}/scripts';
+  "rm -rf '${JUPYTER}/.ipynb_checkpoints' '${JUPYTER}/docs' '${JUPYTER}/reports' '${JUPYTER}/scripts' 2>/dev/null || true;
    find '${JUPYTER}' -maxdepth 1 -type f \( -name '*.ipynb' -o -name '*.html' \) -delete;
    rm -f '${BRINGUP}/regtest.py' '${BRINGUP}/t510_fengine.bit' '${BRINGUP}/t510_fengine.hwh' '${BRINGUP}/t510_fengine.manifest.txt' '${BRINGUP}/t510_fengine.tcl'"
 ssh ${SSH_OPTS} "${TARGET}" "cd '${BRINGUP}' && sha256sum overlay/t510_fengine.bit"

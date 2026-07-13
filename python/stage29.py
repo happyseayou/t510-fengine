@@ -28,7 +28,28 @@ DAC_AMPLITUDE_FULL_SCALE = 8192
 DAC_SAMPLE_RATE_HZ = 245_760_000.0
 DEFAULT_RECEIVER_IP = "10.0.1.16"
 DEFAULT_RECEIVER_MAC = "08:c0:eb:d5:95:b2"
+DEFAULT_SOURCE_IP = "10.0.1.1"
+DEFAULT_SOURCE_MAC = "02:00:00:00:00:01"
+TIME_SRC_PORT_BASE = 4000
+SPEC_SRC_PORT_BASE = 4008
 _MAC_RE = re.compile(r"^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
+
+
+def _normalize_source_ip(value: str) -> str:
+    address = IPv4Address(str(value).strip())
+    if address.is_unspecified or address.is_multicast or int(address) == 0xFFFF_FFFF:
+        raise ValueError("source_ip must be a unicast IPv4 address")
+    return str(address)
+
+
+def _normalize_source_mac(value: str) -> str:
+    mac = str(value).strip().lower()
+    if not _MAC_RE.fullmatch(mac):
+        raise ValueError("source_mac must use six colon-separated hexadecimal octets")
+    octets = bytes.fromhex(mac.replace(":", ""))
+    if not any(octets) or octets[0] & 0x01:
+        raise ValueError("source_mac must be a non-zero unicast MAC address")
+    return mac
 
 
 class Stage29Mode(str, Enum):
@@ -52,25 +73,30 @@ class Stage29Mode(str, Enum):
 
 @dataclass(frozen=True)
 class FlowDestination:
-    """One production TX endpoint destination; source identity stays frozen."""
+    """One production TX endpoint destination and its independent source port."""
 
     enabled: bool = True
     ip: str = DEFAULT_RECEIVER_IP
     mac: str = DEFAULT_RECEIVER_MAC
     destination_port: int = TIME_DST_PORT_BASE
+    source_port: int = TIME_SRC_PORT_BASE
 
     def __post_init__(self) -> None:
         ip = str(IPv4Address(str(self.ip).strip()))
         mac = str(self.mac).strip().lower()
         port = int(self.destination_port)
+        source_port = int(self.source_port)
         if not _MAC_RE.fullmatch(mac):
             raise ValueError("destination MAC must use six colon-separated hexadecimal octets")
         if not 1 <= port <= 0xFFFF:
             raise ValueError("destination_port must be within 1..65535")
+        if not 1 <= source_port <= 0xFFFF:
+            raise ValueError("source_port must be within 1..65535")
         object.__setattr__(self, "enabled", bool(self.enabled))
         object.__setattr__(self, "ip", ip)
         object.__setattr__(self, "mac", mac)
         object.__setattr__(self, "destination_port", port)
+        object.__setattr__(self, "source_port", source_port)
 
 
 @dataclass(frozen=True)
@@ -103,11 +129,23 @@ class DacChannelConfig:
 
 
 def default_time_destinations() -> tuple[FlowDestination, ...]:
-    return tuple(FlowDestination(destination_port=TIME_DST_PORT_BASE + flow) for flow in range(8))
+    return tuple(
+        FlowDestination(
+            destination_port=TIME_DST_PORT_BASE + flow,
+            source_port=TIME_SRC_PORT_BASE + flow,
+        )
+        for flow in range(TIME_FLOW_COUNT)
+    )
 
 
 def default_spec_destinations() -> tuple[FlowDestination, ...]:
-    return tuple(FlowDestination(destination_port=SPEC_DST_PORT_BASE + flow) for flow in range(16))
+    return tuple(
+        FlowDestination(
+            destination_port=SPEC_DST_PORT_BASE + flow,
+            source_port=SPEC_SRC_PORT_BASE + flow,
+        )
+        for flow in range(SPEC_FLOW_COUNT)
+    )
 
 
 def default_dac_channels() -> tuple[DacChannelConfig, ...]:
@@ -119,6 +157,9 @@ class Stage29Config:
     bandwidth_mhz: int = 100
     mode: Stage29Mode | str = Stage29Mode.TIME_SPEC
     center_mhz: float = 100.0
+    board_id: int = 0
+    source_ip: str = DEFAULT_SOURCE_IP
+    source_mac: str = DEFAULT_SOURCE_MAC
     time_destinations: tuple[FlowDestination, ...] = default_time_destinations()
     spec_destinations: tuple[FlowDestination, ...] = default_spec_destinations()
     dac_channels: tuple[DacChannelConfig, ...] = default_dac_channels()
@@ -141,6 +182,11 @@ class Stage29Config:
         center = float(self.center_mhz)
         if not math.isfinite(center) or not 50.0 <= center <= 350.0:
             raise ValueError("center_mhz must be finite and within the 50..350 MHz science band")
+        board_id = int(self.board_id)
+        if not 0 <= board_id <= 0xFFFF:
+            raise ValueError("board_id must be within 0..65535")
+        source_ip = _normalize_source_ip(self.source_ip)
+        source_mac = _normalize_source_mac(self.source_mac)
         time_destinations = tuple(
             item if isinstance(item, FlowDestination) else FlowDestination(**dict(item))
             for item in self.time_destinations
@@ -171,6 +217,9 @@ class Stage29Config:
         object.__setattr__(self, "bandwidth_mhz", bandwidth)
         object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "center_mhz", center)
+        object.__setattr__(self, "board_id", board_id)
+        object.__setattr__(self, "source_ip", source_ip)
+        object.__setattr__(self, "source_mac", source_mac)
         object.__setattr__(self, "time_destinations", time_destinations)
         object.__setattr__(self, "spec_destinations", spec_destinations)
         object.__setattr__(self, "dac_channels", dac_channels)
@@ -267,7 +316,7 @@ class Stage29Controller:
                 "ip": destination.ip,
                 "mac": destination.mac,
                 "dst_port": destination.destination_port,
-                "src_port": 4000 + endpoint_id,
+                "src_port": destination.source_port,
             })
         for flow, destination in enumerate(config.spec_destinations):
             endpoints.append({
@@ -276,10 +325,63 @@ class Stage29Controller:
                 "ip": destination.ip,
                 "mac": destination.mac,
                 "dst_port": destination.destination_port,
-                "src_port": 4008 + flow,
+                "src_port": destination.source_port,
             })
-        self.require_core().configure_tx_endpoints(endpoints)
+        core = self.require_core()
+        core.configure_tx_endpoints(endpoints)
+        readback = core.read_tx_endpoints(range(TIME_FLOW_COUNT + SPEC_FLOW_COUNT))
+        mismatches: list[str] = []
+        for requested, actual in zip(endpoints, readback):
+            different = [
+                key for key in ("id", "enable", "ip", "mac", "dst_port", "src_port")
+                if requested[key] != actual.get(key)
+            ]
+            if different:
+                mismatches.append(
+                    f"EP{requested['id']} fields={','.join(different)} "
+                    f"requested={requested} readback={actual}"
+                )
+        if len(readback) != len(endpoints):
+            mismatches.append(f"endpoint count requested={len(endpoints)} readback={len(readback)}")
+        if mismatches:
+            raise RuntimeError("Stage 29 TX endpoint readback mismatch: " + "; ".join(mismatches))
         return endpoints
+
+    @staticmethod
+    def _fallback_source_port(config: Stage29Config) -> int:
+        groups = []
+        if config.needs_time:
+            groups.append(config.time_destinations)
+        if config.needs_spec:
+            groups.append(config.spec_destinations)
+        for group in groups:
+            for destination in group:
+                if destination.enabled:
+                    return destination.source_port
+        return groups[0][0].source_port
+
+    @staticmethod
+    def _flow_tuple_warnings(config: Stage29Config, endpoints: list[dict[str, Any]]) -> list[str]:
+        seen: dict[tuple[str, int, str, int], int] = {}
+        warnings: list[str] = []
+        for endpoint in endpoints:
+            if not endpoint["enable"]:
+                continue
+            key = (
+                config.source_ip,
+                int(endpoint["src_port"]),
+                str(endpoint["ip"]),
+                int(endpoint["dst_port"]),
+            )
+            previous = seen.get(key)
+            if previous is not None:
+                warnings.append(
+                    f"EP{previous} and EP{endpoint['id']} share UDP tuple "
+                    f"{key[0]}:{key[1]} -> {key[2]}:{key[3]}; RSS separation may be reduced"
+                )
+            else:
+                seen[key] = int(endpoint["id"])
+        return warnings
 
     def _write_dac_channels(
         self,
@@ -333,6 +435,7 @@ class Stage29Controller:
         if fresh_download or self.core is None:
             self.connect(download=True)
         core = self.require_core()
+        core.stop()
         observation = core.apply_mts_locked_observation_config(
             observe_center_hz=config.center_mhz * 1_000_000.0,
             dac_signal_hz=config.center_mhz * 1_000_000.0,
@@ -357,17 +460,42 @@ class Stage29Controller:
             output_mode=config.mode.value,
             dst_ip=DEFAULT_RECEIVER_IP,
             dst_mac=DEFAULT_RECEIVER_MAC,
+            src_ip=config.source_ip,
+            src_mac=config.source_mac,
             clear_counters=True,
             start=False,
         )
+        requested_source = {
+            "ip": config.source_ip,
+            "mac": config.source_mac,
+            "src_port": self._fallback_source_port(config),
+        }
+        source_readback = core.configure_tx_source_identity(**requested_source)
+        if requested_source != source_readback:
+            raise RuntimeError(
+                "Stage 29 TX source identity readback mismatch: "
+                f"requested={requested_source} readback={source_readback}"
+            )
         endpoints = self._program_destinations(config)
+        endpoint_readback = core.read_tx_endpoints(range(TIME_FLOW_COUNT + SPEC_FLOW_COUNT))
+        flow_warnings = self._flow_tuple_warnings(config, endpoints)
         dac = self._write_dac_channels(config.dac_channels, center_mhz=config.center_mhz)
+        board_id_readback = core.configure_board_id(config.board_id)
+        if board_id_readback != config.board_id:
+            raise RuntimeError(
+                "Stage 29 board_id readback mismatch: "
+                f"requested={config.board_id} readback={board_id_readback}"
+            )
         core.start()
         self.config = config
         return {
             "observation": observation,
             "science": science,
+            "board_identity": {"requested": config.board_id, "readback": board_id_readback},
+            "source_identity": {"requested": requested_source, "readback": source_readback},
             "endpoints": endpoints,
+            "endpoint_readback": endpoint_readback,
+            "flow_warnings": flow_warnings,
             "dac": dac,
             "status": core.read_status(),
         }
@@ -383,6 +511,9 @@ class Stage29Controller:
             bandwidth_mhz=self.config.bandwidth_mhz,
             mode=self.config.mode,
             center_mhz=self.config.center_mhz,
+            board_id=self.config.board_id,
+            source_ip=self.config.source_ip,
+            source_mac=self.config.source_mac,
             time_destinations=self.config.time_destinations,
             spec_destinations=self.config.spec_destinations,
             dac_channels=channels,
@@ -432,6 +563,8 @@ __all__ = [
     "DAC_SAMPLE_RATE_HZ",
     "DEFAULT_RECEIVER_IP",
     "DEFAULT_RECEIVER_MAC",
+    "DEFAULT_SOURCE_IP",
+    "DEFAULT_SOURCE_MAC",
     "DacChannelConfig",
     "EXPECTED_CORE_VERSION",
     "FlowDestination",
@@ -444,11 +577,13 @@ __all__ = [
     "PFB_TIME_COUNT",
     "SPEC_DST_PORT_BASE",
     "SPEC_FLOW_COUNT",
+    "SPEC_SRC_PORT_BASE",
     "Stage29Config",
     "Stage29Controller",
     "Stage29Mode",
     "TIME_DST_PORT_BASE",
     "TIME_FLOW_COUNT",
+    "TIME_SRC_PORT_BASE",
     "default_dac_channels",
     "default_spec_destinations",
     "default_time_destinations",

@@ -948,7 +948,7 @@ mod tests {
     fn synthetic_payload(time_count: u16, seq: u32, sample0: u64) -> Vec<u8> {
         let mut out = Vec::new();
         push_word(&mut out, ((MAGIC as u64) << 32) | (2u64 << 16) | HEADER_BYTES as u64);
-        push_word(&mut out, (1u64 << 32) | (1u64 << 16) | 0x0006);
+        push_word(&mut out, (37u64 << 48) | (1u64 << 32) | (1u64 << 16) | 0x0006);
         push_word(&mut out, 0);
         push_word(&mut out, 7);
         push_word(&mut out, sample0);
@@ -1009,6 +1009,7 @@ mod tests {
         let header = parse_t510_header(&payload).unwrap();
         assert_eq!(header.magic, MAGIC);
         assert_eq!(header.version, 2);
+        assert_eq!(header.board_id, 37);
         assert_eq!(header.stream_type, STREAM_TIME);
         assert_eq!(header.time_count, 64);
         assert_eq!(header.ninput, 8);

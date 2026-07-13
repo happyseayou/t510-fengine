@@ -33,6 +33,31 @@ def _mac_to_int(value: str) -> int:
     return int(value.replace(":", "").replace("-", ""), 16) & 0xFFFF_FFFF_FFFF
 
 
+def _normalize_unicast_ipv4(value: str | IPv4Address) -> str:
+    address = IPv4Address(value)
+    if address.is_unspecified or address.is_multicast or int(address) == 0xFFFF_FFFF:
+        raise ValueError("source IP must be a unicast IPv4 address")
+    return str(address)
+
+
+def _normalize_unicast_mac(value: str) -> str:
+    cleaned = str(value).strip().lower().replace(":", "").replace("-", "")
+    if len(cleaned) != 12:
+        raise ValueError("source MAC must contain exactly six octets")
+    try:
+        mac = int(cleaned, 16)
+    except ValueError as exc:
+        raise ValueError("source MAC must contain only hexadecimal octets") from exc
+    if mac == 0 or (mac >> 40) & 0x01:
+        raise ValueError("source MAC must be a non-zero unicast MAC address")
+    return ":".join(cleaned[index:index + 2] for index in range(0, 12, 2))
+
+
+def _mac_from_int(value: int) -> str:
+    cleaned = f"{int(value) & 0xFFFF_FFFF_FFFF:012x}"
+    return ":".join(cleaned[index:index + 2] for index in range(0, 12, 2))
+
+
 class ObservationSpectrumStabilizer:
     """Stateful display stabilizer for the astronomer observation console."""
 
@@ -678,8 +703,9 @@ class T510FEngine:
         "pfb_contract": "4-tap programmable Q1.17 coefficient bank, stopped/idle commit only",
         "fixed_runtime_contract": (
             "external_10mhz + external_pps",
-            "TIME UDP 4300..4307",
-            "SPEC UDP 4308..4323",
+            "default TIME destination UDP 4300..4307",
+            "default SPEC destination UDP 4308..4323",
+            "board-global source IP/MAC plus per-endpoint source UDP ports",
             "8 logical RFDC inputs",
         ),
         "excluded_from_gate": (
@@ -4267,14 +4293,16 @@ class T510FEngine:
         output_mode: str | int = "time_spec",
         dst_ip: str = "10.0.1.16",
         dst_mac: str = "08:c0:eb:d5:95:b2",
+        src_ip: str = "10.0.1.1",
+        src_mac: str = "02:00:00:00:00:01",
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Configure one of the five frozen Stage 29 production profiles.
 
-        Wire layout, source identity, port allocation, flow counts, PFB layout,
-        synchronization policy, and diagnostic controls are intentionally not
-        caller-configurable here.  Lower-level bring-up APIs remain available
-        separately for historical diagnostics.
+        Wire layout, port allocation, flow counts, PFB layout, synchronization
+        policy, and diagnostic controls remain fixed.  The board-global CMAC
+        source IP/MAC are production configuration; endpoint source ports are
+        applied by :class:`Stage29Controller` after this base profile.
         """
         mode_name, mode_code = self._normalize_science_output_mode(output_mode)
         bandwidth = self._normalize_science_bandwidth_mhz(bandwidth_mhz)
@@ -4290,8 +4318,10 @@ class T510FEngine:
                 "Stage 29 production supports 100MHz TIME_ONLY/SPEC_ONLY/TIME_SPEC "
                 "and 200MHz TIME_ONLY/SPEC_ONLY"
             )
+        normalized_src_ip = _normalize_unicast_ipv4(src_ip)
+        normalized_src_mac = _normalize_unicast_mac(src_mac)
         forbidden = {
-            "src_ip", "src_mac", "time_dst_port_base", "spec_dst_port_base",
+            "time_dst_port_base", "spec_dst_port_base",
             "time_src_port_base", "spec_src_port_base", "time_endpoint_base",
             "spec_endpoint_base", "time_flow_count", "spec_route_count",
             "spec_chan_count", "spec_time_count", "spec_chan0_stride",
@@ -4311,8 +4341,8 @@ class T510FEngine:
             output_mode=mode_name,
             dst_ip=str(dst_ip),
             dst_mac=str(dst_mac),
-            src_ip="10.0.1.1",
-            src_mac="02:00:00:00:00:01",
+            src_ip=normalized_src_ip,
+            src_mac=normalized_src_mac,
             time_dst_port_base=4300,
             spec_dst_port_base=4308,
             time_src_port_base=4000,
@@ -6131,7 +6161,10 @@ class T510FEngine:
         for index, endpoint in enumerate(endpoints):
             endpoint_id = int(endpoint.get("id", index))
             enable = bool(endpoint.get("enable", True))
-            if not enable:
+            has_full_config = "ip" in endpoint and "mac" in endpoint and (
+                "dst_port" in endpoint or "port" in endpoint
+            )
+            if not enable and not has_full_config:
                 if not 0 <= endpoint_id < self.TX_ENDPOINT_COUNT:
                     raise ValueError(f"endpoint_id must be in range 0..{self.TX_ENDPOINT_COUNT - 1}")
                 self.ctrl.write(self.regs.TX_ENDPOINT_INDIRECT_INDEX, endpoint_id)
@@ -6145,6 +6178,72 @@ class T510FEngine:
                 dst_port=int(endpoint.get("dst_port", endpoint.get("port", 4100 + endpoint_id))),
                 src_port=int(endpoint.get("src_port", self.ctrl.read(self.regs.SRC_UDP_PORT))),
             )
+
+    def configure_tx_source_identity(self, *, ip: str, mac: str, src_port: int) -> dict[str, Any]:
+        """Set and read back the board-global CMAC source identity.
+
+        ``src_port`` mirrors the first active Stage 29 endpoint for legacy TX
+        paths.  TIME/SPEC production frames use their endpoint-table source
+        ports instead.
+        """
+        normalized_ip = _normalize_unicast_ipv4(ip)
+        normalized_mac = _normalize_unicast_mac(mac)
+        port = int(src_port)
+        if not 1 <= port <= 0xFFFF:
+            raise ValueError("src_port must be within 1..65535")
+        self.ctrl.write(self.regs.SRC_IP, _ipv4_to_int(normalized_ip))
+        mac_value = _mac_to_int(normalized_mac)
+        self.ctrl.write(self.regs.SRC_MAC_LO, mac_value & 0xFFFF_FFFF)
+        self.ctrl.write(self.regs.SRC_MAC_HI, (mac_value >> 32) & 0xFFFF)
+        self.ctrl.write(self.regs.SRC_UDP_PORT, port)
+        return self.read_tx_source_identity()
+
+    def configure_board_id(self, board_id: int) -> int:
+        """Set and verify the 16-bit identity carried in every T510 packet."""
+        value = int(board_id)
+        if not 0 <= value <= 0xFFFF:
+            raise ValueError("board_id must be within 0..65535")
+        self.ctrl.write(self.regs.BOARD_ID, value)
+        readback = int(self.ctrl.read(self.regs.BOARD_ID)) & 0xFFFF
+        if readback != value:
+            raise RuntimeError(
+                f"board_id readback mismatch: requested={value} readback={readback}"
+            )
+        return readback
+
+    def read_tx_source_identity(self) -> dict[str, Any]:
+        ip_value = int(self.ctrl.read(self.regs.SRC_IP)) & 0xFFFF_FFFF
+        mac_value = (
+            (int(self.ctrl.read(self.regs.SRC_MAC_HI)) & 0xFFFF) << 32
+            | (int(self.ctrl.read(self.regs.SRC_MAC_LO)) & 0xFFFF_FFFF)
+        )
+        return {
+            "ip": str(IPv4Address(ip_value)),
+            "mac": _mac_from_int(mac_value),
+            "src_port": int(self.ctrl.read(self.regs.SRC_UDP_PORT)) & 0xFFFF,
+        }
+
+    def read_tx_endpoints(self, endpoint_ids: Iterable[int] | None = None) -> list[dict[str, Any]]:
+        ids = range(self.TX_ENDPOINT_COUNT) if endpoint_ids is None else endpoint_ids
+        result: list[dict[str, Any]] = []
+        for value in ids:
+            endpoint_id = int(value)
+            if not 0 <= endpoint_id < self.TX_ENDPOINT_COUNT:
+                raise ValueError(f"endpoint_id must be in range 0..{self.TX_ENDPOINT_COUNT - 1}")
+            self.ctrl.write(self.regs.TX_ENDPOINT_INDIRECT_INDEX, endpoint_id)
+            mac_value = (
+                (int(self.ctrl.read(self.regs.TX_ENDPOINT_INDIRECT_MAC_HI)) & 0xFFFF) << 32
+                | (int(self.ctrl.read(self.regs.TX_ENDPOINT_INDIRECT_MAC_LO)) & 0xFFFF_FFFF)
+            )
+            result.append({
+                "id": endpoint_id,
+                "enable": bool(int(self.ctrl.read(self.regs.TX_ENDPOINT_INDIRECT_ENABLE)) & 0x1),
+                "ip": str(IPv4Address(int(self.ctrl.read(self.regs.TX_ENDPOINT_INDIRECT_IP)) & 0xFFFF_FFFF)),
+                "mac": _mac_from_int(mac_value),
+                "dst_port": int(self.ctrl.read(self.regs.TX_ENDPOINT_INDIRECT_DST_PORT)) & 0xFFFF,
+                "src_port": int(self.ctrl.read(self.regs.TX_ENDPOINT_INDIRECT_SRC_PORT)) & 0xFFFF,
+            })
+        return result
 
     def configure_spec_routes(self, routes: list[Mapping[str, Any]], *, clear_unlisted: bool = True) -> None:
         if len(routes) > self.TX_SPEC_ROUTE_COUNT:

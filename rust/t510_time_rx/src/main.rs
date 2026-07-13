@@ -339,6 +339,7 @@ struct WorkerStats {
     ring_fill_blocks: u32,
     ring_fill_percent: f64,
     ring_freeze_q_count: u64,
+    last_board_id: Option<u16>,
     last_seq_no: Option<u32>,
     last_frame_id: Option<u64>,
     last_sample0: Option<u64>,
@@ -385,6 +386,7 @@ impl WorkerStats {
             ring_fill_blocks: 0,
             ring_fill_percent: 0.0,
             ring_freeze_q_count: 0,
+            last_board_id: None,
             last_seq_no: None,
             last_frame_id: None,
             last_sample0: None,
@@ -468,6 +470,7 @@ struct ReceiverStats {
     nic_rx_missed_errors_delta: u64,
     nic_rx_crc_errors_delta: u64,
     worker_ring_drops: u64,
+    last_board_id: Option<u16>,
     last_seq_no: Option<u32>,
     last_frame_id: Option<u64>,
     last_sample0: Option<u64>,
@@ -561,6 +564,7 @@ impl ReceiverStats {
             nic_rx_missed_errors_delta: 0,
             nic_rx_crc_errors_delta: 0,
             worker_ring_drops: 0,
+            last_board_id: None,
             last_seq_no: None,
             last_frame_id: None,
             last_sample0: None,
@@ -2864,6 +2868,7 @@ impl ReceiverRuntime {
         self.stats.time_bytes = self.stats.time_bytes.saturating_add(udp_payload.len() as u64);
         self.rate_time_packets = self.rate_time_packets.saturating_add(1);
         self.rate_time_bytes = self.rate_time_bytes.saturating_add(udp_payload.len() as u64);
+        self.stats.last_board_id = Some(header.board_id);
         self.stats.last_time_count = Some(header.time_count);
 
         let selected = self.config.bandwidth_mode();
@@ -2937,6 +2942,7 @@ impl ReceiverRuntime {
         self.stats.spec_bytes = self.stats.spec_bytes.saturating_add(udp_payload.len() as u64);
         self.rate_spec_packets = self.rate_spec_packets.saturating_add(1);
         self.rate_spec_bytes = self.rate_spec_bytes.saturating_add(udp_payload.len() as u64);
+        self.stats.last_board_id = Some(header.board_id);
         self.stats.last_spec_seq_no = Some(header.seq_no);
         self.stats.last_spec_frame_id = Some(header.frame_id);
         self.stats.last_spec_sample0 = Some(header.sample0);
@@ -3420,6 +3426,7 @@ impl FanoutWorkerRuntime {
         self.stats.time_bytes = self.stats.time_bytes.saturating_add(udp_payload.len() as u64);
         self.rate_time_packets = self.rate_time_packets.saturating_add(1);
         self.rate_time_bytes = self.rate_time_bytes.saturating_add(udp_payload.len() as u64);
+        self.stats.last_board_id = Some(header.board_id);
         self.stats.last_seq_no = Some(header.seq_no);
         self.stats.last_frame_id = Some(header.frame_id);
         self.stats.last_sample0 = Some(header.sample0);
@@ -3484,6 +3491,7 @@ impl FanoutWorkerRuntime {
         self.stats.spec_bytes = self.stats.spec_bytes.saturating_add(udp_payload.len() as u64);
         self.rate_spec_packets = self.rate_spec_packets.saturating_add(1);
         self.rate_spec_bytes = self.rate_spec_bytes.saturating_add(udp_payload.len() as u64);
+        self.stats.last_board_id = Some(header.board_id);
         self.stats.last_spec_seq_no = Some(header.seq_no);
         self.stats.last_spec_frame_id = Some(header.frame_id);
         self.stats.last_spec_sample0 = Some(header.sample0);
@@ -3853,6 +3861,7 @@ fn aggregate_fanout_stats(
     stats.ring_freeze_q_count = 0;
     stats.worker_ring_drops = 0;
     stats.active_worker_count = 0;
+    stats.last_board_id = None;
     stats.last_seq_no = None;
     stats.last_frame_id = None;
     stats.last_sample0 = None;
@@ -3926,6 +3935,9 @@ fn aggregate_fanout_stats(
         stats.ring_freeze_q_count = stats.ring_freeze_q_count.saturating_add(worker.ring_freeze_q_count);
         if worker.rx_processed_packets_per_sec > 0.5 || worker.spec_processed_packets_per_sec > 0.5 {
             stats.active_worker_count = stats.active_worker_count.saturating_add(1);
+        }
+        if worker.last_board_id.is_some() {
+            stats.last_board_id = worker.last_board_id;
         }
         if worker.last_seq_no.is_some() {
             stats.last_seq_no = worker.last_seq_no;
@@ -5015,6 +5027,7 @@ mod tests {
         worker0.rx_processed_packets_per_sec = 10.0;
         worker0.rx_processed_gbps = 0.006656;
         worker0.ring_drops = 1;
+        worker0.last_board_id = Some(37);
         worker0.last_time_count = Some(DEFAULT_TIME_COUNT);
 
         let mut worker1 = WorkerStats::new(1);
@@ -5022,6 +5035,7 @@ mod tests {
         worker1.time_bytes = 166_400;
         worker1.rx_processed_packets_per_sec = 20.0;
         worker1.rx_processed_gbps = 0.013312;
+        worker1.last_board_id = Some(37);
         worker1.last_time_count = Some(DEFAULT_TIME_COUNT);
 
         let mut flow0 = FlowStats::new(0, 4300, 4000);
@@ -5049,6 +5063,7 @@ mod tests {
         assert_eq!(stats.time_packets, 30);
         assert_eq!(stats.worker_ring_drops, 1);
         assert_eq!(stats.active_worker_count, 2);
+        assert_eq!(stats.last_board_id, Some(37));
         assert_eq!(stats.rx_processed_packets_per_sec, 30.0);
         assert_eq!(stats.detected_bandwidth_mhz, Some(200));
         assert_eq!(stats.per_flow[0].time_packets, 10);
@@ -5149,6 +5164,11 @@ mod tests {
 
         flows[1].detected_bandwidth_mhz = Some(200);
         assert_eq!(per_flow_detected_consensus(&flows), None);
+    }
+
+    #[test]
+    fn web_summary_displays_parsed_board_id() {
+        assert!(HTML.contains("metric('Board ID',value.last_board_id??'--')"));
     }
 
     #[test]
