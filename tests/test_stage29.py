@@ -94,6 +94,23 @@ class FakeCore:
     def read_status(self):
         return {"core_version": EXPECTED_CORE_VERSION, "board_id": self.board_id}
 
+    def read_dac_channels(self, *, dac_sample_rate_hz):
+        return {
+            "enable_mask": 0,
+            "dac_phase_epoch": 9,
+            "channels": [
+                {
+                    "channel": channel,
+                    "enabled": False,
+                    "phase_step": 0,
+                    "baseband_frequency_hz": 0.0,
+                    "amplitude_code": 0,
+                    "phase_deg": 0.0,
+                }
+                for channel in range(8)
+            ],
+        }
+
     dac_phase_step_from_frequency = staticmethod(T510FEngine.dac_phase_step_from_frequency)
     _wrap_phase0_word = staticmethod(T510FEngine._wrap_phase0_word)
 
@@ -254,6 +271,18 @@ class Stage29ConfigTests(unittest.TestCase):
         self.assertEqual(result["endpoint_readback"], core.endpoints)
         self.assertTrue(core.started)
 
+    def test_prepare_leaves_stream_stopped_and_apply_keeps_legacy_start(self) -> None:
+        core = FakeCore()
+        controller = Stage29Controller("overlay/t510_fengine.bit", core=core)  # type: ignore[arg-type]
+        prepared = controller.prepare(Stage29Config(), fresh_download=False)
+        self.assertFalse(prepared["started"])
+        self.assertFalse(core.started)
+        self.assertNotIn(("start",), core.events)
+        applied = controller.apply(Stage29Config(), fresh_download=False)
+        self.assertTrue(applied["started"])
+        self.assertTrue(core.started)
+        self.assertEqual(core.events.count(("start",)), 1)
+
     def test_identity_or_endpoint_readback_failure_never_starts(self) -> None:
         for failure in ("board", "source", "endpoint"):
             with self.subTest(failure=failure):
@@ -330,6 +359,38 @@ class Stage29ConfigTests(unittest.TestCase):
         controller.apply_dac_live(controller.config.dac_channels)
         self.assertEqual(controller.config.board_id, 23)
         self.assertEqual(core.board_calls, 0)
+
+    def test_stateless_live_dac_apply_accepts_explicit_center(self) -> None:
+        core = FakeCore()
+        controller = Stage29Controller("overlay/t510_fengine.bit", core=core)  # type: ignore[arg-type]
+        channels = tuple(
+            DacChannelConfig(rf_frequency_mhz=100.01, phase_deg=channel)
+            for channel in range(8)
+        )
+        result = controller.apply_dac_live(channels, center_mhz=100.0)
+        self.assertEqual(result["enable_mask"], 0xFF)
+        self.assertEqual(len(result["readback"]["channels"]), 8)
+        self.assertIsNone(controller.config)
+        self.assertNotIn(("start",), core.events)
+
+    def test_dac_register_readback_covers_all_eight_channels(self) -> None:
+        core = FakeStage29FEngine()
+        core.ctrl.values[core.regs.DAC_ENABLE_MASK] = 0xA5
+        core.ctrl.values[core.regs.DAC_PHASE_EPOCH] = 17
+        for channel in range(8):
+            base = core.regs.DAC_CH_BASE + channel * core.regs.DAC_CH_STRIDE
+            core.ctrl.values[base + 0x00] = channel + 1
+            core.ctrl.values[base + 0x04] = 1000 + channel
+            core.ctrl.values[base + 0x08] = channel << 28
+            core.ctrl.values[base + 0x0C] = 200 + channel
+            core.ctrl.values[base + 0x10] = 1
+        result = core.read_dac_channels()
+        self.assertEqual(result["enable_mask"], 0xA5)
+        self.assertEqual(result["dac_phase_epoch"], 17)
+        self.assertEqual(len(result["channels"]), 8)
+        self.assertEqual([row["enabled"] for row in result["channels"]], [True, False, True, False, False, True, False, True])
+        self.assertEqual([row["amplitude_code"] for row in result["channels"]], list(range(1000, 1008)))
+        self.assertAlmostEqual(result["channels"][2]["phase_deg"], 45.0)
 
     def test_low_level_profiles_fix_routes_pfb_and_wire_parameters(self) -> None:
         for mode, clear_time, clear_spec, pfb_control in (("time_only", False, True, 0), ("spec_only", True, False, 3), ("time_spec", False, False, 3)):

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>T510 Board Agent API</title>
+  <style>
+    :root{color-scheme:light dark;--bg:#0b1220;--card:#121c2f;--text:#e7edf7;--muted:#9fb0c8;--line:#2a3a56;--accent:#70b7ff}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,sans-serif}
+    main{max-width:1050px;margin:auto;padding:28px 20px 60px}h1,h2,h3{line-height:1.2}h1{margin-bottom:4px}
+    a{color:var(--accent)}.muted{color:var(--muted)}.warning{border-left:4px solid #ffb454;padding:12px 16px;background:#231b10}
+    section{margin-top:24px;padding:20px;background:var(--card);border:1px solid var(--line);border-radius:10px}
+    table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;padding:9px;border-bottom:1px solid var(--line)}
+    code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}code{color:#b9dcff}
+    pre{overflow:auto;padding:14px;background:#07101e;border:1px solid var(--line);border-radius:7px;white-space:pre-wrap}
+    .method{display:inline-block;min-width:48px;font-weight:700}.get{color:#71d9a2}.post,.put{color:#ffd27a}
+  </style>
+</head>
+<body><main>
+  <h1>T510 Board Agent API</h1>
+  <p class="muted">Stage 30 · stateless Rust service · OpenAPI 3.1 · Agent version 0.1.0</p>
+  <p class="warning"><strong>开发网络安全模式：</strong><code>security_mode=none</code>。服务不校验 token、allowlist 或 mTLS，不启用 CORS。请仅放在受控实验室局域网中。</p>
+
+  <section>
+    <h2>职责边界</h2>
+    <p>Agent 只做配置和控制，并在请求时读取一次累计寄存器快照。它不抓取波形/频谱，不做 FFT、WebSocket、packet capture 或后台轮询，也不计算 packet rate/drop rate（does not calculate packet rates）。Center Hub 应保存相邻 <code>GET /api/v1/status</code> 快照并计算速率。</p>
+    <p>每个硬件请求同步启动一次固定 Python helper。Agent 同一时刻只接受一个自身发起的硬件请求；冲突返回 <code>409 HARDWARE_BUSY</code>。Agent 不管理 Jupyter，也不能阻止 notebook 同时写硬件。</p>
+  </section>
+
+  <section>
+    <h2>发现与文档</h2>
+    <table><thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead><tbody>
+      <tr><td><span class="method get">GET</span></td><td><code>/</code></td><td>302 跳转到本页。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/help</code></td><td>自包含说明页。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><a href="/api/openapi.json"><code>/api/openapi.json</code></a></td><td>OpenAPI 3.1 JSON。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/health/live</code></td><td>Rust 进程存活，不访问 FPGA。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/health/ready</code></td><td>检查本地配置、helper、Python 和 catalog 文件，不访问 FPGA。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/info</code></td><td>device UID、hostname、machine-id、管理 MAC/IP、内存、版本和安全模式。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/capabilities</code></td><td>明确支持和不支持的能力。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/bitstreams</code></td><td>可用的命名 bitstream ID、SHA、core version 和 profile；不公开任意路径入口。</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2>硬件接口</h2>
+    <table><thead><tr><th>方法</th><th>路径</th><th>行为</th></tr></thead><tbody>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/status</code></td><td>一次性读取 core、board ID、streaming、时钟/PPS/QSFP、累计 packet/drop/TX counters、error flags 和 sample0。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/configure</code></td><td>加载 catalog bitstream，配置 profile/source/24 endpoints/board ID；完成后保持停流。重复调用会真实重配。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/start</code></td><td>校验 <code>expected_board_id</code> 后立即启动。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/stop</code></td><td>无条件安全停止并验证 counters 稳定；无需请求体。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/reset</code></td><td>校验 <code>expected_board_id</code>，先安全停止再 reset。</td></tr>
+      <tr><td><span class="method put">PUT</span></td><td><code>/api/v1/dac</code></td><td>校验 board ID，短暂 mute，原子更新完整八路 DAC，phase commit，恢复 enable mask 并回读。</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2>快速检查</h2>
+<pre>curl -s http://192.168.100.117:8010/health/live | jq
+curl -s http://192.168.100.117:8010/health/ready | jq
+curl -s http://192.168.100.117:8010/api/v1/info | jq
+curl -s http://192.168.100.117:8010/api/v1/bitstreams | jq
+curl -s http://192.168.100.117:8010/api/v1/status | jq</pre>
+  </section>
+
+  <section>
+    <h2>配置请求</h2>
+    <p><code>endpoints</code> 必须恰好 24 项，ID 0..23 各一次；0..7 为 <code>TIME</code>，8..23 为 <code>SPEC</code>。profile 的 mode 必须与 enable mask 一致。IP/MAC 必须是确定值，板端不做 DNS/ARP 推断。</p>
+<pre>curl -sS -X POST http://192.168.100.117:8010/api/v1/configure \
+  -H 'Content-Type: application/json' \
+  --data @config/stage30/configure.example.json | jq</pre>
+    <p>启动、停止和 reset：</p>
+<pre>curl -sS -X POST http://192.168.100.117:8010/api/v1/start \
+  -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq
+curl -sS -X POST http://192.168.100.117:8010/api/v1/stop | jq
+curl -sS -X POST http://192.168.100.117:8010/api/v1/reset \
+  -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq</pre>
+  </section>
+
+  <section>
+    <h2>DAC 请求</h2>
+<pre>curl -sS -X PUT http://192.168.100.117:8010/api/v1/dac \
+  -H 'Content-Type: application/json' \
+  --data @config/stage30/dac.example.json | jq</pre>
+    <p>请求必须包含 <code>expected_board_id</code>、<code>center_mhz</code> 和 channel 0..7 的完整八路 <code>enabled</code>、<code>rf_frequency_mhz</code>、<code>amplitude_percent</code>、<code>phase_deg</code>。</p>
+  </section>
+
+  <section>
+    <h2>响应与错误</h2>
+    <p>成功响应格式：<code>{"request_id":"...","result":{...}}</code>。错误格式包含稳定 code：</p>
+<pre>{
+  "request_id": "t510-...",
+  "code": "HARDWARE_BUSY",
+  "message": "another Agent hardware request is running",
+  "details": {}
+}</pre>
+    <p>常见 HTTP 状态：400 schema/JSON，404 unknown bitstream，409 busy/board-state conflict，503 Python/PYNQ/hardware unavailable，504 Python timeout。configure 默认 180 秒，其余硬件请求默认 10 秒。</p>
+  </section>
+</main></body></html>

@@ -1,0 +1,39 @@
+{
+  "bitstream_id": "fengine-0x00010030",
+  "board_id": 1,
+  "profile": {
+    "bandwidth_mhz": 100,
+    "mode": "time_spec",
+    "center_mhz": 100.0
+  },
+  "source": {
+    "ip": "10.0.1.1",
+    "mac": "02:00:00:00:00:01"
+  },
+  "endpoints": [
+    {"endpoint_id": 0, "stream": "TIME", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4000, "destination_port": 4300},
+    {"endpoint_id": 1, "stream": "TIME", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4001, "destination_port": 4301},
+    {"endpoint_id": 2, "stream": "TIME", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4002, "destination_port": 4302},
+    {"endpoint_id": 3, "stream": "TIME", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4003, "destination_port": 4303},
+    {"endpoint_id": 4, "stream": "TIME", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4004, "destination_port": 4304},
+    {"endpoint_id": 5, "stream": "TIME", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4005, "destination_port": 4305},
+    {"endpoint_id": 6, "stream": "TIME", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4006, "destination_port": 4306},
+    {"endpoint_id": 7, "stream": "TIME", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4007, "destination_port": 4307},
+    {"endpoint_id": 8, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4008, "destination_port": 4308},
+    {"endpoint_id": 9, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4009, "destination_port": 4309},
+    {"endpoint_id": 10, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4010, "destination_port": 4310},
+    {"endpoint_id": 11, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4011, "destination_port": 4311},
+    {"endpoint_id": 12, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4012, "destination_port": 4312},
+    {"endpoint_id": 13, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4013, "destination_port": 4313},
+    {"endpoint_id": 14, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4014, "destination_port": 4314},
+    {"endpoint_id": 15, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4015, "destination_port": 4315},
+    {"endpoint_id": 16, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4016, "destination_port": 4316},
+    {"endpoint_id": 17, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4017, "destination_port": 4317},
+    {"endpoint_id": 18, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4018, "destination_port": 4318},
+    {"endpoint_id": 19, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4019, "destination_port": 4319},
+    {"endpoint_id": 20, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4020, "destination_port": 4320},
+    {"endpoint_id": 21, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4021, "destination_port": 4321},
+    {"endpoint_id": 22, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4022, "destination_port": 4322},
+    {"endpoint_id": 23, "stream": "SPEC", "enabled": true, "destination_ip": "10.0.1.16", "destination_mac": "08:c0:eb:d5:95:b2", "source_port": 4023, "destination_port": 4323}
+  ]
+}

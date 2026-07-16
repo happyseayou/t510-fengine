@@ -430,7 +430,48 @@ class Stage29Controller:
             "transaction_duration_us": (finished_ns - started_ns) / 1_000.0,
         }
 
-    def apply(self, config: Stage29Config, *, fresh_download: bool = True) -> dict[str, Any]:
+    def read_dac_channels(self, *, center_mhz: float | None = None) -> dict[str, Any]:
+        """Return register-derived DAC state without relying on ``self.config``."""
+        core = self.require_core()
+        if not hasattr(core, "read_dac_channels"):
+            if self.config is None:
+                raise RuntimeError("DAC readback is unavailable before a configuration is applied")
+            return {
+                "enable_mask": self.config.dac_enable_mask,
+                "dac_phase_epoch": None,
+                "channels": [
+                    {
+                        "channel": channel,
+                        "enabled": item.enabled,
+                        "rf_frequency_mhz": item.rf_frequency_mhz,
+                        "amplitude_percent": item.amplitude,
+                        "phase_deg": item.phase_deg,
+                    }
+                    for channel, item in enumerate(self.config.dac_channels)
+                ],
+                "source": "cached-config",
+            }
+        result = dict(core.read_dac_channels(dac_sample_rate_hz=DAC_SAMPLE_RATE_HZ))
+        center_mhz = self.config.center_mhz if self.config is not None else center_mhz
+        channels = []
+        for row in result.get("channels", []):
+            item = dict(row)
+            item["amplitude_percent"] = float(item.get("amplitude_code", 0)) * 100.0 / DAC_AMPLITUDE_FULL_SCALE
+            if center_mhz is not None:
+                item["rf_frequency_mhz"] = float(center_mhz) + float(item.get("baseband_frequency_hz", 0.0)) / 1.0e6
+            channels.append(item)
+        result["channels"] = channels
+        result["source"] = "register-readback"
+        return result
+
+    def prepare(
+        self,
+        config: Stage29Config,
+        *,
+        fresh_download: bool = True,
+        program_dac: bool = False,
+    ) -> dict[str, Any]:
+        """Apply a production configuration while leaving science streaming stopped."""
         config = config if isinstance(config, Stage29Config) else Stage29Config(**dict(config))
         if fresh_download or self.core is None:
             self.connect(download=True)
@@ -479,14 +520,16 @@ class Stage29Controller:
         endpoints = self._program_destinations(config)
         endpoint_readback = core.read_tx_endpoints(range(TIME_FLOW_COUNT + SPEC_FLOW_COUNT))
         flow_warnings = self._flow_tuple_warnings(config, endpoints)
-        dac = self._write_dac_channels(config.dac_channels, center_mhz=config.center_mhz)
+        dac = self._write_dac_channels(config.dac_channels, center_mhz=config.center_mhz) if program_dac else None
+        if not program_dac:
+            core.set_dac_enable_mask(0)
         board_id_readback = core.configure_board_id(config.board_id)
         if board_id_readback != config.board_id:
             raise RuntimeError(
                 "Stage 29 board_id readback mismatch: "
                 f"requested={config.board_id} readback={board_id_readback}"
             )
-        core.start()
+        core.stop()
         self.config = config
         return {
             "observation": observation,
@@ -497,20 +540,121 @@ class Stage29Controller:
             "endpoint_readback": endpoint_readback,
             "flow_warnings": flow_warnings,
             "dac": dac,
+            "dac_readback": self.read_dac_channels(),
+            "started": False,
             "status": core.read_status(),
         }
 
-    def apply_dac_live(self, dac_channels: Iterable[DacChannelConfig | dict[str, Any]]) -> dict[str, Any]:
-        if self.config is None:
-            raise RuntimeError("apply a Stage 29 production configuration first")
+    def start_immediate(self, *, timeout: float = 2.0) -> dict[str, Any]:
+        """Start the current hardware immediately and prove the streaming bit when available."""
+        core = self.require_core()
+        core.start()
+        deadline = time.monotonic() + max(float(timeout), 0.0)
+        status = core.read_status()
+        if "streaming" not in status:
+            return status
+        while not bool(status.get("streaming")) and time.monotonic() < deadline:
+            time.sleep(0.01)
+            status = core.read_status()
+        if not bool(status.get("streaming")):
+            raise RuntimeError("Stage 29 immediate start did not assert the hardware streaming state")
+        return status
+
+    def stop_and_verify(self, *, settle_seconds: float = 0.1, timeout: float = 2.0) -> dict[str, Any]:
+        """Stop science streaming and prove that packet counters have become stable."""
+        core = self.require_core()
+        core.stop()
+        deadline = time.monotonic() + max(float(timeout), 0.0)
+        previous: dict[str, Any] | None = None
+        counter_keys = ("time_packet_count", "spec_packet_count", "tx_frame_sent_count")
+        while True:
+            status = core.read_status()
+            if "streaming" not in status:
+                return status
+            counters_stable = previous is not None and all(
+                int(status.get(key, 0)) == int(previous.get(key, 0)) for key in counter_keys
+            )
+            if not bool(status.get("streaming")) and counters_stable:
+                return status
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Stage 29 stop could not be proven: {status}")
+            previous = status
+            time.sleep(max(float(settle_seconds), 0.01))
+
+    def discover(self) -> dict[str, Any]:
+        """Discover hardware facts after process restart without downloading an overlay."""
+        if self.core is None:
+            self.connect(download=False)
+        core = self.require_core()
+        status = core.read_status()
+        mixers = (
+            core.read_rfdc_mixer_frequencies()
+            if hasattr(core, "read_rfdc_mixer_frequencies")
+            else {"available": False, "mixers": [], "errors": ["mixer readback unavailable"]}
+        )
+        dac_centers = [
+            float(item["frequency_mhz"])
+            for item in mixers.get("mixers", [])
+            if item.get("kind") == "dac" and float(item.get("frequency_mhz", 0.0)) > 0.0
+        ]
+        center_mhz = None
+        if dac_centers and max(dac_centers) - min(dac_centers) < 1e-6:
+            center_mhz = sum(dac_centers) / len(dac_centers)
+        result: dict[str, Any] = {
+            "status": status,
+            "core_version": int(status.get("core_version", 0)),
+            "board_id": int(status.get("board_id", 0)),
+            "source_identity": core.read_tx_source_identity() if hasattr(core, "read_tx_source_identity") else None,
+            "rfdc_mixers": mixers,
+            "center_mhz": center_mhz,
+            "dac": self.read_dac_channels(center_mhz=center_mhz),
+        }
+        if hasattr(core, "read_tx_endpoints"):
+            result["endpoints"] = core.read_tx_endpoints(range(TIME_FLOW_COUNT + SPEC_FLOW_COUNT))
+        if hasattr(core, "read_science_output_status"):
+            result["science"] = core.read_science_output_status()
+        if hasattr(core, "read_channelizer_status"):
+            result["channelizer"] = core.read_channelizer_status()
+        return result
+
+    def apply(self, config: Stage29Config, *, fresh_download: bool = True) -> dict[str, Any]:
+        """Compatibility entry point used by the Stage 29 notebook and release gate."""
+        result = self.prepare(config, fresh_download=fresh_download, program_dac=True)
+        result["status"] = self.start_immediate()
+        result["started"] = True
+        return result
+
+    def apply_dac_live(
+        self,
+        dac_channels: Iterable[DacChannelConfig | dict[str, Any]],
+        *,
+        center_mhz: float | None = None,
+    ) -> dict[str, Any]:
+        """Atomically update the DAC bank.
+
+        ``center_mhz`` lets the stateless Stage 30 helper perform a live update
+        after reconnecting to an already configured overlay. Existing notebook
+        callers continue to use the cached Stage 29 configuration.
+        """
+        if self.config is None and center_mhz is None:
+            raise RuntimeError("center_mhz is required when no Stage 29 configuration is cached")
         channels = tuple(
             item if isinstance(item, DacChannelConfig) else DacChannelConfig(**dict(item))
             for item in dac_channels
         )
+        if len(channels) != 8:
+            raise ValueError("dac_channels must contain exactly 8 entries")
+        active_center_mhz = self.config.center_mhz if self.config is not None else float(center_mhz)
+        if not math.isfinite(active_center_mhz) or not 50.0 <= active_center_mhz <= 350.0:
+            raise ValueError("center_mhz must be finite and within the 50..350 MHz science band")
+        if self.config is None:
+            result = self._write_dac_channels(channels, center_mhz=active_center_mhz)
+            result["readback"] = self.read_dac_channels(center_mhz=active_center_mhz)
+            return result
         config = Stage29Config(
             bandwidth_mhz=self.config.bandwidth_mhz,
             mode=self.config.mode,
-            center_mhz=self.config.center_mhz,
+            center_mhz=active_center_mhz,
             board_id=self.config.board_id,
             source_ip=self.config.source_ip,
             source_mac=self.config.source_mac,
@@ -519,6 +663,7 @@ class Stage29Controller:
             dac_channels=channels,
         )
         result = self._write_dac_channels(config.dac_channels, center_mhz=config.center_mhz)
+        result["readback"] = self.read_dac_channels(center_mhz=config.center_mhz)
         self.config = config
         return result
 

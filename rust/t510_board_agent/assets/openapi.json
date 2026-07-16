@@ -1,0 +1,42 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "T510 Stateless Board Agent",
+    "version": "0.1.0",
+    "description": "Lightweight Stage 30 control API. security_mode=none; laboratory LAN only."
+  },
+  "servers": [{"url": "http://192.168.100.117:8010"}],
+  "paths": {
+    "/": {"get": {"summary": "Redirect to help", "responses": {"302": {"description": "Found"}}}},
+    "/api/help": {"get": {"summary": "Self-contained API help", "responses": {"200": {"description": "HTML help"}}}},
+    "/api/openapi.json": {"get": {"summary": "OpenAPI 3.1 document", "responses": {"200": {"description": "OpenAPI JSON"}}}},
+    "/health/live": {"get": {"summary": "Process liveness", "responses": {"200": {"$ref": "#/components/responses/Success"}}}},
+    "/health/ready": {"get": {"summary": "Local-file readiness; never accesses FPGA", "responses": {"200": {"$ref": "#/components/responses/Success"}, "503": {"$ref": "#/components/responses/Error"}}}},
+    "/api/v1/info": {"get": {"summary": "Device and management-network information", "responses": {"200": {"$ref": "#/components/responses/Success"}}}},
+    "/api/v1/capabilities": {"get": {"summary": "Supported and unsupported capabilities", "responses": {"200": {"$ref": "#/components/responses/Success"}}}},
+    "/api/v1/bitstreams": {"get": {"summary": "Named bitstream catalog", "responses": {"200": {"$ref": "#/components/responses/Success"}}}},
+    "/api/v1/status": {"get": {"summary": "One hardware register snapshot", "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}},
+    "/api/v1/configure": {"post": {"summary": "Load and configure hardware, leaving streaming stopped", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConfigureRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "400": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}},
+    "/api/v1/start": {"post": {"summary": "Immediate start", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExpectedBoardRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}},
+    "/api/v1/stop": {"post": {"summary": "Unconditional safe stop", "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}},
+    "/api/v1/reset": {"post": {"summary": "Safe stop then reset", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExpectedBoardRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}},
+    "/api/v1/dac": {"put": {"summary": "Atomic eight-channel DAC update", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DacRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "400": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}}
+  },
+  "components": {
+    "responses": {
+      "Success": {"description": "Successful response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SuccessEnvelope"}}}},
+      "Error": {"description": "Stable error envelope", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
+    },
+    "schemas": {
+      "SuccessEnvelope": {"type": "object", "required": ["request_id", "result"], "properties": {"request_id": {"type": "string"}, "result": {}}},
+      "ErrorEnvelope": {"type": "object", "required": ["request_id", "code", "message"], "properties": {"request_id": {"type": "string"}, "code": {"type": "string"}, "message": {"type": "string"}, "details": {}}},
+      "ExpectedBoardRequest": {"type": "object", "additionalProperties": false, "required": ["expected_board_id"], "properties": {"expected_board_id": {"type": "integer", "minimum": 0, "maximum": 65535}}},
+      "Profile": {"type": "object", "additionalProperties": false, "required": ["bandwidth_mhz", "mode", "center_mhz"], "properties": {"bandwidth_mhz": {"type": "integer", "enum": [100, 200]}, "mode": {"type": "string", "enum": ["time_only", "spec_only", "time_spec"]}, "center_mhz": {"type": "number", "minimum": 50, "maximum": 350}}},
+      "Source": {"type": "object", "additionalProperties": false, "required": ["ip", "mac"], "properties": {"ip": {"type": "string", "format": "ipv4"}, "mac": {"type": "string", "pattern": "^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$"}}},
+      "Endpoint": {"type": "object", "additionalProperties": false, "required": ["endpoint_id", "stream", "enabled", "destination_ip", "destination_mac", "source_port", "destination_port"], "properties": {"endpoint_id": {"type": "integer", "minimum": 0, "maximum": 23}, "stream": {"type": "string", "enum": ["TIME", "SPEC"]}, "enabled": {"type": "boolean"}, "destination_ip": {"type": "string", "format": "ipv4"}, "destination_mac": {"type": "string"}, "source_port": {"type": "integer", "minimum": 1, "maximum": 65535}, "destination_port": {"type": "integer", "minimum": 1, "maximum": 65535}}},
+      "ConfigureRequest": {"type": "object", "additionalProperties": false, "required": ["bitstream_id", "board_id", "profile", "source", "endpoints"], "properties": {"bitstream_id": {"type": "string"}, "board_id": {"type": "integer", "minimum": 0, "maximum": 65535}, "profile": {"$ref": "#/components/schemas/Profile"}, "source": {"$ref": "#/components/schemas/Source"}, "endpoints": {"type": "array", "minItems": 24, "maxItems": 24, "items": {"$ref": "#/components/schemas/Endpoint"}}}},
+      "DacChannel": {"type": "object", "additionalProperties": false, "required": ["channel", "enabled", "rf_frequency_mhz", "amplitude_percent", "phase_deg"], "properties": {"channel": {"type": "integer", "minimum": 0, "maximum": 7}, "enabled": {"type": "boolean"}, "rf_frequency_mhz": {"type": "number", "minimum": 50, "maximum": 350}, "amplitude_percent": {"type": "number", "minimum": 0, "maximum": 100}, "phase_deg": {"type": "number", "minimum": -180, "maximum": 180}}},
+      "DacRequest": {"type": "object", "additionalProperties": false, "required": ["expected_board_id", "center_mhz", "channels"], "properties": {"expected_board_id": {"type": "integer", "minimum": 0, "maximum": 65535}, "center_mhz": {"type": "number", "minimum": 50, "maximum": 350}, "channels": {"type": "array", "minItems": 8, "maxItems": 8, "items": {"$ref": "#/components/schemas/DacChannel"}}}}
+    }
+  }
+}

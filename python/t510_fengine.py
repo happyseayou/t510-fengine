@@ -2618,6 +2618,63 @@ class T510FEngine:
             raise ValueError("DAC enable mask must be in range 0x00..0xff")
         self.ctrl.write(self.regs.DAC_ENABLE_MASK, mask)
 
+    def read_dac_channels(self, *, dac_sample_rate_hz: float = 245_760_000.0) -> dict[str, Any]:
+        """Read back the complete eight-lane programmable DAC tone bank."""
+        if dac_sample_rate_hz <= 0:
+            raise ValueError("dac_sample_rate_hz must be positive")
+        enable_mask = int(self.ctrl.read(self.regs.DAC_ENABLE_MASK)) & 0xFF
+        rows: list[dict[str, Any]] = []
+        mode_names = {value: name for name, value in self.DAC_MODES.items()}
+        for channel in range(8):
+            base = self.regs.DAC_CH_BASE + channel * self.regs.DAC_CH_STRIDE
+            phase_step = int(self.ctrl.read(base + 0x00)) & 0xFFFF_FFFF
+            signed_step = phase_step - (1 << 32) if phase_step & (1 << 31) else phase_step
+            amplitude = int(self.ctrl.read(base + 0x04)) & 0xFFFF
+            phase0 = int(self.ctrl.read(base + 0x08)) & 0xFFFF_FFFF
+            phase_inject = int(self.ctrl.read(base + 0x0C)) & 0xFFFF_FFFF
+            mode = int(self.ctrl.read(base + 0x10)) & 0x3
+            rows.append({
+                "channel": channel,
+                "enabled": bool(enable_mask & (1 << channel)),
+                "phase_step": phase_step,
+                "baseband_frequency_hz": float(signed_step) * float(dac_sample_rate_hz) / float(1 << 32),
+                "amplitude_code": amplitude,
+                "phase0": phase0,
+                "phase_deg": float(phase0) * 360.0 / float(1 << 32),
+                "phase_inject": phase_inject,
+                "mode": mode,
+                "mode_name": mode_names.get(mode, f"unknown_{mode}"),
+            })
+        return {
+            "enable_mask": enable_mask,
+            "dac_phase_epoch": int(self.ctrl.read(self.regs.DAC_PHASE_EPOCH)) & 0xFFFF_FFFF,
+            "channels": rows,
+        }
+
+    def read_rfdc_mixer_frequencies(self) -> dict[str, Any]:
+        """Read RFDC mixer/NCO frequencies without changing RFDC state."""
+        if self.rfdc is None:
+            return {"available": False, "mixers": [], "errors": ["RFDC IP handle not found"]}
+        mixers: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for kind, tiles in (
+            ("adc", getattr(self.rfdc, "adc_tiles", [])),
+            ("dac", getattr(self.rfdc, "dac_tiles", [])),
+        ):
+            for tile_index, tile in enumerate(list(tiles)):
+                for block_index, block in enumerate(self._iter_rfdc_blocks(tile)):
+                    try:
+                        settings = dict(getattr(block, "MixerSettings"))
+                        mixers.append({
+                            "kind": kind,
+                            "tile": tile_index,
+                            "block": block_index,
+                            "frequency_mhz": float(settings["Freq"]),
+                        })
+                    except Exception as exc:  # pragma: no cover - inactive board block
+                        errors.append(f"{kind}[{tile_index}].block[{block_index}]: {exc}")
+        return {"available": bool(mixers), "mixers": mixers, "errors": errors}
+
     def reset_dac_phase(self) -> int:
         before = int(self.ctrl.read(self.regs.DAC_PHASE_EPOCH))
         self.ctrl.write(self.regs.DAC_PHASE_EPOCH, 0x1)

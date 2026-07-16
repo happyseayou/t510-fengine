@@ -1,0 +1,29 @@
+[Unit]
+Description=T510 Stateless Rust Board Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/t510-agent/current
+Environment=RUST_LOG=info
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=XILINX_XRT=/usr
+ExecStart=/opt/t510-agent/current/bin/t510-board-agent --config /etc/t510-agent/config.json
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

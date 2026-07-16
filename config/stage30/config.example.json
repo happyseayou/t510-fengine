@@ -1,0 +1,28 @@
+{
+  "listen": "0.0.0.0:8010",
+  "management_interface": "eth0",
+  "python_executable": "/usr/local/share/pynq-venv/bin/python3",
+  "helper_path": "/opt/t510-agent/current/python/t510_hw.py",
+  "helper_pythonpath": "/opt/t510-agent/current",
+  "default_bitstream_id": "fengine-0x00010030",
+  "configure_timeout_seconds": 180,
+  "operation_timeout_seconds": 10,
+  "bitstreams": [
+    {
+      "id": "fengine-0x00010030",
+      "path": "/opt/t510-agent/current/overlay/t510_fengine.bit",
+      "sha256": "7486a55b6f7e50e5875474e7d85299b107e9384cfff454316f64f2d3d7e9800d",
+      "core_version": "0x00010030",
+      "profiles": [
+        {
+          "bandwidth_mhz": 100,
+          "modes": ["time_only", "spec_only", "time_spec"]
+        },
+        {
+          "bandwidth_mhz": 200,
+          "modes": ["time_only", "spec_only"]
+        }
+      ]
+    }
+  ]
+}
