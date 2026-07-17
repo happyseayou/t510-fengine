@@ -3,6 +3,7 @@
 
 module t510_fengine_xfft_4096_lane (
     input  wire        aclk,
+    input  wire        aresetn,
     input  wire [15:0] s_axis_config_tdata,
     input  wire        s_axis_config_tvalid,
     output wire        s_axis_config_tready,
@@ -30,7 +31,10 @@ module t510_fengine_xfft_4096_lane (
     logic config_ready_reg = 1'b0;
 
     always_ff @(posedge aclk) begin
-        if (!s_axis_config_tvalid) begin
+        if (!aresetn) begin
+            config_valid_seen <= 1'b0;
+            config_ready_reg <= 1'b0;
+        end else if (!s_axis_config_tvalid) begin
             config_valid_seen <= 1'b0;
             config_ready_reg <= 1'b0;
         end else begin
@@ -84,6 +88,7 @@ module tb_xfft_8lane_config_wrapper;
 
     t510_fengine_xfft_4096_8lane_streaming dut (
         .aclk(clk),
+        .aresetn(1'b1),
         .s_axis_config_tdata(cfg_data),
         .s_axis_config_tvalid(cfg_valid),
         .s_axis_config_tready(cfg_ready),

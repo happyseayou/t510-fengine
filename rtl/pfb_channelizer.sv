@@ -1,6 +1,7 @@
 `ifdef T510_SIM_FFT_MODEL
 module t510_fengine_xfft_4096_sim_model (
     input  wire         aclk,
+    input  wire         aresetn,
     input  wire [255:0] s_axis_config_tdata,
     input  wire         s_axis_config_tvalid,
     output wire         s_axis_config_tready,
@@ -83,6 +84,22 @@ module t510_fengine_xfft_4096_sim_model (
     endfunction
 
     always @(posedge aclk) begin
+        if (!aresetn) begin
+            bin_idx <= 12'd0;
+            m_axis_data_tdata <= 256'd0;
+            m_axis_data_tuser <= 24'd0;
+            m_axis_data_tvalid <= 1'b0;
+            m_axis_data_tlast <= 1'b0;
+            m_axis_status_tdata <= 8'd0;
+            m_axis_status_tvalid <= 1'b0;
+            event_frame_started <= 1'b0;
+            event_tlast_unexpected <= 1'b0;
+            event_tlast_missing <= 1'b0;
+            event_fft_overflow <= 1'b0;
+            event_status_channel_halt <= 1'b0;
+            event_data_in_channel_halt <= 1'b0;
+            event_data_out_channel_halt <= 1'b0;
+        end else begin
         event_frame_started <= 1'b0;
         event_tlast_unexpected <= 1'b0;
         event_tlast_missing <= 1'b0;
@@ -115,6 +132,7 @@ module t510_fengine_xfft_4096_sim_model (
                 bin_idx <= (bin_idx == 12'd4095) ? 12'd0 : (bin_idx + 12'd1);
             end
         end
+        end
     end
 endmodule
 `endif
@@ -123,6 +141,7 @@ endmodule
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
 module t510_fengine_xfft_4096_8lane_streaming (
     input  wire         aclk,
+    input  wire         aresetn,
     input  wire [255:0] s_axis_config_tdata,
     input  wire         s_axis_config_tvalid,
     output wire         s_axis_config_tready,
@@ -185,7 +204,10 @@ module t510_fengine_xfft_4096_8lane_streaming (
     assign lane_data_tlast = {8{s_axis_data_tlast}};
 
     always_ff @(posedge aclk) begin
-        if (!s_axis_config_tvalid) begin
+        if (!aresetn) begin
+            lane_cfg_seen_valid <= 1'b0;
+            lane_cfg_done <= 8'd0;
+        end else if (!s_axis_config_tvalid) begin
             lane_cfg_seen_valid <= 1'b0;
         end else begin
             lane_cfg_seen_valid <= 1'b1;
@@ -207,6 +229,7 @@ module t510_fengine_xfft_4096_8lane_streaming (
 
             t510_fengine_xfft_4096_lane u_lane_xfft (
                 .aclk(aclk),
+                .aresetn(aresetn),
                 .s_axis_config_tdata(lane_config_tdata),
                 .s_axis_config_tvalid(lane_cfg_tvalid[lane]),
                 .s_axis_config_tready(lane_cfg_tready[lane]),
@@ -387,6 +410,19 @@ module feng_channelizer_4096 #(
     logic         xfft_config_tvalid;
     wire          xfft_config_tready;
     logic         xfft_configured;
+    logic [3:0]   xfft_reset_count;
+    wire          xfft_reset_active = (xfft_reset_count != 4'd0);
+    wire          xfft_aresetn = rst_n && !xfft_reset_active;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            xfft_reset_count <= 4'hf;
+        end else if (clear) begin
+            xfft_reset_count <= 4'hf;
+        end else if (xfft_reset_count != 4'd0) begin
+            xfft_reset_count <= xfft_reset_count - 4'd1;
+        end
+    end
 
     wire [CELL_W-1:0] selected_input_cell =
         input_word[input_subidx*CELL_W +: CELL_W];
@@ -573,6 +609,7 @@ module feng_channelizer_4096 #(
 `ifdef T510_SIM_FFT_MODEL
     t510_fengine_xfft_4096_sim_model u_fengine_xfft_4096 (
         .aclk(clk),
+        .aresetn(xfft_aresetn),
         .s_axis_config_tdata(xfft_config_tdata),
         .s_axis_config_tvalid(xfft_config_tvalid),
         .s_axis_config_tready(xfft_config_tready),
@@ -601,6 +638,7 @@ module feng_channelizer_4096 #(
 `elsif T510_STAGE27H_PRODUCTION_ONLY
     t510_fengine_xfft_4096_8lane_streaming u_fengine_xfft_4096 (
         .aclk(clk),
+        .aresetn(xfft_aresetn),
         .s_axis_config_tdata(xfft_config_tdata),
         .s_axis_config_tvalid(xfft_config_tvalid),
         .s_axis_config_tready(xfft_config_tready),
@@ -629,6 +667,7 @@ module feng_channelizer_4096 #(
 `else
     t510_fengine_xfft_4096 u_fengine_xfft_4096 (
         .aclk(clk),
+        .aresetn(xfft_aresetn),
         .s_axis_config_tdata(xfft_config_tdata),
         .s_axis_config_tvalid(xfft_config_tvalid),
         .s_axis_config_tready(xfft_config_tready),
@@ -879,7 +918,11 @@ module feng_channelizer_4096 #(
                     xfft_configured <= 1'b1;
                 end
 
-                if (clear || !enable) begin
+                if (clear || xfft_reset_active || !enable) begin
+                    if (clear || xfft_reset_active) begin
+                        xfft_config_tvalid <= 1'b0;
+                        xfft_configured <= 1'b0;
+                    end
                     input_valid <= 1'b0;
                     input_subidx <= {PACK_IDX_W{1'b0}};
                     input_bin_idx <= 12'd0;
@@ -1151,6 +1194,18 @@ module feng_channelizer_4096_streaming_27h #(
     localparam [FRAME_FIFO_AW:0] FRAME_FIFO_DEPTH_COUNT = FRAME_FIFO_DEPTH;
     localparam [FRAME_FIFO_AW:0] FRAME_FIFO_ZERO_COUNT = {(FRAME_FIFO_AW+1){1'b0}};
 
+    logic [3:0] xfft_reset_count;
+    wire xfft_reset_active = (xfft_reset_count != 4'd0);
+    wire xfft_aresetn = rst_n && !xfft_reset_active;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || clear) begin
+            xfft_reset_count <= 4'hf;
+        end else if (xfft_reset_count != 4'd0) begin
+            xfft_reset_count <= xfft_reset_count - 4'd1;
+        end
+    end
+
     logic [DATA_W-1:0] fill_word;
     logic [63:0]       fill_frame_sample0;
     logic [PACK_IDX_W-1:0] fill_subidx;
@@ -1315,6 +1370,7 @@ module feng_channelizer_4096_streaming_27h #(
 `ifdef T510_SIM_FFT_MODEL
     t510_fengine_xfft_4096_sim_model u_fengine_xfft_4096 (
         .aclk(clk),
+        .aresetn(xfft_aresetn),
         .s_axis_config_tdata(xfft_config_tdata),
         .s_axis_config_tvalid(xfft_config_tvalid),
         .s_axis_config_tready(xfft_config_tready),
@@ -1343,6 +1399,7 @@ module feng_channelizer_4096_streaming_27h #(
 `else
     t510_fengine_xfft_4096_8lane_streaming u_fengine_xfft_4096 (
         .aclk(clk),
+        .aresetn(xfft_aresetn),
         .s_axis_config_tdata(xfft_config_tdata),
         .s_axis_config_tvalid(xfft_config_tvalid),
         .s_axis_config_tready(xfft_config_tready),
@@ -1545,12 +1602,17 @@ module feng_channelizer_4096_streaming_27h #(
                     peak_power <= 32'd0;
                 end
             end else begin
-                if (!xfft_configured && !xfft_config_tvalid) begin
-                    xfft_config_tvalid <= 1'b1;
-                end
-                if (xfft_config_tvalid && xfft_config_tready) begin
+                if (xfft_reset_active) begin
                     xfft_config_tvalid <= 1'b0;
-                    xfft_configured <= 1'b1;
+                    xfft_configured <= 1'b0;
+                end else begin
+                    if (!xfft_configured && !xfft_config_tvalid) begin
+                        xfft_config_tvalid <= 1'b1;
+                    end
+                    if (xfft_config_tvalid && xfft_config_tready) begin
+                        xfft_config_tvalid <= 1'b0;
+                        xfft_configured <= 1'b1;
+                    end
                 end
 
                 if (clear || !enable) begin
@@ -1901,6 +1963,18 @@ module feng_channelizer_4096_streaming_27j #(
     localparam integer OUTPUT_FIFO_HEADROOM = 64;
     localparam integer OUTPUT_RESERVATION_LIMIT =
         OUTPUT_FIFO_DEPTH - OUTPUT_BEATS_PER_FRAME - OUTPUT_FIFO_HEADROOM;
+
+    logic [3:0] xfft_reset_count;
+    wire xfft_reset_active = (xfft_reset_count != 4'd0);
+    wire xfft_aresetn = rst_n && !xfft_reset_active;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || clear) begin
+            xfft_reset_count <= 4'hf;
+        end else if (xfft_reset_count != 4'd0) begin
+            xfft_reset_count <= xfft_reset_count - 4'd1;
+        end
+    end
 
     logic [DATA_W-1:0] fill_word;
     logic [63:0]       fill_frame_sample0;
@@ -2392,6 +2466,7 @@ module feng_channelizer_4096_streaming_27j #(
 `ifdef T510_SIM_FFT_MODEL
     t510_fengine_xfft_4096_sim_model u_fengine_xfft_4096 (
         .aclk(clk),
+        .aresetn(xfft_aresetn),
         .s_axis_config_tdata(xfft_config_tdata),
         .s_axis_config_tvalid(xfft_config_tvalid),
         .s_axis_config_tready(xfft_config_tready),
@@ -2420,6 +2495,7 @@ module feng_channelizer_4096_streaming_27j #(
 `else
     t510_fengine_xfft_4096_8lane_streaming u_fengine_xfft_4096 (
         .aclk(clk),
+        .aresetn(xfft_aresetn),
         .s_axis_config_tdata(xfft_config_tdata),
         .s_axis_config_tvalid(xfft_config_tvalid),
         .s_axis_config_tready(xfft_config_tready),
@@ -2669,12 +2745,17 @@ module feng_channelizer_4096_streaming_27j #(
                 frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
                 frame_fifo_count <= FRAME_FIFO_ZERO_COUNT;
             end else begin
-                if (!xfft_configured && !xfft_config_tvalid) begin
-                    xfft_config_tvalid <= 1'b1;
-                end
-                if (xfft_config_tvalid && xfft_config_tready) begin
+                if (xfft_reset_active) begin
                     xfft_config_tvalid <= 1'b0;
-                    xfft_configured <= 1'b1;
+                    xfft_configured <= 1'b0;
+                end else begin
+                    if (!xfft_configured && !xfft_config_tvalid) begin
+                        xfft_config_tvalid <= 1'b1;
+                    end
+                    if (xfft_config_tvalid && xfft_config_tready) begin
+                        xfft_config_tvalid <= 1'b0;
+                        xfft_configured <= 1'b1;
+                    end
                 end
 
                 if (clear || !enable) begin

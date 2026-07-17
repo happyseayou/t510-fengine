@@ -1,0 +1,8 @@
+ip=t510_cmac_usplus_0
+include_rs_fec=1
+include_auto_neg_lt_logic=0
+include_an_lt_tx_trainer=0
+run_log_critical_warning=Vivado_12-1790_Evaluation_License_Warning
+classification=known_catalog_metadata_warning
+blocking=no
+reason=AN_LT_features_disabled_and_routed_timing_passed

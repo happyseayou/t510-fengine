@@ -74,6 +74,10 @@ module tb_time_packetizer;
         .packet_flags(16'h000a),
         .unix_seconds(64'h1122_3344_5566_7788),
         .pps_count(64'h0000_0000_0000_0123),
+        .sync_generation(64'h1),
+        .sync_observation_tag(64'h2),
+        .sync_metadata(64'h3),
+        .sync_status(64'h4),
         .quant_mode(16'd0),
         .scale_mode(16'd0),
         .scale_id(32'h1234_5678),
@@ -150,7 +154,7 @@ module tb_time_packetizer;
         input logic [63:0] frame_id
     );
         begin
-            `TB_CHECK_EQ(captured[base + 0], 64'h5435_3130_0002_0080, "TIME header word 0")
+            `TB_CHECK_EQ(captured[base + 0], 64'h5435_3130_0003_0080, "TIME v3 header word 0")
             `TB_CHECK_EQ(captured[base + 1], 64'h00aa_0001_0001_000a, "TIME stream identity")
             `TB_CHECK_EQ(captured[base + 2], 64'h1122_3344_5566_7788, "TIME unix seconds")
             `TB_CHECK_EQ(captured[base + 3], 64'h0000_0000_0000_0123, "TIME pps count")
@@ -159,6 +163,10 @@ module tb_time_packetizer;
             `TB_CHECK_EQ(captured[base + 6], {seq[31:0], 16'd0, 16'h0055}, "TIME seq/input0")
             `TB_CHECK_EQ(captured[base + 7], 64'h0000_0100_0008_0000, "TIME layout")
             `TB_CHECK_EQ(captured[base + 8], 64'h1234_5678_0000_2000, "TIME scale/payload bytes")
+            `TB_CHECK_EQ(captured[base + 12], 64'h1, "TIME sync generation")
+            `TB_CHECK_EQ(captured[base + 13], 64'h2, "TIME observation tag")
+            `TB_CHECK_EQ(captured[base + 14], 64'h3, "TIME sync metadata")
+            `TB_CHECK_EQ(captured[base + 15], 64'h4, "TIME sync status")
         end
     endtask
 

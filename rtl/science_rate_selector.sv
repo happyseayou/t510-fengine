@@ -7,6 +7,7 @@ module science_rate_selector #(
 ) (
     input  wire                                         clk,
     input  wire                                         rst_n,
+    input  wire                                         clear,
     input  wire [1:0]                                   bandwidth_mode,
     input  wire [NINPUT*SUBSAMPLES_PER_BEAT*SAMPLE_W-1:0] s_axis_tdata,
     input  wire [USER_W-1:0]                            s_axis_tuser,
@@ -98,6 +99,7 @@ module science_rate_selector #(
     ) u_science_decim2_halfband_aa (
         .clk(clk),
         .rst_n(rst_n),
+        .clear(clear),
         .enable(bw100_aa_selected),
         .s_axis_tdata(s_axis_tdata),
         .s_axis_tuser(s_axis_tuser),
@@ -200,17 +202,25 @@ module science_rate_selector #(
             legacy_output_beat_count <= 32'd0;
             legacy_dropped_beat_count <= 32'd0;
         end else begin
-            if (bw100_aa_selected) begin
+            if (clear) begin
+                pending_valid <= 1'b0;
+                decim2_phase <= 1'b0;
+                decim8_phase <= 3'd0;
+                decim2_tlast <= 1'b0;
+                decim8_tlast <= 1'b0;
+                legacy_output_beat_count <= 32'd0;
+                legacy_dropped_beat_count <= 32'd0;
+            end else if (bw100_aa_selected) begin
                 pending_valid <= 1'b0;
                 decim2_phase <= 1'b0;
                 decim8_phase <= 3'd0;
             end
 
-            if (pending_valid && m_axis_tready) begin
+            if (!clear && pending_valid && m_axis_tready) begin
                 pending_valid <= 1'b0;
             end
 
-            if (legacy_input_fire) begin
+            if (!clear && legacy_input_fire) begin
                 case (bandwidth_mode)
                     BW_100MHZ: begin
                         decim2_phase <= ~decim2_phase;
@@ -255,11 +265,11 @@ module science_rate_selector #(
                 endcase
             end
 
-            if (!bw100_selected && s_axis_tvalid && !legacy_s_axis_tready) begin
+            if (!clear && !bw100_selected && s_axis_tvalid && !legacy_s_axis_tready) begin
                 legacy_dropped_beat_count <= legacy_dropped_beat_count + 32'd1;
             end
 
-            if (!bw100_selected && candidate_valid) begin
+            if (!clear && !bw100_selected && candidate_valid) begin
                 pending_tdata <= candidate_tdata;
                 pending_tuser <= candidate_tuser;
                 pending_sample0 <= candidate_sample0;

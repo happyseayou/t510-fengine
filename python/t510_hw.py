@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot PYNQ bridge for the stateless Stage 30 Rust Board Agent.
+"""One-shot PYNQ bridge for the stateless Stage 30/31 Rust Board Agent.
 
 The request is one JSON object on stdin. Exactly one JSON object is emitted on
 stdout; incidental PYNQ output is redirected to stderr.
@@ -175,6 +175,11 @@ def _profile_name(status: dict[str, Any]) -> dict[str, Any]:
 def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
     core = controller.require_core()
     status = core.read_status()
+    scheduled_sync = (
+        core.read_scheduled_sync_status()
+        if hasattr(core, "read_scheduled_sync_status")
+        else None
+    )
     mixers = core.read_rfdc_mixer_frequencies()
     dac_centers = [
         float(item["frequency_mhz"])
@@ -190,7 +195,11 @@ def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
         "core_version": f"0x{int(status.get('core_version', 0)):08x}",
         "board_id": int(status.get("board_id", 0)),
         "streaming": bool(status.get("streaming", 0)),
-        "profile": {**_profile_name(status), "center_mhz": center_mhz},
+        "profile": {
+            **_profile_name(status),
+            "center_mhz": center_mhz,
+            "aa100_active": bool(status.get("science_antialias_100m_active", 0)),
+        },
         "timing": {
             "pps_count": int(status.get("pps_count", 0)),
             "pps_input_high": bool(status.get("pps_status_input_high", 0)),
@@ -226,6 +235,7 @@ def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
             "rfdc": int(status.get("rfdc_sample_count", 0)),
         },
         "error_flags": int(status.get("error_flags", 0)),
+        "scheduled_sync": scheduled_sync,
         "dac": controller.read_dac_channels(center_mhz=center_mhz),
     }
 
@@ -298,6 +308,50 @@ def _start(request: dict[str, Any]) -> dict[str, Any]:
     return {"started": True, "status": status, "snapshot": _status_snapshot(controller)}
 
 
+def _sync_prepare(request: dict[str, Any]) -> dict[str, Any]:
+    body = _body(request)
+    controller = _controller(request)
+    _expected_board(controller, body)
+    core = controller.require_core()
+    status = core.prepare_scheduled_sync(
+        generation=int(body["generation"]),
+        target_pps_count=int(body["target_pps_count"]),
+        epoch_tai_seconds=int(body["epoch_tai_seconds"]),
+        first_sample0=(
+            None if body.get("first_sample0") is None else int(body["first_sample0"])
+        ),
+        observation_tag=int(body.get("observation_tag", 0)),
+        signal_chain_tag=int(body.get("signal_chain_tag", 0)),
+        schedule_tag=int(body.get("schedule_tag", 0)),
+        mts_result_id=int(body["mts_result_id"]),
+    )
+    return {"prepared": True, "sync": status, "snapshot": _status_snapshot(controller)}
+
+
+def _sync_arm(request: dict[str, Any]) -> dict[str, Any]:
+    body = _body(request)
+    controller = _controller(request)
+    _expected_board(controller, body)
+    status = controller.require_core().arm_scheduled_sync()
+    return {"armed": True, "sync": status, "snapshot": _status_snapshot(controller)}
+
+
+def _sync_abort(request: dict[str, Any]) -> dict[str, Any]:
+    body = _body(request)
+    controller = _controller(request)
+    _expected_board(controller, body)
+    status = controller.require_core().abort_scheduled_sync()
+    return {"aborted": True, "sync": status, "snapshot": _status_snapshot(controller)}
+
+
+def _sync_status(request: dict[str, Any]) -> dict[str, Any]:
+    controller = _controller(request)
+    return {
+        "sync": controller.require_core().read_scheduled_sync_status(),
+        "snapshot": _status_snapshot(controller),
+    }
+
+
 def _stop(request: dict[str, Any]) -> dict[str, Any]:
     controller = _controller(request)
     status = controller.stop_and_verify()
@@ -334,6 +388,10 @@ COMMANDS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "status": _status,
     "configure": _configure,
     "start": _start,
+    "sync-prepare": _sync_prepare,
+    "sync-arm": _sync_arm,
+    "sync-abort": _sync_abort,
+    "sync-status": _sync_status,
     "stop": _stop,
     "reset": _reset,
     "set-dac": _set_dac,
@@ -348,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": False,
                 "error": {
                     "code": "UNKNOWN_COMMAND",
-                    "message": "command must be status, configure, start, stop, reset, or set-dac",
+                    "message": "command must be status, configure, start, stop, reset, set-dac, sync-prepare, sync-arm, sync-abort, or sync-status",
                 },
             },
             sys.stdout,

@@ -208,7 +208,7 @@ module t510_fengine_synthetic_board_top (
         .rst_n(rst_n),
         .ctrl_clk(pl_clk),
         .ctrl_rst_n(rst_n),
-        .pps_in(pps_sync[1]),
+        .pps_in(pps_in),
         .ref_lock_in(1'b1),
         .rfdc_ready_in(1'b1),
         .s_axi_awaddr(axi_awaddr),

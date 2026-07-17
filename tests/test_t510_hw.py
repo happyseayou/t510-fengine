@@ -15,6 +15,7 @@ class FakeHardwareCore:
     def __init__(self, board_id: int = 1) -> None:
         self.board_id = board_id
         self.reset_called = False
+        self.sync_prepare_kwargs = None
 
     def read_status(self):
         return {
@@ -57,6 +58,25 @@ class FakeHardwareCore:
 
     def reset(self):
         self.reset_called = True
+
+    def read_scheduled_sync_status(self):
+        return {
+            "state": 0,
+            "current_pps_count": 44,
+            "ref_locked": True,
+            "rfdc_ready": True,
+            "pps_recent": True,
+        }
+
+    def prepare_scheduled_sync(self, **kwargs):
+        self.sync_prepare_kwargs = dict(kwargs)
+        return {"prepared": True, "active_generation": kwargs["generation"]}
+
+    def arm_scheduled_sync(self):
+        return {"armed": True}
+
+    def abort_scheduled_sync(self):
+        return {"selected": False}
 
 
 class FakeController:
@@ -231,6 +251,39 @@ class T510HelperTests(unittest.TestCase):
         reset = t510_hw._reset(request)
         self.assertTrue(reset["reset"])
         self.assertTrue(FakeController.instances[-1].core.reset_called)
+
+    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    def test_stage31_prepare_arm_abort_helpers_preserve_transaction_identity(self) -> None:
+        request = {
+            "bitstream": self.proof,
+            "request": {
+                "expected_board_id": 1,
+                "generation": 7,
+                "target_pps_count": 50,
+                "epoch_tai_seconds": 1784256005,
+                "first_sample0": 32788,
+                "observation_tag": 0x1234,
+                "signal_chain_tag": 0x5A31C004,
+                "schedule_tag": 0x31,
+                "mts_result_id": 0xAA55,
+            },
+        }
+        prepared = t510_hw._sync_prepare(request)
+        self.assertTrue(prepared["prepared"])
+        kwargs = FakeController.instances[-1].core.sync_prepare_kwargs
+        self.assertEqual(kwargs["generation"], 7)
+        self.assertEqual(kwargs["signal_chain_tag"], 0x5A31C004)
+        self.assertEqual(kwargs["first_sample0"], 32788)
+        self.assertTrue(
+            t510_hw._sync_arm(
+                {"bitstream": self.proof, "request": {"expected_board_id": 1}}
+            )["armed"]
+        )
+        self.assertTrue(
+            t510_hw._sync_abort(
+                {"bitstream": self.proof, "request": {"expected_board_id": 1}}
+            )["aborted"]
+        )
 
     def test_stdout_protocol_is_exactly_one_json_object(self) -> None:
         original = t510_hw.COMMANDS["status"]

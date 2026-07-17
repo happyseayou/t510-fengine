@@ -4590,6 +4590,10 @@ mod tests {
             scale_mode: 0,
             spec_half_band: false,
             header_crc: 0,
+            sync_generation: 0,
+            sync_observation_tag: 0,
+            sync_metadata: 0,
+            sync_status: 0,
         }
     }
 
@@ -5501,6 +5505,10 @@ mod tests {
             scale_mode: 0,
             spec_half_band: false,
             header_crc: 0,
+            sync_generation: 0,
+            sync_observation_tag: 0,
+            sync_metadata: 0,
+            sync_status: 0,
         }
     }
 

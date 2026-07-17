@@ -27,6 +27,7 @@ QUANT_INT8 = 1
 
 EPOCH_EXTERNAL_PPS = 0
 EPOCH_INTERNAL_ONLY = 1
+EPOCH_SCHEDULED_TAI = 2
 
 FLAG_TIME_VALID = 1 << 0
 FLAG_INTERNAL_EPOCH = 1 << 1
@@ -66,6 +67,10 @@ class T510PacketHeader:
     scale_id: int = 0
     payload_bytes: int = 8192
     header_crc: int = 0
+    sync_generation: int = 0
+    sync_observation_tag: int = 0
+    sync_metadata: int = 0
+    sync_status: int = 0
 
     def to_bytes(self) -> bytes:
         packed = STRUCT_V2.pack(
@@ -90,7 +95,18 @@ class T510PacketHeader:
             self.payload_bytes,
             self.header_crc,
         )
-        return packed.ljust(self.header_bytes, b"\x00")
+        raw = bytearray(packed.ljust(self.header_bytes, b"\x00"))
+        if self.version >= 3 and self.header_bytes >= HEADER_BYTES:
+            struct.pack_into(
+                "<QQQQ",
+                raw,
+                12 * 8,
+                self.sync_generation,
+                self.sync_observation_tag,
+                self.sync_metadata,
+                self.sync_status,
+            )
+        return bytes(raw)
 
     def to_dict(self) -> dict[str, int]:
         return {
@@ -114,6 +130,10 @@ class T510PacketHeader:
             "scale_id": self.scale_id,
             "payload_bytes": self.payload_bytes,
             "header_crc": self.header_crc,
+            "sync_generation": self.sync_generation,
+            "sync_observation_tag": self.sync_observation_tag,
+            "sync_metadata": self.sync_metadata,
+            "sync_status": self.sync_status,
         }
 
     @classmethod
@@ -158,10 +178,14 @@ class T510PacketHeader:
             scale_id=(word8 >> 32) & 0xFFFF_FFFF,
             payload_bytes=word8 & 0xFFFF_FFFF,
             header_crc=word15 & 0xFFFF_FFFF,
+            sync_generation=axis_words[12],
+            sync_observation_tag=axis_words[13],
+            sync_metadata=axis_words[14],
+            sync_status=axis_words[15],
         )
         if header.magic != MAGIC:
             raise ValueError(f"bad T510 packet magic in AXIS words: 0x{header.magic:08x}")
-        if header.version != 2:
+        if header.version not in (2, 3):
             raise ValueError(f"unsupported AXIS packet header version: {header.version}")
         if header.header_bytes != HEADER_BYTES:
             raise ValueError(f"unexpected AXIS packet header size: {header.header_bytes}")
@@ -174,10 +198,21 @@ class T510PacketHeader:
         magic, version = struct.unpack_from("<IH", raw, 0)
         if magic != MAGIC:
             raise ValueError(f"bad T510 packet magic: 0x{magic:08x}")
-        if version == 2:
+        if version in (2, 3):
             if len(raw) < STRUCT_V2.size:
                 raise ValueError(f"header too short: need at least {STRUCT_V2.size} bytes")
-            return cls(*STRUCT_V2.unpack(raw[: STRUCT_V2.size]))
+            header = cls(*STRUCT_V2.unpack(raw[: STRUCT_V2.size]))
+            if version == 3:
+                if len(raw) < HEADER_BYTES:
+                    raise ValueError(f"v3 header too short: need at least {HEADER_BYTES} bytes")
+                (
+                    header.sync_generation,
+                    header.sync_observation_tag,
+                    header.sync_metadata,
+                    header.sync_status,
+                ) = struct.unpack_from("<QQQQ", raw, 12 * 8)
+                header.header_crc = header.sync_status & 0xFFFF_FFFF
+            return header
         if version == 1:
             if len(raw) < STRUCT_V1.size:
                 raise ValueError(f"header too short: need at least {STRUCT_V1.size} bytes")

@@ -1051,7 +1051,10 @@ module t510_fengine_board_top (
         .rst_n(data_rst_n),
         .ctrl_clk(ctrl_clk),
         .ctrl_rst_n(ctrl_rst_n),
-        .pps_in(pps_sync[1]),
+        // The core owns the data-clock synchronizer used by the epoch FSM.
+        // Board-local pps_sync remains diagnostic-only to avoid two variable
+        // synchronizer delays in the deterministic start path.
+        .pps_in(pps_in),
         .ref_lock_in(ref_chain_locked),
         .rfdc_ready_in(all_adc_valid),
         .s_axi_awaddr(core_axil_awaddr),

@@ -84,6 +84,7 @@ module tb_science_rate_selector;
     science_rate_selector dut (
         .clk(clk),
         .rst_n(rst_n),
+        .clear(1'b0),
         .bandwidth_mode(bandwidth_mode),
         .s_axis_tdata(s_axis_tdata),
         .s_axis_tuser(s_axis_tuser),

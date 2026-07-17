@@ -433,6 +433,24 @@ class RegisterMap:
     PFB_COEFF_ID: int = 0x0974
     PFB_COEFF_CHECKSUM: int = 0x0978
     PFB_COEFF_ERROR_COUNT: int = 0x097C
+    STAGE31_SYNC_CAPS: int = 0xAC00
+    STAGE31_SYNC_COMMAND: int = 0xAC04
+    STAGE31_SYNC_STATUS: int = 0xAC08
+    STAGE31_SYNC_ERROR: int = 0xAC0C
+    STAGE31_GENERATION_LO: int = 0xAC10
+    STAGE31_TARGET_PPS_LO: int = 0xAC18
+    STAGE31_EPOCH_TAI_LO: int = 0xAC20
+    STAGE31_FIRST_SAMPLE0_LO: int = 0xAC28
+    STAGE31_OBSERVATION_TAG_LO: int = 0xAC30
+    STAGE31_SIGNAL_CHAIN_TAG: int = 0xAC38
+    STAGE31_SCHEDULE_TAG: int = 0xAC3C
+    STAGE31_MTS_RESULT_ID: int = 0xAC40
+    STAGE31_ACTIVE_GENERATION_LO: int = 0xAC44
+    STAGE31_ACTUAL_COMMIT_PPS_LO: int = 0xAC4C
+    STAGE31_ACTUAL_EPOCH_RAW_SAMPLE0_LO: int = 0xAC54
+    STAGE31_ACTUAL_FIRST_TIME_SAMPLE0_LO: int = 0xAC5C
+    STAGE31_ACTUAL_FIRST_SPEC_SAMPLE0_LO: int = 0xAC64
+    STAGE31_CURRENT_PPS_LO: int = 0xAC6C
     TX_CONTROL: int = 0xB000
     TX_STATUS: int = 0xB004
     TX_FRAME_BUILT_COUNT: int = 0xB008
@@ -846,6 +864,16 @@ class T510FEngine:
     def _write64(self, lo_offset: int, value: int) -> None:
         self.ctrl.write(lo_offset, value & 0xFFFF_FFFF)
         self.ctrl.write(lo_offset + 4, (value >> 32) & 0xFFFF_FFFF)
+
+    def _read64(self, lo_offset: int) -> int:
+        """Read a live 64-bit counter without accepting a torn rollover."""
+        for _ in range(4):
+            hi_before = int(self.ctrl.read(lo_offset + 4)) & 0xFFFF_FFFF
+            lo = int(self.ctrl.read(lo_offset)) & 0xFFFF_FFFF
+            hi_after = int(self.ctrl.read(lo_offset + 4)) & 0xFFFF_FFFF
+            if hi_before == hi_after:
+                return (hi_after << 32) | lo
+        raise RuntimeError(f"unstable 64-bit MMIO read at offset 0x{lo_offset:05x}")
 
     def _ensure_sync_config_mutable(self) -> None:
         status = int(self.ctrl.read(self.regs.STATUS))
@@ -5388,7 +5416,7 @@ class T510FEngine:
         self,
         *,
         configure: bool = True,
-        expected_core_version: int = 0x0001_0030,
+        expected_core_version: int = 0x0001_0031,
         bandwidth_mhz: int | float | str = 100,
         output_mode: str | int = "time_spec",
         seconds: float = 10.0,
@@ -5650,7 +5678,7 @@ class T510FEngine:
         **config_kwargs: Any,
     ) -> dict[str, Any]:
         """Run the frozen Stage 29 board gate for any production profile."""
-        expected_core_version = 0x0001_0030
+        expected_core_version = 0x0001_0031
         mode_name, mode_code = self._normalize_science_output_mode(output_mode)
         bandwidth = self._normalize_science_bandwidth_mhz(bandwidth_mhz)
         allowed = {
@@ -6781,6 +6809,195 @@ class T510FEngine:
             and int(status["pfb_coeff_active_valid"])
         )
         return status
+
+    _STAGE31_ERROR_NAMES = {
+        0: "none",
+        1: "prepare_busy",
+        2: "bad_first_sample0_alignment",
+        3: "generation_not_monotonic",
+        4: "mts_result_not_valid",
+        5: "reference_unlocked",
+        6: "rfdc_not_ready",
+        7: "pps_not_recent",
+        8: "command_in_bad_state",
+        9: "target_pps_too_soon",
+        10: "target_pps_missed",
+        11: "first_sample0_missed",
+        12: "signal_chain_tag_invalid",
+        13: "epoch_tai_invalid",
+    }
+
+    def read_scheduled_sync_status(self) -> dict[str, Any]:
+        raw = int(self.ctrl.read(self.regs.STAGE31_SYNC_STATUS)) & 0xFFFF_FFFF
+        error = int(self.ctrl.read(self.regs.STAGE31_SYNC_ERROR)) & 0xFFFF_FFFF
+        caps = int(self.ctrl.read(self.regs.STAGE31_SYNC_CAPS)) & 0xFFFF_FFFF
+        bandwidth_mode = int(self.ctrl.read(self.regs.SCIENCE_BANDWIDTH_MODE)) & 0x3
+        aa100_active = bool(
+            int(self.ctrl.read(self.regs.SCIENCE_ANTIALIAS_STATUS)) & (1 << 8)
+        )
+        alignment_modulus, alignment_residue, default_first_sample0 = (
+            self._stage31_first_sample0_rule(bandwidth_mode, aa100_active)
+        )
+        return {
+            "caps_raw": caps,
+            "contract_version": (caps >> 24) & 0xFF,
+            "sample0_alignment_log2": (caps >> 16) & 0xFF,
+            "min_lead_pps": (caps >> 8) & 0xFF,
+            "bandwidth_mode": bandwidth_mode,
+            "aa100_active": aa100_active,
+            "first_sample0_modulus": alignment_modulus,
+            "first_sample0_residue": alignment_residue,
+            "default_first_sample0": default_first_sample0,
+            "raw": raw,
+            "selected": bool(raw & (1 << 0)),
+            "prepared": bool(raw & (1 << 1)),
+            "armed": bool(raw & (1 << 2)),
+            "epoch_committed": bool(raw & (1 << 3)),
+            "epoch_valid": bool(raw & (1 << 4)),
+            "streaming": bool(raw & (1 << 5)),
+            "error": bool(raw & (1 << 6)),
+            "pps_recent": bool(raw & (1 << 7)),
+            "ref_locked": bool(raw & (1 << 8)),
+            "rfdc_ready": bool(raw & (1 << 9)),
+            "mts_result_valid": bool(raw & (1 << 10)),
+            "first_time_seen": bool(raw & (1 << 11)),
+            "first_spec_seen": bool(raw & (1 << 12)),
+            "state": (raw >> 16) & 0xF,
+            "error_code": error,
+            "error_name": self._STAGE31_ERROR_NAMES.get(error, f"unknown_{error}"),
+            "generation": self._read64(self.regs.STAGE31_GENERATION_LO),
+            "target_pps_count": self._read64(self.regs.STAGE31_TARGET_PPS_LO),
+            "epoch_tai_seconds": self._read64(self.regs.STAGE31_EPOCH_TAI_LO),
+            "first_sample0": self._read64(self.regs.STAGE31_FIRST_SAMPLE0_LO),
+            "observation_tag": self._read64(self.regs.STAGE31_OBSERVATION_TAG_LO),
+            "signal_chain_tag": int(self.ctrl.read(self.regs.STAGE31_SIGNAL_CHAIN_TAG)) & 0xFFFF_FFFF,
+            "schedule_tag": int(self.ctrl.read(self.regs.STAGE31_SCHEDULE_TAG)) & 0xFFFF_FFFF,
+            "mts_result_id": int(self.ctrl.read(self.regs.STAGE31_MTS_RESULT_ID)) & 0xFFFF_FFFF,
+            "active_generation": self._read64(self.regs.STAGE31_ACTIVE_GENERATION_LO),
+            "actual_commit_pps_count": self._read64(self.regs.STAGE31_ACTUAL_COMMIT_PPS_LO),
+            "actual_epoch_raw_sample0": self._read64(self.regs.STAGE31_ACTUAL_EPOCH_RAW_SAMPLE0_LO),
+            "actual_first_time_sample0": self._read64(self.regs.STAGE31_ACTUAL_FIRST_TIME_SAMPLE0_LO),
+            "actual_first_spec_sample0": self._read64(self.regs.STAGE31_ACTUAL_FIRST_SPEC_SAMPLE0_LO),
+            "current_pps_count": self._read64(self.regs.STAGE31_CURRENT_PPS_LO),
+        }
+
+    @staticmethod
+    def _stage31_first_sample0_rule(
+        bandwidth_mode: int, aa100_active: bool
+    ) -> tuple[int, int, int]:
+        """Return (modulus, residue, safe default) in raw ADC sample units."""
+        bandwidth_mode = int(bandwidth_mode) & 0x3
+        if bandwidth_mode == 0:
+            return 32, 0, 32768
+        if bandwidth_mode == 1:
+            if bool(aa100_active):
+                # The 41-tap half-band filter labels output by its 20-sample
+                # group delay, then advances by eight raw samples per beat.
+                return 8, 4, 32788
+            return 8, 0, 32768
+        return 4, 0, 32768
+
+    def _wait_scheduled_sync(self, predicate: Any, *, timeout_s: float) -> dict[str, Any]:
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while True:
+            status = self.read_scheduled_sync_status()
+            if status["error"]:
+                raise RuntimeError(
+                    f"Stage31 sync failed: {status['error_name']} "
+                    f"(code={status['error_code']})"
+                )
+            if predicate(status):
+                return status
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Stage31 sync command timed out: {status}")
+            time.sleep(0.002)
+
+    def prepare_scheduled_sync(
+        self,
+        *,
+        generation: int,
+        target_pps_count: Optional[int] = None,
+        epoch_tai_seconds: int,
+        first_sample0: Optional[int] = None,
+        observation_tag: int = 0,
+        signal_chain_tag: int = 0,
+        schedule_tag: int = 0,
+        mts_result_id: int,
+        lead_pps: int = 5,
+        timeout_s: float = 0.25,
+    ) -> dict[str, Any]:
+        generation = int(generation)
+        epoch_tai_seconds = int(epoch_tai_seconds)
+        mts_result_id = int(mts_result_id)
+        if generation <= 0 or generation > 0xFFFF_FFFF_FFFF_FFFF:
+            raise ValueError("generation must be a positive u64")
+        if epoch_tai_seconds <= 0 or epoch_tai_seconds > 0xFFFF_FFFF_FFFF_FFFF:
+            raise ValueError("epoch_tai_seconds must be positive TAI seconds")
+        bandwidth_mode = int(self.ctrl.read(self.regs.SCIENCE_BANDWIDTH_MODE)) & 0x3
+        aa100_active = bool(
+            int(self.ctrl.read(self.regs.SCIENCE_ANTIALIAS_STATUS)) & (1 << 8)
+        )
+        modulus, residue, safe_default = self._stage31_first_sample0_rule(
+            bandwidth_mode, aa100_active
+        )
+        if first_sample0 is None:
+            first_sample0 = safe_default
+        first_sample0 = int(first_sample0)
+        if first_sample0 <= 0 or first_sample0 % modulus != residue:
+            raise ValueError(
+                "first_sample0 is unreachable for the active science path: "
+                f"bandwidth_mode={bandwidth_mode}, aa100_active={aa100_active}, "
+                f"require first_sample0 % {modulus} == {residue}"
+            )
+        if mts_result_id <= 0 or mts_result_id > 0xFFFF_FFFF:
+            raise ValueError("mts_result_id must identify a successful persisted MTS result")
+        if int(signal_chain_tag) <= 0 or int(signal_chain_tag) > 0xFFFF_FFFF:
+            raise ValueError("signal_chain_tag must be a non-zero immutable configuration ID")
+        current_pps = self._read64(self.regs.STAGE31_CURRENT_PPS_LO)
+        if target_pps_count is None:
+            target_pps_count = current_pps + max(2, int(lead_pps))
+        target_pps_count = int(target_pps_count)
+        if target_pps_count < current_pps + 2:
+            raise ValueError(
+                f"target_pps_count={target_pps_count} is too soon; current_pps_count={current_pps}"
+            )
+
+        self._write64(self.regs.STAGE31_GENERATION_LO, generation)
+        self._write64(self.regs.STAGE31_TARGET_PPS_LO, target_pps_count)
+        self._write64(self.regs.STAGE31_EPOCH_TAI_LO, epoch_tai_seconds)
+        self._write64(self.regs.STAGE31_FIRST_SAMPLE0_LO, first_sample0)
+        self._write64(self.regs.STAGE31_OBSERVATION_TAG_LO, int(observation_tag))
+        self.ctrl.write(self.regs.STAGE31_SIGNAL_CHAIN_TAG, int(signal_chain_tag) & 0xFFFF_FFFF)
+        self.ctrl.write(self.regs.STAGE31_SCHEDULE_TAG, int(schedule_tag) & 0xFFFF_FFFF)
+        self.ctrl.write(self.regs.STAGE31_MTS_RESULT_ID, mts_result_id & 0xFFFF_FFFF)
+        self.ctrl.write(self.regs.STAGE31_SYNC_COMMAND, 0x1)
+        return self._wait_scheduled_sync(
+            lambda value: bool(value["prepared"] and value["active_generation"] == generation),
+            timeout_s=timeout_s,
+        )
+
+    def arm_scheduled_sync(self, *, timeout_s: float = 0.25) -> dict[str, Any]:
+        self.ctrl.write(self.regs.STAGE31_SYNC_COMMAND, 0x2)
+        return self._wait_scheduled_sync(lambda value: bool(value["armed"]), timeout_s=timeout_s)
+
+    def abort_scheduled_sync(self, *, timeout_s: float = 0.25) -> dict[str, Any]:
+        self.ctrl.write(self.regs.STAGE31_SYNC_COMMAND, 0x4)
+        return self._wait_scheduled_sync(lambda value: not bool(value["selected"]), timeout_s=timeout_s)
+
+    def clear_scheduled_sync_status(self) -> None:
+        self.ctrl.write(self.regs.STAGE31_SYNC_COMMAND, 0x8)
+
+    def persist_stage31_mts_result_id(self, mts_result_id: int) -> int:
+        mts_result_id = int(mts_result_id) & 0xFFFF_FFFF
+        if mts_result_id == 0:
+            raise ValueError("mts_result_id must be non-zero")
+        self.ctrl.write(self.regs.STAGE31_MTS_RESULT_ID, mts_result_id)
+        readback = int(self.ctrl.read(self.regs.STAGE31_MTS_RESULT_ID)) & 0xFFFF_FFFF
+        if readback != mts_result_id:
+            raise RuntimeError(
+                f"Stage31 MTS result-id readback mismatch: wrote={mts_result_id} read={readback}"
+            )
+        return readback
 
     def start(self) -> None:
         self.ctrl.write(self.regs.CONTROL, 0x1)

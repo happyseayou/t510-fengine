@@ -177,6 +177,18 @@ module t510_fengine_top (
     wire        ctrl_soft_epoch_pulse;
     wire        ctrl_stop_pulse;
     wire        ctrl_soft_reset_pulse;
+    wire        ctrl_stage31_prepare_pulse;
+    wire        ctrl_stage31_arm_pulse;
+    wire        ctrl_stage31_abort_pulse;
+    wire        ctrl_stage31_clear_status_pulse;
+    wire [63:0] ctrl_stage31_generation;
+    wire [63:0] ctrl_stage31_target_pps_count;
+    wire [63:0] ctrl_stage31_epoch_tai_seconds;
+    wire [63:0] ctrl_stage31_first_sample0;
+    wire [63:0] ctrl_stage31_observation_tag;
+    wire [31:0] ctrl_stage31_signal_chain_tag;
+    wire [31:0] ctrl_stage31_schedule_tag;
+    wire [31:0] ctrl_stage31_mts_result_id;
     wire [1:0]  ctrl_sync_mode;
     wire [1:0]  ctrl_clock_ref;
     wire [31:0] ctrl_sample_rate_hz;
@@ -348,10 +360,30 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [1:0]  sync_mode;
     (* ASYNC_REG = "TRUE" *) logic [63:0] unix_seconds_meta;
     (* ASYNC_REG = "TRUE" *) logic [63:0] unix_seconds;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_generation_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_generation;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_target_pps_count_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_target_pps_count;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_epoch_tai_seconds_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_epoch_tai_seconds;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_first_sample0_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_first_sample0;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_observation_tag_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0] stage31_observation_tag;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] stage31_signal_chain_tag_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] stage31_signal_chain_tag;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] stage31_schedule_tag_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] stage31_schedule_tag;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] stage31_mts_result_id_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] stage31_mts_result_id;
     (* ASYNC_REG = "TRUE" *) logic [1:0]  arm_latched_sync;
     logic        ctrl_soft_epoch_toggle;
     logic        ctrl_stop_toggle;
     logic        ctrl_soft_reset_toggle;
+    logic        ctrl_stage31_prepare_toggle;
+    logic        ctrl_stage31_arm_toggle;
+    logic        ctrl_stage31_abort_toggle;
+    logic        ctrl_stage31_clear_status_toggle;
     logic        ctrl_pfb_clear_toggle;
     logic        ctrl_pfb_coeff_load_start_toggle;
     logic        ctrl_pfb_coeff_commit_toggle;
@@ -362,6 +394,10 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [2:0]  soft_epoch_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  stop_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  soft_reset_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [3:0]  stage31_prepare_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [3:0]  stage31_arm_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [3:0]  stage31_abort_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [3:0]  stage31_clear_status_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_clear_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_coeff_load_start_toggle_cmac_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_coeff_commit_toggle_cmac_sync;
@@ -374,6 +410,10 @@ module t510_fengine_top (
     logic        soft_epoch_toggle_seen;
     logic        stop_toggle_seen;
     logic        soft_reset_toggle_seen;
+    logic        stage31_prepare_toggle_seen;
+    logic        stage31_arm_toggle_seen;
+    logic        stage31_abort_toggle_seen;
+    logic        stage31_clear_status_toggle_seen;
     logic        pfb_clear_toggle_seen;
     logic        pfb_coeff_load_start_toggle_cmac_seen;
     logic        pfb_coeff_commit_toggle_cmac_seen;
@@ -388,6 +428,10 @@ module t510_fengine_top (
     wire         soft_epoch_pulse;
     wire         stop_pulse;
     wire         soft_reset_pulse;
+    wire         stage31_prepare_pulse;
+    wire         stage31_arm_pulse;
+    wire         stage31_abort_pulse;
+    wire         stage31_clear_status_pulse;
     wire         pfb_clear_pulse;
     wire         pfb_coeff_load_start_pulse_cmac;
     wire         pfb_coeff_commit_pulse_cmac;
@@ -407,10 +451,40 @@ module t510_fengine_top (
     wire        streaming;
     wire        waiting_for_epoch;
     wire        epoch_reset_pulse;
+    wire [3:0]  legacy_fsm_state;
+    wire        legacy_armed;
+    wire        legacy_streaming;
+    wire        legacy_waiting_for_epoch;
+    wire        legacy_epoch_reset_pulse;
+    wire        stage31_selected;
+    wire        stage31_armed;
+    wire        stage31_streaming;
+    wire        stage31_release_stream_now;
+    wire        stage31_waiting_for_epoch;
+    wire        stage31_epoch_reset_pulse;
+    wire        stage31_epoch_valid;
+    wire [3:0]  stage31_state;
+    wire [31:0] stage31_status;
+    wire [31:0] stage31_error;
+    wire [63:0] stage31_active_generation;
+    wire [63:0] stage31_active_target_pps_count;
+    wire [63:0] stage31_active_epoch_tai_seconds;
+    wire [63:0] stage31_active_first_sample0;
+    wire [63:0] stage31_active_observation_tag;
+    wire [31:0] stage31_active_signal_chain_tag;
+    wire [31:0] stage31_active_schedule_tag;
+    wire [31:0] stage31_active_mts_result_id;
+    wire [63:0] stage31_actual_commit_pps_count;
+    wire [63:0] stage31_actual_epoch_raw_sample0;
+    wire [63:0] stage31_actual_first_time_sample0;
+    wire [63:0] stage31_actual_first_spec_sample0;
+    wire [63:0] observation_adc_sample0;
     wire        pps_seen;
     logic [63:0] pps_count;
     wire [31:0] error_flags;
     (* ASYNC_REG = "TRUE" *) logic [1:0] pps_sync;
+    logic       pps_count_d;
+    logic       pps_seen_latched;
     (* ASYNC_REG = "TRUE" *) logic       pps_seen_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic       pps_seen_ctrl;
     (* ASYNC_REG = "TRUE" *) logic       ref_lock_ctrl_meta;
@@ -908,6 +982,20 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [3:0]   fsm_state_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  status_bits_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  status_bits_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  stage31_status_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  stage31_status_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  stage31_error_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0]  stage31_error_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_active_generation_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_active_generation_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_actual_commit_pps_count_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_actual_commit_pps_count_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_actual_epoch_raw_sample0_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_actual_epoch_raw_sample0_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_actual_first_time_sample0_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_actual_first_time_sample0_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_actual_first_spec_sample0_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [63:0]  stage31_actual_first_spec_sample0_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  monitor_sample_count_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  monitor_sample_count_ctrl;
     (* ASYNC_REG = "TRUE" *) logic [255:0] clip_counts_ctrl_meta;
@@ -1025,8 +1113,11 @@ module t510_fengine_top (
     assign time_enable     = streaming && ((mode == MODE_TIME) || (mode == MODE_DUAL));
     assign snapshot_enable = streaming && (mode == MODE_SNAPSHOT);
     assign monitor_enable  = armed;
-    assign pps_seen        = pps_sync[1];
-    assign udp_epoch_mode  = (sync_mode == 2'd0) ? 16'd0 : 16'd1;
+    assign pps_seen        = pps_seen_latched;
+    // Packet v3 uses epoch_mode=2 to state explicitly that word 2 carries
+    // the scheduled observation epoch in TAI seconds.
+    assign udp_epoch_mode  = stage31_selected ? 16'd2 :
+        ((sync_mode == 2'd0) ? 16'd0 : 16'd1);
     assign tx_qsfp_link_up = tx_link_status_flags_data[0];
     assign tx_qsfp_module_present = tx_link_status_flags_data[12];
     assign tx_cmac_tx_ready = tx_link_status_flags_data[4];
@@ -1372,6 +1463,11 @@ module t510_fengine_top (
     assign soft_epoch_pulse = soft_epoch_toggle_sync[2] ^ soft_epoch_toggle_seen;
     assign stop_pulse      = stop_toggle_sync[2] ^ stop_toggle_seen;
     assign soft_reset_pulse = soft_reset_toggle_sync[2] ^ soft_reset_toggle_seen;
+    assign stage31_prepare_pulse = stage31_prepare_toggle_sync[3] ^ stage31_prepare_toggle_seen;
+    assign stage31_arm_pulse = stage31_arm_toggle_sync[3] ^ stage31_arm_toggle_seen;
+    assign stage31_abort_pulse = stage31_abort_toggle_sync[3] ^ stage31_abort_toggle_seen;
+    assign stage31_clear_status_pulse =
+        stage31_clear_status_toggle_sync[3] ^ stage31_clear_status_toggle_seen;
     assign pfb_clear_pulse = pfb_clear_toggle_sync[2] ^ pfb_clear_toggle_seen;
     assign tx_clear_pulse = tx_clear_toggle_sync[2] ^ tx_clear_toggle_seen;
     assign tx_clear_pulse_cmac = tx_clear_toggle_cmac_sync[2] ^ tx_clear_toggle_cmac_seen;
@@ -1421,6 +1517,10 @@ module t510_fengine_top (
             ctrl_soft_epoch_toggle <= 1'b0;
             ctrl_stop_toggle       <= 1'b0;
             ctrl_soft_reset_toggle <= 1'b0;
+            ctrl_stage31_prepare_toggle <= 1'b0;
+            ctrl_stage31_arm_toggle <= 1'b0;
+            ctrl_stage31_abort_toggle <= 1'b0;
+            ctrl_stage31_clear_status_toggle <= 1'b0;
             ctrl_pfb_clear_toggle  <= 1'b0;
             ctrl_tx_clear_toggle   <= 1'b0;
             ctrl_time_ddr_ring_clear_toggle <= 1'b0;
@@ -1437,6 +1537,18 @@ module t510_fengine_top (
             end
             if (ctrl_soft_reset_pulse) begin
                 ctrl_soft_reset_toggle <= ~ctrl_soft_reset_toggle;
+            end
+            if (ctrl_stage31_prepare_pulse) begin
+                ctrl_stage31_prepare_toggle <= ~ctrl_stage31_prepare_toggle;
+            end
+            if (ctrl_stage31_arm_pulse) begin
+                ctrl_stage31_arm_toggle <= ~ctrl_stage31_arm_toggle;
+            end
+            if (ctrl_stage31_abort_pulse) begin
+                ctrl_stage31_abort_toggle <= ~ctrl_stage31_abort_toggle;
+            end
+            if (ctrl_stage31_clear_status_pulse) begin
+                ctrl_stage31_clear_status_toggle <= ~ctrl_stage31_clear_status_toggle;
             end
             if (ctrl_pfb_clear_pulse) begin
                 ctrl_pfb_clear_toggle <= ~ctrl_pfb_clear_toggle;
@@ -1565,21 +1677,47 @@ module t510_fengine_top (
             sync_mode              <= 2'd0;
             unix_seconds_meta      <= 64'd0;
             unix_seconds           <= 64'd0;
+            stage31_generation_meta <= 64'd0;
+            stage31_generation <= 64'd0;
+            stage31_target_pps_count_meta <= 64'd0;
+            stage31_target_pps_count <= 64'd0;
+            stage31_epoch_tai_seconds_meta <= 64'd0;
+            stage31_epoch_tai_seconds <= 64'd0;
+            stage31_first_sample0_meta <= 64'd32788;
+            stage31_first_sample0 <= 64'd32788;
+            stage31_observation_tag_meta <= 64'd0;
+            stage31_observation_tag <= 64'd0;
+            stage31_signal_chain_tag_meta <= 32'd0;
+            stage31_signal_chain_tag <= 32'd0;
+            stage31_schedule_tag_meta <= 32'd0;
+            stage31_schedule_tag <= 32'd0;
+            stage31_mts_result_id_meta <= 32'd0;
+            stage31_mts_result_id <= 32'd0;
             arm_latched_sync       <= 2'b00;
             soft_epoch_toggle_sync <= 3'b000;
             stop_toggle_sync       <= 3'b000;
             soft_reset_toggle_sync <= 3'b000;
+            stage31_prepare_toggle_sync <= 4'b0000;
+            stage31_arm_toggle_sync <= 4'b0000;
+            stage31_abort_toggle_sync <= 4'b0000;
+            stage31_clear_status_toggle_sync <= 4'b0000;
             pfb_clear_toggle_sync  <= 3'b000;
             tx_clear_toggle_sync   <= 3'b000;
             soft_epoch_toggle_seen <= 1'b0;
             stop_toggle_seen       <= 1'b0;
             soft_reset_toggle_seen <= 1'b0;
+            stage31_prepare_toggle_seen <= 1'b0;
+            stage31_arm_toggle_seen <= 1'b0;
+            stage31_abort_toggle_seen <= 1'b0;
+            stage31_clear_status_toggle_seen <= 1'b0;
             pfb_clear_toggle_seen  <= 1'b0;
             tx_clear_toggle_seen   <= 1'b0;
             packet_stream_reset_toggle_cmac_src <= 1'b0;
             mode_prev              <= MODE_SPEC;
             mode_switch_reset_count <= 32'd0;
             pps_sync               <= 2'b00;
+            pps_count_d            <= 1'b0;
+            pps_seen_latched       <= 1'b0;
             pps_count              <= 64'd0;
             dac_phase_epoch_data_meta <= 32'd0;
             dac_phase_epoch_data      <= 32'd0;
@@ -1587,8 +1725,10 @@ module t510_fengine_top (
             tx_link_status_flags_data      <= 32'd0;
         end else begin
             pps_sync                <= {pps_sync[0], pps_in};
-            if (pps_sync[0] && !pps_sync[1]) begin
+            pps_count_d             <= pps_sync[1];
+            if (pps_sync[1] && !pps_count_d) begin
                 pps_count <= pps_count + 64'd1;
+                pps_seen_latched <= 1'b1;
             end
             tx_link_status_flags_data_meta <= tx_link_status_flags;
             tx_link_status_flags_data      <= tx_link_status_flags_data_meta;
@@ -1675,15 +1815,43 @@ module t510_fengine_top (
             sync_mode               <= sync_mode_meta;
             unix_seconds_meta       <= ctrl_unix_seconds;
             unix_seconds            <= unix_seconds_meta;
+            stage31_generation_meta <= ctrl_stage31_generation;
+            stage31_generation <= stage31_generation_meta;
+            stage31_target_pps_count_meta <= ctrl_stage31_target_pps_count;
+            stage31_target_pps_count <= stage31_target_pps_count_meta;
+            stage31_epoch_tai_seconds_meta <= ctrl_stage31_epoch_tai_seconds;
+            stage31_epoch_tai_seconds <= stage31_epoch_tai_seconds_meta;
+            stage31_first_sample0_meta <= ctrl_stage31_first_sample0;
+            stage31_first_sample0 <= stage31_first_sample0_meta;
+            stage31_observation_tag_meta <= ctrl_stage31_observation_tag;
+            stage31_observation_tag <= stage31_observation_tag_meta;
+            stage31_signal_chain_tag_meta <= ctrl_stage31_signal_chain_tag;
+            stage31_signal_chain_tag <= stage31_signal_chain_tag_meta;
+            stage31_schedule_tag_meta <= ctrl_stage31_schedule_tag;
+            stage31_schedule_tag <= stage31_schedule_tag_meta;
+            stage31_mts_result_id_meta <= ctrl_stage31_mts_result_id;
+            stage31_mts_result_id <= stage31_mts_result_id_meta;
             arm_latched_sync        <= {arm_latched_sync[0], ctrl_arm_latched};
             soft_epoch_toggle_sync  <= {soft_epoch_toggle_sync[1:0], ctrl_soft_epoch_toggle};
             stop_toggle_sync        <= {stop_toggle_sync[1:0], ctrl_stop_toggle};
             soft_reset_toggle_sync  <= {soft_reset_toggle_sync[1:0], ctrl_soft_reset_toggle};
+            stage31_prepare_toggle_sync <=
+                {stage31_prepare_toggle_sync[2:0], ctrl_stage31_prepare_toggle};
+            stage31_arm_toggle_sync <=
+                {stage31_arm_toggle_sync[2:0], ctrl_stage31_arm_toggle};
+            stage31_abort_toggle_sync <=
+                {stage31_abort_toggle_sync[2:0], ctrl_stage31_abort_toggle};
+            stage31_clear_status_toggle_sync <=
+                {stage31_clear_status_toggle_sync[2:0], ctrl_stage31_clear_status_toggle};
             pfb_clear_toggle_sync   <= {pfb_clear_toggle_sync[1:0], ctrl_pfb_clear_toggle};
             tx_clear_toggle_sync    <= {tx_clear_toggle_sync[1:0], ctrl_tx_clear_toggle};
             soft_epoch_toggle_seen  <= soft_epoch_toggle_sync[2];
             stop_toggle_seen        <= stop_toggle_sync[2];
             soft_reset_toggle_seen  <= soft_reset_toggle_sync[2];
+            stage31_prepare_toggle_seen <= stage31_prepare_toggle_sync[3];
+            stage31_arm_toggle_seen <= stage31_arm_toggle_sync[3];
+            stage31_abort_toggle_seen <= stage31_abort_toggle_sync[3];
+            stage31_clear_status_toggle_seen <= stage31_clear_status_toggle_sync[3];
             pfb_clear_toggle_seen   <= pfb_clear_toggle_sync[2];
             tx_clear_toggle_seen    <= tx_clear_toggle_sync[2];
             if (packet_stream_reset_pulse || pfb_clear_pulse) begin
@@ -1844,6 +2012,20 @@ module t510_fengine_top (
             fsm_state_ctrl                  <= 4'd0;
             status_bits_ctrl_meta           <= 32'd0;
             status_bits_ctrl                <= 32'd0;
+            stage31_status_ctrl_meta         <= 32'd0;
+            stage31_status_ctrl              <= 32'd0;
+            stage31_error_ctrl_meta          <= 32'd0;
+            stage31_error_ctrl               <= 32'd0;
+            stage31_active_generation_ctrl_meta <= 64'd0;
+            stage31_active_generation_ctrl   <= 64'd0;
+            stage31_actual_commit_pps_count_ctrl_meta <= 64'd0;
+            stage31_actual_commit_pps_count_ctrl <= 64'd0;
+            stage31_actual_epoch_raw_sample0_ctrl_meta <= 64'd0;
+            stage31_actual_epoch_raw_sample0_ctrl <= 64'd0;
+            stage31_actual_first_time_sample0_ctrl_meta <= 64'd0;
+            stage31_actual_first_time_sample0_ctrl <= 64'd0;
+            stage31_actual_first_spec_sample0_ctrl_meta <= 64'd0;
+            stage31_actual_first_spec_sample0_ctrl <= 64'd0;
             pps_seen_ctrl_meta              <= 1'b0;
             pps_seen_ctrl                   <= 1'b0;
             ref_lock_ctrl_meta              <= 1'b0;
@@ -1979,6 +2161,20 @@ module t510_fengine_top (
             fsm_state_ctrl                  <= fsm_state_ctrl_meta;
             status_bits_ctrl_meta           <= {27'd0, waiting_for_epoch, sync_mode, streaming, armed};
             status_bits_ctrl                <= status_bits_ctrl_meta;
+            stage31_status_ctrl_meta         <= stage31_status;
+            stage31_status_ctrl              <= stage31_status_ctrl_meta;
+            stage31_error_ctrl_meta          <= stage31_error;
+            stage31_error_ctrl               <= stage31_error_ctrl_meta;
+            stage31_active_generation_ctrl_meta <= stage31_active_generation;
+            stage31_active_generation_ctrl   <= stage31_active_generation_ctrl_meta;
+            stage31_actual_commit_pps_count_ctrl_meta <= stage31_actual_commit_pps_count;
+            stage31_actual_commit_pps_count_ctrl <= stage31_actual_commit_pps_count_ctrl_meta;
+            stage31_actual_epoch_raw_sample0_ctrl_meta <= stage31_actual_epoch_raw_sample0;
+            stage31_actual_epoch_raw_sample0_ctrl <= stage31_actual_epoch_raw_sample0_ctrl_meta;
+            stage31_actual_first_time_sample0_ctrl_meta <= stage31_actual_first_time_sample0;
+            stage31_actual_first_time_sample0_ctrl <= stage31_actual_first_time_sample0_ctrl_meta;
+            stage31_actual_first_spec_sample0_ctrl_meta <= stage31_actual_first_spec_sample0;
+            stage31_actual_first_spec_sample0_ctrl <= stage31_actual_first_spec_sample0_ctrl_meta;
             pps_seen_ctrl_meta              <= pps_seen;
             pps_seen_ctrl                   <= pps_seen_ctrl_meta;
             ref_lock_ctrl_meta              <= ref_lock_in;
@@ -2112,6 +2308,16 @@ module t510_fengine_top (
         end
     end
 
+    assign fsm_state = stage31_selected ? stage31_state : legacy_fsm_state;
+    assign armed = stage31_selected ? stage31_armed : legacy_armed;
+    assign streaming = stage31_selected ?
+        ((stage31_streaming || stage31_release_stream_now) &&
+         ref_lock_in && rfdc_ready_in && rfdc_status_flags[6]) : legacy_streaming;
+    assign waiting_for_epoch = stage31_selected ?
+        stage31_waiting_for_epoch : legacy_waiting_for_epoch;
+    assign epoch_reset_pulse = stage31_selected ?
+        stage31_epoch_reset_pulse : legacy_epoch_reset_pulse;
+
     sync_fsm u_sync_fsm (
         .clk(clk),
         .rst_n(rst_n),
@@ -2124,11 +2330,70 @@ module t510_fengine_top (
         .rfdc_ready(rfdc_ready_in),
         .pps_in(pps_sync[1]),
         .sync_error(1'b0),
-        .state(fsm_state),
-        .armed(armed),
-        .streaming(streaming),
-        .waiting_for_epoch(waiting_for_epoch),
-        .epoch_reset_pulse(epoch_reset_pulse)
+        .state(legacy_fsm_state),
+        .armed(legacy_armed),
+        .streaming(legacy_streaming),
+        .waiting_for_epoch(legacy_waiting_for_epoch),
+        .epoch_reset_pulse(legacy_epoch_reset_pulse)
+    );
+
+    station_sync_scheduler #(
+        .MIN_LEAD_PPS(2)
+    ) u_station_sync_scheduler (
+        .clk(clk),
+        .rst_n(rst_n),
+        .prepare_pulse(stage31_prepare_pulse),
+        .arm_pulse(stage31_arm_pulse),
+        .abort_pulse(stage31_abort_pulse),
+        .clear_status_pulse(stage31_clear_status_pulse),
+        .stop_pulse(stop_pulse),
+        .soft_reset_pulse(soft_reset_pulse),
+        .schedule_generation(stage31_generation),
+        .schedule_target_pps_count(stage31_target_pps_count),
+        .schedule_epoch_tai_seconds(stage31_epoch_tai_seconds),
+        .schedule_first_sample0(stage31_first_sample0),
+        .schedule_observation_tag(stage31_observation_tag),
+        .schedule_signal_chain_tag(stage31_signal_chain_tag),
+        .schedule_tag(stage31_schedule_tag),
+        .schedule_mts_result_id(stage31_mts_result_id),
+        .pps_in(pps_sync[1]),
+        .pps_count(pps_count),
+        .pps_recent(rfdc_status_flags[6]),
+        .ref_locked(ref_lock_in),
+        .rfdc_ready(rfdc_ready_in),
+        .science_bandwidth_mode(science_bandwidth_mode),
+        .science_aa100_active(science_aa100_active),
+        .adc_valid(s_axis_adc_tvalid && s_axis_adc_tready),
+        .adc_raw_sample0(s_axis_adc_sample0),
+        .adc_observation_sample0(observation_adc_sample0),
+        .science_valid(science_tvalid),
+        .science_sample0(science_sample0),
+        .time_packet_event(time_enable && time_tvalid && time_tready),
+        .time_packet_sample0(time_input_sample0),
+        .spec_packet_event(spec_enable && pfb_spec_tvalid && pfb_spec_tready),
+        .spec_packet_sample0(pfb_spec_sample0),
+        .selected(stage31_selected),
+        .armed(stage31_armed),
+        .streaming(stage31_streaming),
+        .release_stream_now(stage31_release_stream_now),
+        .waiting_for_epoch(stage31_waiting_for_epoch),
+        .epoch_reset_pulse(stage31_epoch_reset_pulse),
+        .epoch_valid(stage31_epoch_valid),
+        .state(stage31_state),
+        .status_flags(stage31_status),
+        .error_code(stage31_error),
+        .active_generation(stage31_active_generation),
+        .active_target_pps_count(stage31_active_target_pps_count),
+        .active_epoch_tai_seconds(stage31_active_epoch_tai_seconds),
+        .active_first_sample0(stage31_active_first_sample0),
+        .active_observation_tag(stage31_active_observation_tag),
+        .active_signal_chain_tag(stage31_active_signal_chain_tag),
+        .active_schedule_tag(stage31_active_schedule_tag),
+        .active_mts_result_id(stage31_active_mts_result_id),
+        .actual_commit_pps_count(stage31_actual_commit_pps_count),
+        .actual_epoch_raw_sample0(stage31_actual_epoch_raw_sample0),
+        .actual_first_time_sample0(stage31_actual_first_time_sample0),
+        .actual_first_spec_sample0(stage31_actual_first_spec_sample0)
     );
 
     science_rate_selector #(
@@ -2140,10 +2405,11 @@ module t510_fengine_top (
     ) u_science_rate_selector (
         .clk(clk),
         .rst_n(rst_n),
+        .clear(epoch_reset_pulse || pfb_clear_pulse),
         .bandwidth_mode(science_bandwidth_mode),
         .s_axis_tdata(s_axis_adc_tdata),
         .s_axis_tuser(s_axis_adc_tuser),
-        .s_axis_sample0(s_axis_adc_sample0),
+        .s_axis_sample0(observation_adc_sample0),
         .s_axis_tvalid(s_axis_adc_tvalid),
         .s_axis_tlast(s_axis_adc_tlast),
         .s_axis_tready(s_axis_adc_tready),
@@ -2650,8 +2916,12 @@ module t510_fengine_top (
         .global_input0({board_id[12:0], 3'b000}),
         .epoch_mode(udp_epoch_mode),
         .packet_flags(udp_packet_flags),
-        .unix_seconds(unix_seconds),
-        .pps_count(pps_count),
+        .unix_seconds(stage31_selected ? stage31_active_epoch_tai_seconds : unix_seconds),
+        .pps_count(stage31_selected ? stage31_actual_commit_pps_count : pps_count),
+        .sync_generation(stage31_selected ? stage31_active_generation : 64'd0),
+        .sync_observation_tag(stage31_active_observation_tag),
+        .sync_metadata({stage31_active_signal_chain_tag, stage31_active_schedule_tag}),
+        .sync_status({stage31_active_mts_result_id, stage31_status}),
         .quant_mode(quant_mode),
         .scale_mode(scale_mode),
         .scale_id(scale_id),
@@ -2700,8 +2970,12 @@ module t510_fengine_top (
         .global_input0({board_id[12:0], 3'b000}),
         .epoch_mode(udp_epoch_mode),
         .packet_flags(udp_packet_flags),
-        .unix_seconds(unix_seconds),
-        .pps_count(pps_count),
+        .unix_seconds(stage31_selected ? stage31_active_epoch_tai_seconds : unix_seconds),
+        .pps_count(stage31_selected ? stage31_actual_commit_pps_count : pps_count),
+        .sync_generation(stage31_selected ? stage31_active_generation : 64'd0),
+        .sync_observation_tag(stage31_active_observation_tag),
+        .sync_metadata({stage31_active_signal_chain_tag, stage31_active_schedule_tag}),
+        .sync_status({stage31_active_mts_result_id, stage31_status}),
         .quant_mode(quant_mode),
         .scale_mode(scale_mode),
         .scale_id(scale_id),
@@ -2786,8 +3060,12 @@ module t510_fengine_top (
         .global_input0({board_id[12:0], 3'b000}),
         .epoch_mode(udp_epoch_mode),
         .packet_flags(udp_packet_flags),
-        .unix_seconds(unix_seconds),
-        .pps_count(pps_count),
+        .unix_seconds(stage31_selected ? stage31_active_epoch_tai_seconds : unix_seconds),
+        .pps_count(stage31_selected ? stage31_actual_commit_pps_count : pps_count),
+        .sync_generation(stage31_selected ? stage31_active_generation : 64'd0),
+        .sync_observation_tag(stage31_active_observation_tag),
+        .sync_metadata({stage31_active_signal_chain_tag, stage31_active_schedule_tag}),
+        .sync_status({stage31_active_mts_result_id, stage31_status}),
         .quant_mode(quant_mode),
         .scale_mode(scale_mode),
         .scale_id(scale_id),
@@ -2829,8 +3107,12 @@ module t510_fengine_top (
         .global_input0({board_id[12:0], 3'b000}),
         .epoch_mode(udp_epoch_mode),
         .packet_flags(udp_packet_flags),
-        .unix_seconds(unix_seconds),
-        .pps_count(pps_count),
+        .unix_seconds(stage31_selected ? stage31_active_epoch_tai_seconds : unix_seconds),
+        .pps_count(stage31_selected ? stage31_actual_commit_pps_count : pps_count),
+        .sync_generation(stage31_selected ? stage31_active_generation : 64'd0),
+        .sync_observation_tag(stage31_active_observation_tag),
+        .sync_metadata({stage31_active_signal_chain_tag, stage31_active_schedule_tag}),
+        .sync_status({stage31_active_mts_result_id, stage31_status}),
         .quant_mode(quant_mode),
         .scale_id(scale_id),
         .src_mac(src_mac),
@@ -3342,6 +3624,13 @@ module t510_fengine_top (
         .pps_count(pps_count),
         .ref_locked(ref_lock_ctrl),
         .error_flags(error_flags),
+        .stage31_sync_status(stage31_status_ctrl),
+        .stage31_sync_error(stage31_error_ctrl),
+        .stage31_active_generation(stage31_active_generation_ctrl),
+        .stage31_actual_commit_pps_count(stage31_actual_commit_pps_count_ctrl),
+        .stage31_actual_epoch_raw_sample0(stage31_actual_epoch_raw_sample0_ctrl),
+        .stage31_actual_first_time_sample0(stage31_actual_first_time_sample0_ctrl),
+        .stage31_actual_first_spec_sample0(stage31_actual_first_spec_sample0_ctrl),
         .monitor_sample_count(monitor_sample_count_ctrl),
         .clip_counts(clip_counts_ctrl),
         .mean_mags(mean_mags_ctrl),
@@ -3506,6 +3795,18 @@ module t510_fengine_top (
         .soft_epoch_pulse(ctrl_soft_epoch_pulse),
         .stop_pulse(ctrl_stop_pulse),
         .soft_reset_pulse(ctrl_soft_reset_pulse),
+        .stage31_prepare_pulse(ctrl_stage31_prepare_pulse),
+        .stage31_arm_pulse(ctrl_stage31_arm_pulse),
+        .stage31_abort_pulse(ctrl_stage31_abort_pulse),
+        .stage31_clear_status_pulse(ctrl_stage31_clear_status_pulse),
+        .stage31_generation(ctrl_stage31_generation),
+        .stage31_target_pps_count(ctrl_stage31_target_pps_count),
+        .stage31_epoch_tai_seconds(ctrl_stage31_epoch_tai_seconds),
+        .stage31_first_sample0(ctrl_stage31_first_sample0),
+        .stage31_observation_tag(ctrl_stage31_observation_tag),
+        .stage31_signal_chain_tag(ctrl_stage31_signal_chain_tag),
+        .stage31_schedule_tag(ctrl_stage31_schedule_tag),
+        .stage31_mts_result_id(ctrl_stage31_mts_result_id),
         .sync_mode(ctrl_sync_mode),
         .clock_ref(ctrl_clock_ref),
         .sample_rate_hz(ctrl_sample_rate_hz),

@@ -9,6 +9,7 @@ module science_decim2_halfband_aa #(
 ) (
     input  wire                                           clk,
     input  wire                                           rst_n,
+    input  wire                                           clear,
     input  wire                                           enable,
     input  wire [NINPUT*SUBSAMPLES_PER_BEAT*SAMPLE_W-1:0] s_axis_tdata,
     input  wire [USER_W-1:0]                              s_axis_tuser,
@@ -199,7 +200,16 @@ module science_decim2_halfband_aa #(
             output_beat_count <= 32'd0;
             dropped_beat_count <= 32'd0;
         end else begin
-            if (!enable) begin
+            if (clear) begin
+                for (idx = 0; idx < HIST_DEPTH; idx = idx + 1) begin
+                    history[idx] <= {SUB_W{1'b0}};
+                end
+                valid_samples <= 8'd0;
+                half_valid <= 1'b0;
+                pending_valid <= 1'b0;
+                output_beat_count <= 32'd0;
+                dropped_beat_count <= 32'd0;
+            end else if (!enable) begin
                 valid_samples <= 8'd0;
                 half_valid <= 1'b0;
                 pending_valid <= 1'b0;

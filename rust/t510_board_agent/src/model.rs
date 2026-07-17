@@ -60,6 +60,23 @@ pub struct ExpectedBoardRequest {
     pub expected_board_id: u16,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduledSyncPrepareRequest {
+    pub expected_board_id: u16,
+    pub generation: u64,
+    pub target_pps_count: u64,
+    pub epoch_tai_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_sample0: Option<u64>,
+    #[serde(default)]
+    pub observation_tag: u64,
+    pub signal_chain_tag: u32,
+    #[serde(default)]
+    pub schedule_tag: u32,
+    pub mts_result_id: u32,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StopRequest {
@@ -237,6 +254,38 @@ impl DacRequest {
                     channel.channel
                 ));
             }
+        }
+        Ok(())
+    }
+}
+
+impl ScheduledSyncPrepareRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.generation == 0 {
+            return Err("generation must be positive".into());
+        }
+        if self.target_pps_count == 0 {
+            return Err("target_pps_count must be positive".into());
+        }
+        if self.epoch_tai_seconds == 0 {
+            return Err("epoch_tai_seconds must be positive TAI seconds".into());
+        }
+        if self
+            .first_sample0
+            .is_some_and(|value| value == 0 || value & 0x3 != 0)
+        {
+            return Err(
+                "first_sample0 must be positive and at least aligned to four raw samples; hardware applies the active-path rule"
+                    .into(),
+            );
+        }
+        if self.mts_result_id == 0 {
+            return Err(
+                "mts_result_id must identify the successful configure-time MTS result".into(),
+            );
+        }
+        if self.signal_chain_tag == 0 {
+            return Err("signal_chain_tag must identify the immutable configuration".into());
         }
         Ok(())
     }

@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from ipaddress import IPv4Address
+import json
 import math
 from pathlib import Path
 import re
 import time
+import zlib
 from typing import Any, Iterable
 
 from .t510_fengine import T510FEngine
 
 
-EXPECTED_CORE_VERSION = 0x0001_0030
+EXPECTED_CORE_VERSION = 0x0001_0031
 TIME_DST_PORT_BASE = 4300
 SPEC_DST_PORT_BASE = 4308
 TIME_FLOW_COUNT = 8
@@ -496,6 +499,22 @@ class Stage29Controller:
             clock_ref=T510FEngine.PRODUCTION_CLOCK_REF,
             sync_mode=T510FEngine.PRODUCTION_SYNC_MODE,
         )
+        mts_payload = observation.get("nco", {}).get("mts", {})
+        if (
+            not isinstance(mts_payload, Mapping)
+            or not mts_payload.get("calls")
+            or mts_payload.get("available") is False
+            or bool(mts_payload.get("failures"))
+        ):
+            raise RuntimeError(
+                "Stage31 requires a successful configure-time MTS result with call evidence"
+            )
+        mts_result_id = zlib.crc32(
+            json.dumps(mts_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ) or 1
+        if hasattr(core, "persist_stage31_mts_result_id"):
+            core.persist_stage31_mts_result_id(mts_result_id)
+        observation["stage31_mts_result_id"] = mts_result_id
         science = core.configure_science_29(
             bandwidth_mhz=config.bandwidth_mhz,
             output_mode=config.mode.value,

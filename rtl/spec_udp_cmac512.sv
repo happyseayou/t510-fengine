@@ -21,6 +21,10 @@ module spec_udp_cmac512 #(
     input  wire [15:0]                  packet_flags,
     input  wire [63:0]                  unix_seconds,
     input  wire [63:0]                  pps_count,
+    input  wire [63:0]                  sync_generation,
+    input  wire [63:0]                  sync_observation_tag,
+    input  wire [63:0]                  sync_metadata,
+    input  wire [63:0]                  sync_status,
     input  wire [15:0]                  quant_mode,
     input  wire [15:0]                  scale_mode,
     input  wire [31:0]                  scale_id,
@@ -107,7 +111,7 @@ module spec_udp_cmac512 #(
     localparam [15:0] STREAM_SPEC          = 16'd0;
     localparam [15:0] PRODUCT_FENGINE_IQ16 = 16'hf101;
     localparam [15:0] LOCAL_NINPUT         = 16'd8;
-    localparam integer TOKEN_W             = 832;
+    localparam integer TOKEN_W             = 1088;
 
     localparam integer TOK_SAMPLE0_LSB     = 0;
     localparam integer TOK_UNIX_LSB        = 64;
@@ -137,6 +141,10 @@ module spec_udp_cmac512 #(
     localparam integer TOK_DST_PORT_LSB    = 784;
     localparam integer TOK_ENDPOINT_LSB    = 800;
     localparam integer TOK_ROUTE_LSB       = 808;
+    localparam integer TOK_SYNC_GENERATION_LSB = 832;
+    localparam integer TOK_SYNC_OBSERVATION_LSB = 896;
+    localparam integer TOK_SYNC_METADATA_LSB = 960;
+    localparam integer TOK_SYNC_STATUS_LSB = 1024;
 
     localparam [1:0] S_IDLE    = 2'd0;
     localparam [1:0] S_CAPTURE = 2'd1;
@@ -398,6 +406,10 @@ module spec_udp_cmac512 #(
         token_din[TOK_DST_PORT_LSB +: 16] = selected_dst_port_reg;
         token_din[TOK_ENDPOINT_LSB +: 8] = endpoint_id_reg;
         token_din[TOK_ROUTE_LSB +: 6] = route_id_reg;
+        token_din[TOK_SYNC_GENERATION_LSB +: 64] = sync_generation;
+        token_din[TOK_SYNC_OBSERVATION_LSB +: 64] = sync_observation_tag;
+        token_din[TOK_SYNC_METADATA_LSB +: 64] = sync_metadata;
+        token_din[TOK_SYNC_STATUS_LSB +: 64] = sync_status;
     end
 
     always_comb begin
@@ -660,6 +672,18 @@ module spec_udp_cmac512 #(
     function automatic [15:0] token_dst_port(input [TOKEN_W-1:0] token);
         token_dst_port = token[TOK_DST_PORT_LSB +: 16];
     endfunction
+    function automatic [63:0] token_sync_generation(input [TOKEN_W-1:0] token);
+        token_sync_generation = token[TOK_SYNC_GENERATION_LSB +: 64];
+    endfunction
+    function automatic [63:0] token_sync_observation(input [TOKEN_W-1:0] token);
+        token_sync_observation = token[TOK_SYNC_OBSERVATION_LSB +: 64];
+    endfunction
+    function automatic [63:0] token_sync_metadata(input [TOKEN_W-1:0] token);
+        token_sync_metadata = token[TOK_SYNC_METADATA_LSB +: 64];
+    endfunction
+    function automatic [63:0] token_sync_status(input [TOKEN_W-1:0] token);
+        token_sync_status = token[TOK_SYNC_STATUS_LSB +: 64];
+    endfunction
 
     function automatic [15:0] fold_checksum(input [31:0] sum_in);
         reg [31:0] sum_folded;
@@ -759,7 +783,9 @@ module spec_udp_cmac512 #(
     );
         begin
             case (idx)
-                0:  t510_word_from_token = {T510_MAGIC, 16'd2, T510_HEADER_BYTES16};
+                0:  t510_word_from_token = {T510_MAGIC,
+                    (token_sync_generation(token) != 64'd0) ? 16'd3 : 16'd2,
+                    T510_HEADER_BYTES16};
                 1:  t510_word_from_token = {token_board(token), STREAM_SPEC, token_epoch(token), token_flags(token)};
                 2:  t510_word_from_token = token_unix(token);
                 3:  t510_word_from_token = token_pps(token);
@@ -771,6 +797,10 @@ module spec_udp_cmac512 #(
                 9:  t510_word_from_token = {PRODUCT_FENGINE_IQ16, token_nchan(token), token_block_index(token), token_block_count(token)};
                 10: t510_word_from_token = {token_taps(token), token_fft_shift(token), token_status(token)};
                 11: t510_word_from_token = {token_sample_rate(token), token_scale_mode(token), 15'd0, (token_chan0(token) >= token_chan_split(token))};
+                12: t510_word_from_token = token_sync_generation(token);
+                13: t510_word_from_token = token_sync_observation(token);
+                14: t510_word_from_token = token_sync_metadata(token);
+                15: t510_word_from_token = token_sync_status(token);
                 default: t510_word_from_token = 64'd0;
             endcase
         end

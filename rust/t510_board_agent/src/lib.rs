@@ -10,7 +10,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use config::{HelperBitstream, RuntimeConfig};
-use model::{ConfigureRequest, DacRequest, ExpectedBoardRequest};
+use model::{ConfigureRequest, DacRequest, ExpectedBoardRequest, ScheduledSyncPrepareRequest};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -229,7 +229,7 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
             "stateless": true,
             "hardware_serialization": "agent_local_try_lock",
             "board_id_assignment": "configure_request",
-            "start_modes": ["IMMEDIATE"],
+            "start_modes": ["IMMEDIATE", "SCHEDULED_PPS"],
             "status": {
                 "single_register_snapshot": true,
                 "background_polling": false,
@@ -244,7 +244,8 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
                 "stop": true,
                 "reset": true,
                 "dac_atomic_update": true,
-                "scheduled_start": false,
+                "scheduled_start": true,
+                "scheduled_sync_prepare_arm_abort": true,
                 "automatic_stop": false,
                 "delay_schedule": false,
                 "maintenance_lease": false
@@ -497,6 +498,71 @@ async fn start(
     .await
 }
 
+async fn sync_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    run_hardware(
+        &state,
+        "sync-status",
+        &state.runtime.default_bitstream().helper,
+        json!({}),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn sync_prepare(
+    State(state): State<AppState>,
+    payload: Result<Json<ScheduledSyncPrepareRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    request.validate().map_err(|message| {
+        ApiError::new(
+            &state,
+            StatusCode::BAD_REQUEST,
+            "SCHEMA_VALIDATION_FAILED",
+            message,
+            None,
+        )
+    })?;
+    run_hardware(
+        &state,
+        "sync-prepare",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable scheduled sync request"),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn sync_arm(
+    State(state): State<AppState>,
+    payload: Result<Json<ExpectedBoardRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "sync-arm",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable scheduled arm request"),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn sync_abort(
+    State(state): State<AppState>,
+    payload: Result<Json<ExpectedBoardRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "sync-abort",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable scheduled abort request"),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
 async fn stop(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     run_hardware(
         &state,
@@ -570,6 +636,10 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/configure", post(configure))
         .route("/api/v1/start", post(start))
+        .route("/api/v1/sync/status", get(sync_status))
+        .route("/api/v1/sync/prepare", post(sync_prepare))
+        .route("/api/v1/sync/arm", post(sync_arm))
+        .route("/api/v1/sync/abort", post(sync_abort))
         .route("/api/v1/stop", post(stop))
         .route("/api/v1/reset", post(reset))
         .route("/api/v1/dac", put(dac))

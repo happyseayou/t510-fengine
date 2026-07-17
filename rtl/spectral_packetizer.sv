@@ -13,6 +13,10 @@ module spectral_packetizer #(
     input  wire [15:0]          packet_flags,
     input  wire [63:0]          unix_seconds,
     input  wire [63:0]          pps_count,
+    input  wire [63:0]          sync_generation,
+    input  wire [63:0]          sync_observation_tag,
+    input  wire [63:0]          sync_metadata,
+    input  wire [63:0]          sync_status,
     input  wire [15:0]          quant_mode,
     input  wire [15:0]          scale_mode,
     input  wire [31:0]          scale_id,
@@ -145,7 +149,9 @@ module spectral_packetizer #(
     function automatic [63:0] header_word(input [4:0] idx);
         begin
             case (idx)
-                5'd0:  header_word = {T510_MAGIC, 16'd2, HEADER_BYTES};
+                5'd0:  header_word = {T510_MAGIC,
+                    (sync_generation != 64'd0) ? 16'd3 : 16'd2,
+                    HEADER_BYTES};
                 5'd1:  header_word = {board_id, STREAM_TYPE, pkt_epoch_mode, pkt_packet_flags};
                 5'd2:  header_word = unix_seconds;
                 5'd3:  header_word = pps_count;
@@ -157,6 +163,10 @@ module spectral_packetizer #(
                 5'd9:  header_word = {PRODUCT_FENGINE_IQ16, pkt_spec_nchan, block_index, block_count};
                 5'd10: header_word = {pkt_spec_taps, pkt_spec_fft_shift, pkt_spec_status_flags};
                 5'd11: header_word = {pkt_spec_sample_rate_hz, pkt_scale_mode, 15'd0, (pkt_spec_chan0 >= pkt_chan_split)};
+                5'd12: header_word = sync_generation;
+                5'd13: header_word = sync_observation_tag;
+                5'd14: header_word = sync_metadata;
+                5'd15: header_word = sync_status;
                 default: header_word = 64'd0;
             endcase
         end

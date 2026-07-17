@@ -26,6 +26,7 @@ fi
 
 rtl_files=(
   rtl/sync_fsm.sv
+  rtl/station_sync_scheduler.sv
   rtl/axis_stream_duplicator.sv
   rtl/science_decim2_halfband_aa.sv
   rtl/science_rate_selector.sv
@@ -66,6 +67,7 @@ tb_files=(
   sim/tb_feng_ctrl_axi.sv
   sim/tb_axi4_to_axil_bridge.sv
   sim/tb_sync_fsm.sv
+  sim/tb_station_sync_scheduler.sv
   sim/tb_rfdc_adc_axis_adapter.sv
   sim/tb_science_rate_selector.sv
   sim/tb_science_stream_decimator.sv
@@ -101,6 +103,7 @@ if [[ ${#tb_tops[@]} -eq 0 ]]; then
     tb_feng_ctrl_axi
     tb_axi4_to_axil_bridge
     tb_sync_fsm
+    tb_station_sync_scheduler
     tb_rfdc_adc_axis_adapter
     tb_science_rate_selector
     tb_science_stream_decimator

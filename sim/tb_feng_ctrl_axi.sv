@@ -1002,7 +1002,7 @@ module tb_feng_ctrl_axi;
 
         axi_read(16'h0000, rd);
 `ifdef T510_STAGE27J_PFB
-        `TB_CHECK_EQ(rd, 32'h0001_002c, "CORE_VERSION Stage 27j PFB candidate")
+        `TB_CHECK_EQ(rd, 32'h0001_0031, "CORE_VERSION Stage 31 scheduled sync")
 `elsif T510_STAGE27I_ANTI_ALIAS
         `TB_CHECK_EQ(rd, 32'h0001_002b, "CORE_VERSION 100MHz anti-alias candidate")
 `else

@@ -69,7 +69,7 @@ set_cfg $ip phase_factor_width 16
 set_cfg $ip scaling_options scaled
 set_cfg $ip rounding_modes truncation
 set_cfg $ip aclken false
-set_cfg $ip aresetn false
+set_cfg $ip aresetn true
 set_cfg $ip ovflo true 0
 set_cfg $ip xk_index true 0
 set_cfg $ip output_ordering natural_order 0
@@ -161,7 +161,7 @@ if {$use_streaming_27h} {
     set_cfg $lane_ip scaling_options scaled
     set_cfg $lane_ip rounding_modes convergent_rounding
     set_cfg $lane_ip aclken false
-    set_cfg $lane_ip aresetn false
+    set_cfg $lane_ip aresetn true
     set_cfg $lane_ip ovflo true 0
     set_cfg $lane_ip xk_index true 0
     set_cfg $lane_ip output_ordering natural_order 0

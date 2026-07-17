@@ -43,7 +43,16 @@ class FakeCore:
 
     def apply_mts_locked_observation_config(self, **kwargs):
         self.observation_kwargs = kwargs
-        return {"ok": True}
+        return {
+            "ok": True,
+            "nco": {
+                "mts": {
+                    "available": True,
+                    "calls": [{"label": "adc_mts_sync", "result": 0}],
+                    "failures": [],
+                }
+            },
+        }
 
     def configure_science_29(self, **kwargs):
         self.science_kwargs = kwargs
@@ -462,6 +471,12 @@ class Stage29ConfigTests(unittest.TestCase):
         core = object.__new__(T510FEngine)
         with self.assertRaisesRegex(ValueError, "cannot be overridden"):
             core.configure_science_29(time_dst_port_base=9999)
+
+    def test_stage31_first_sample_alignment_tracks_active_science_path(self) -> None:
+        self.assertEqual(T510FEngine._stage31_first_sample0_rule(0, False), (32, 0, 32768))
+        self.assertEqual(T510FEngine._stage31_first_sample0_rule(1, False), (8, 0, 32768))
+        self.assertEqual(T510FEngine._stage31_first_sample0_rule(1, True), (8, 4, 32788))
+        self.assertEqual(T510FEngine._stage31_first_sample0_rule(2, False), (4, 0, 32768))
 
     def test_stage28_api_and_thin_notebook(self) -> None:
         stage28 = inspect.signature(T510FEngine.run_stage28_validation)

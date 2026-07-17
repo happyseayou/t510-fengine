@@ -23,6 +23,7 @@ set t510_stage27i_anti_alias [expr {[info exists ::T510_STAGE27I_ANTI_ALIAS] && 
 set rtl_files [list \
     [file join $repo_root rtl pl_mts_sync_clk.v] \
     [file join $repo_root rtl sync_fsm.sv] \
+    [file join $repo_root rtl station_sync_scheduler.sv] \
     [file join $repo_root rtl axis_stream_duplicator.sv] \
     [file join $repo_root rtl science_decim2_halfband_aa.sv] \
     [file join $repo_root rtl science_rate_selector.sv] \
@@ -101,6 +102,7 @@ set sim_files [list \
     [file join $repo_root sim tb_feng_ctrl_axi.sv] \
     [file join $repo_root sim tb_axi4_to_axil_bridge.sv] \
     [file join $repo_root sim tb_sync_fsm.sv] \
+    [file join $repo_root sim tb_station_sync_scheduler.sv] \
     [file join $repo_root sim tb_t510_dac_loopback_source.sv] \
     [file join $repo_root sim tb_rfdc_adc_axis_adapter.sv] \
     [file join $repo_root sim tb_science_rate_selector.sv] \

@@ -404,7 +404,9 @@ module tb_pfb_channelizer;
 `ifdef T510_STAGE27J_PFB
         load_unity_pfb_coefficients();
 `endif
-        repeat (4) @(posedge clk);
+        // Stage 31 holds XFFT aresetn low for 15 clocks after reset/epoch
+        // clear, then performs a fresh configuration handshake.
+        repeat (24) @(posedge clk);
 
         `TB_CHECK(!status[0], "PFB enabled status bit stays low before streaming enable")
         `TB_CHECK(status[1], "PFB config valid status bit")

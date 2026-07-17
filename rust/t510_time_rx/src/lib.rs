@@ -194,6 +194,10 @@ pub struct T510Header {
     pub scale_mode: u16,
     pub spec_half_band: bool,
     pub header_crc: u32,
+    pub sync_generation: u64,
+    pub sync_observation_tag: u64,
+    pub sync_metadata: u64,
+    pub sync_status: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,11 +361,15 @@ pub fn parse_t510_header(udp_payload: &[u8]) -> Result<T510Header, String> {
         scale_mode: ((word11 >> 16) & 0xffff) as u16,
         spec_half_band: (word11 & 1) != 0,
         header_crc: (word15 & 0xffff_ffff) as u32,
+        sync_generation: words[12],
+        sync_observation_tag: words[13],
+        sync_metadata: words[14],
+        sync_status: words[15],
     };
     if header.magic != MAGIC {
         return Err(format!("bad T510 magic 0x{:08x}", header.magic));
     }
-    if header.version != 2 {
+    if header.version != 2 && header.version != 3 {
         return Err(format!("unsupported T510 header version {}", header.version));
     }
     if header.header_bytes as usize != HEADER_BYTES {
@@ -541,11 +549,15 @@ pub fn parse_t510_header_fast(udp_payload: &[u8]) -> Result<T510Header, FastPack
         scale_mode: ((word11 >> 16) & 0xffff) as u16,
         spec_half_band: (word11 & 1) != 0,
         header_crc: (word15 & 0xffff_ffff) as u32,
+        sync_generation: words[12],
+        sync_observation_tag: words[13],
+        sync_metadata: words[14],
+        sync_status: words[15],
     };
     if header.magic != MAGIC {
         return Err(FastPacketError::BadT510Magic);
     }
-    if header.version != 2 {
+    if header.version != 2 && header.version != 3 {
         return Err(FastPacketError::UnsupportedT510Version);
     }
     if header.header_bytes as usize != HEADER_BYTES {
@@ -1014,6 +1026,25 @@ mod tests {
         assert_eq!(header.time_count, 64);
         assert_eq!(header.ninput, 8);
         assert_eq!(header.payload_bytes as usize, TIME_PAYLOAD_BYTES);
+    }
+
+    #[test]
+    fn parses_stage31_v3_sync_identity() {
+        let mut payload = synthetic_payload(64, 12, 1000);
+        let word0 = ((MAGIC as u64) << 32) | (3u64 << 16) | HEADER_BYTES as u64;
+        payload[0..8].copy_from_slice(&word0.to_le_bytes());
+        for (index, value) in [0x31u64, 0x1234, 0x5678, 0x9abc].iter().enumerate() {
+            let offset = (12 + index) * 8;
+            payload[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        }
+
+        let header = parse_t510_header(&payload).unwrap();
+        assert_eq!(header.version, 3);
+        assert_eq!(header.sync_generation, 0x31);
+        assert_eq!(header.sync_observation_tag, 0x1234);
+        assert_eq!(header.sync_metadata, 0x5678);
+        assert_eq!(header.sync_status, 0x9abc);
+        assert_eq!(parse_t510_header_fast(&payload).unwrap(), header);
     }
 
     #[test]

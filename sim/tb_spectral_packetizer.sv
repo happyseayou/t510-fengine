@@ -70,6 +70,10 @@ module tb_spectral_packetizer;
         .packet_flags(16'h000a),
         .unix_seconds(64'h0102_0304_0506_0708),
         .pps_count(64'h0000_0000_0000_0099),
+        .sync_generation(64'h11),
+        .sync_observation_tag(64'h22),
+        .sync_metadata(64'h33),
+        .sync_status(64'h44),
         .quant_mode(16'd0),
         .scale_mode(16'd0),
         .scale_id(32'h8765_4321),
@@ -154,7 +158,7 @@ module tb_spectral_packetizer;
         input logic        split_flag
     );
         begin
-            `TB_CHECK_EQ(captured[base + 0], 64'h5435_3130_0002_0080, "SPEC header word 0")
+            `TB_CHECK_EQ(captured[base + 0], 64'h5435_3130_0003_0080, "SPEC v3 header word 0")
             `TB_CHECK_EQ(captured[base + 1], 64'h00bb_0000_0001_000a, "SPEC stream identity")
             `TB_CHECK_EQ(captured[base + 2], 64'h0102_0304_0506_0708, "SPEC unix seconds")
             `TB_CHECK_EQ(captured[base + 3], 64'h0000_0000_0000_0099, "SPEC pps count")
@@ -166,6 +170,10 @@ module tb_spectral_packetizer;
             `TB_CHECK_EQ(captured[base + 9], {16'hf101, 16'd4096, 16'd15, 16'd16}, "SPEC 27h product/block header")
             `TB_CHECK_EQ(captured[base + 10], {16'd0, 16'd3, 32'h0000_0100}, "SPEC 27h taps/shift/status")
             `TB_CHECK_EQ(captured[base + 11], {32'd100_000_000, 16'd0, 15'd0, split_flag}, "SPEC 27h sample rate/split flag")
+            `TB_CHECK_EQ(captured[base + 12], 64'h11, "SPEC sync generation")
+            `TB_CHECK_EQ(captured[base + 13], 64'h22, "SPEC observation tag")
+            `TB_CHECK_EQ(captured[base + 14], 64'h33, "SPEC sync metadata")
+            `TB_CHECK_EQ(captured[base + 15], 64'h44, "SPEC sync status")
         end
     endtask
 

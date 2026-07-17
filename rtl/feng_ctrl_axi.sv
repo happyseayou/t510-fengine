@@ -37,6 +37,13 @@ module feng_ctrl_axi #(
     input  wire [63:0]                  pps_count,
     input  wire                         ref_locked,
     input  wire [31:0]                  error_flags,
+    input  wire [31:0]                  stage31_sync_status,
+    input  wire [31:0]                  stage31_sync_error,
+    input  wire [63:0]                  stage31_active_generation,
+    input  wire [63:0]                  stage31_actual_commit_pps_count,
+    input  wire [63:0]                  stage31_actual_epoch_raw_sample0,
+    input  wire [63:0]                  stage31_actual_first_time_sample0,
+    input  wire [63:0]                  stage31_actual_first_spec_sample0,
     input  wire [31:0]                  monitor_sample_count,
     input  wire [NINPUT*32-1:0]         clip_counts,
     input  wire [NINPUT*32-1:0]         mean_mags,
@@ -201,6 +208,18 @@ module feng_ctrl_axi #(
     output logic                        soft_epoch_pulse,
     output logic                        stop_pulse,
     output logic                        soft_reset_pulse,
+    output logic                        stage31_prepare_pulse,
+    output logic                        stage31_arm_pulse,
+    output logic                        stage31_abort_pulse,
+    output logic                        stage31_clear_status_pulse,
+    output logic [63:0]                 stage31_generation,
+    output logic [63:0]                 stage31_target_pps_count,
+    output logic [63:0]                 stage31_epoch_tai_seconds,
+    output logic [63:0]                 stage31_first_sample0,
+    output logic [63:0]                 stage31_observation_tag,
+    output logic [31:0]                 stage31_signal_chain_tag,
+    output logic [31:0]                 stage31_schedule_tag,
+    output logic [31:0]                 stage31_mts_result_id,
     output logic [1:0]                  sync_mode,
     output logic [1:0]                  clock_ref,
     output logic [31:0]                 sample_rate_hz,
@@ -314,7 +333,7 @@ module feng_ctrl_axi #(
 );
 
 `ifdef T510_STAGE27J_PFB
-    localparam [31:0] CORE_VERSION = 32'h0001_0030;
+    localparam [31:0] CORE_VERSION = 32'h0001_0031;
 `elsif T510_STAGE27I_ANTI_ALIAS
     localparam [31:0] CORE_VERSION = 32'h0001_002B;
 `elsif T510_STAGE27I_RAW_WITNESS
@@ -426,6 +445,7 @@ module feng_ctrl_axi #(
     localparam [3:0] READ_BANK_PREVIEW_EVENT = 4'd9;
     localparam [3:0] READ_BANK_LANE_MON      = 4'd10;
     localparam [3:0] READ_BANK_RAW_WITNESS   = 4'd11;
+    localparam [3:0] READ_BANK_STAGE31_SYNC   = 4'd12;
     localparam [3:0] READ_BANK_ZERO          = 4'd15;
     logic [3:0]            read_bank_latched;
 
@@ -538,6 +558,8 @@ module feng_ctrl_axi #(
                 stage27h_read_bank = READ_BANK_PREVIEW_BUF;
             end else if ((addr >= 18'h0a800) && (addr < 18'h0ac00)) begin
                 stage27h_read_bank = READ_BANK_PREVIEW_EVENT;
+            end else if ((addr >= 18'h0ac00) && (addr < 18'h0ad00)) begin
+                stage27h_read_bank = READ_BANK_STAGE31_SYNC;
             end else if ((addr >= 18'h00900) &&
                          (addr < (PRODUCTION_27J_PFB ? 18'h00980 : 18'h0095c))) begin
                 stage27h_read_bank = READ_BANK_FENGINE;
@@ -803,6 +825,18 @@ module feng_ctrl_axi #(
             soft_epoch_pulse   <= 1'b0;
             stop_pulse         <= 1'b0;
             soft_reset_pulse   <= 1'b0;
+            stage31_prepare_pulse <= 1'b0;
+            stage31_arm_pulse <= 1'b0;
+            stage31_abort_pulse <= 1'b0;
+            stage31_clear_status_pulse <= 1'b0;
+            stage31_generation <= 64'd0;
+            stage31_target_pps_count <= 64'd0;
+            stage31_epoch_tai_seconds <= 64'd0;
+            stage31_first_sample0 <= 64'd32788;
+            stage31_observation_tag <= 64'd0;
+            stage31_signal_chain_tag <= 32'd0;
+            stage31_schedule_tag <= 32'd0;
+            stage31_mts_result_id <= 32'd0;
             debug_capture_start_pulse <= 1'b0;
             debug_capture_clear_pulse <= 1'b0;
             preview_capture_start_pulse <= 1'b0;
@@ -929,6 +963,10 @@ module feng_ctrl_axi #(
             soft_epoch_pulse <= 1'b0;
             stop_pulse       <= 1'b0;
             soft_reset_pulse <= 1'b0;
+            stage31_prepare_pulse <= 1'b0;
+            stage31_arm_pulse <= 1'b0;
+            stage31_abort_pulse <= 1'b0;
+            stage31_clear_status_pulse <= 1'b0;
             debug_capture_start_pulse <= 1'b0;
             debug_capture_clear_pulse <= 1'b0;
             preview_capture_start_pulse <= 1'b0;
@@ -1517,6 +1555,33 @@ module feng_ctrl_axi #(
                             diag_dac_gate <= write_exec_data[16];
                         end
                     end
+                    16'hac04: begin
+                        if (write_exec_data[0]) begin
+                            stage31_prepare_pulse <= 1'b1;
+                        end
+                        if (write_exec_data[1]) begin
+                            stage31_arm_pulse <= 1'b1;
+                        end
+                        if (write_exec_data[2]) begin
+                            stage31_abort_pulse <= 1'b1;
+                        end
+                        if (write_exec_data[3]) begin
+                            stage31_clear_status_pulse <= 1'b1;
+                        end
+                    end
+                    16'hac10: stage31_generation[31:0] <= write_exec_data;
+                    16'hac14: stage31_generation[63:32] <= write_exec_data;
+                    16'hac18: stage31_target_pps_count[31:0] <= write_exec_data;
+                    16'hac1c: stage31_target_pps_count[63:32] <= write_exec_data;
+                    16'hac20: stage31_epoch_tai_seconds[31:0] <= write_exec_data;
+                    16'hac24: stage31_epoch_tai_seconds[63:32] <= write_exec_data;
+                    16'hac28: stage31_first_sample0[31:0] <= write_exec_data;
+                    16'hac2c: stage31_first_sample0[63:32] <= write_exec_data;
+                    16'hac30: stage31_observation_tag[31:0] <= write_exec_data;
+                    16'hac34: stage31_observation_tag[63:32] <= write_exec_data;
+                    16'hac38: stage31_signal_chain_tag <= write_exec_data;
+                    16'hac3c: stage31_schedule_tag <= write_exec_data;
+                    16'hac40: stage31_mts_result_id <= write_exec_data;
                     16'hb700: begin
                         if (write_exec_data[31:0] >= 32'd1024) begin
                             qsfp_test_interval_cycles <= write_exec_data[31:0];
@@ -1843,6 +1908,40 @@ module feng_ctrl_axi #(
                 end
                 READ_BANK_PREVIEW_EVENT: begin
                     read_data_next = preview_event_rd_data;
+                end
+                READ_BANK_STAGE31_SYNC: begin
+                    case (read_addr)
+                        16'hac00: read_data_next = 32'h0102_021f;
+                        16'hac04: read_data_next = 32'd0;
+                        16'hac08: read_data_next = stage31_sync_status;
+                        16'hac0c: read_data_next = stage31_sync_error;
+                        16'hac10: read_data_next = stage31_generation[31:0];
+                        16'hac14: read_data_next = stage31_generation[63:32];
+                        16'hac18: read_data_next = stage31_target_pps_count[31:0];
+                        16'hac1c: read_data_next = stage31_target_pps_count[63:32];
+                        16'hac20: read_data_next = stage31_epoch_tai_seconds[31:0];
+                        16'hac24: read_data_next = stage31_epoch_tai_seconds[63:32];
+                        16'hac28: read_data_next = stage31_first_sample0[31:0];
+                        16'hac2c: read_data_next = stage31_first_sample0[63:32];
+                        16'hac30: read_data_next = stage31_observation_tag[31:0];
+                        16'hac34: read_data_next = stage31_observation_tag[63:32];
+                        16'hac38: read_data_next = stage31_signal_chain_tag;
+                        16'hac3c: read_data_next = stage31_schedule_tag;
+                        16'hac40: read_data_next = stage31_mts_result_id;
+                        16'hac44: read_data_next = stage31_active_generation[31:0];
+                        16'hac48: read_data_next = stage31_active_generation[63:32];
+                        16'hac4c: read_data_next = stage31_actual_commit_pps_count[31:0];
+                        16'hac50: read_data_next = stage31_actual_commit_pps_count[63:32];
+                        16'hac54: read_data_next = stage31_actual_epoch_raw_sample0[31:0];
+                        16'hac58: read_data_next = stage31_actual_epoch_raw_sample0[63:32];
+                        16'hac5c: read_data_next = stage31_actual_first_time_sample0[31:0];
+                        16'hac60: read_data_next = stage31_actual_first_time_sample0[63:32];
+                        16'hac64: read_data_next = stage31_actual_first_spec_sample0[31:0];
+                        16'hac68: read_data_next = stage31_actual_first_spec_sample0[63:32];
+                        16'hac6c: read_data_next = pps_count[31:0];
+                        16'hac70: read_data_next = pps_count[63:32];
+                        default: read_data_next = 32'd0;
+                    endcase
                 end
                 READ_BANK_FENGINE: begin
                     case (read_addr)
