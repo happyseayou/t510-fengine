@@ -30,6 +30,7 @@ module tb_spec_udp_cmac512;
     wire m_tlast;
     logic m_tready = 1'b1;
     logic random_m_backpressure = 1'b0;
+    logic force_m_stall = 1'b0;
     logic [15:0] m_ready_lfsr = 16'h1ace;
     integer m_stall_cycles = 0;
 
@@ -72,6 +73,9 @@ module tb_spec_udp_cmac512;
     integer last_index = -1;
     integer input_cycle = 0;
     integer contiguous_accept_count = 0;
+    integer restart_out_before = 0;
+    integer restart_last_before = 0;
+    integer restart_timeout = 0;
 
     always #5 s_clk = ~s_clk;
     always #3 m_clk = ~m_clk;
@@ -83,7 +87,8 @@ module tb_spec_udp_cmac512;
             m_stall_cycles <= 0;
         end else begin
             m_ready_lfsr <= {m_ready_lfsr[14:0], m_ready_lfsr[15] ^ m_ready_lfsr[13] ^ m_ready_lfsr[12] ^ m_ready_lfsr[10]};
-            m_tready <= !random_m_backpressure || m_ready_lfsr[0] || m_ready_lfsr[1];
+            m_tready <= !force_m_stall &&
+                (!random_m_backpressure || m_ready_lfsr[0] || m_ready_lfsr[1]);
             if (random_m_backpressure && m_tvalid && !m_tready) begin
                 m_stall_cycles <= m_stall_cycles + 1;
             end
@@ -368,6 +373,44 @@ module tb_spec_udp_cmac512;
         `TB_CHECK_EQ(contiguous_accept_count, CAPTURE_PACKETS * 64, "SPEC contiguous accepted input beat count");
         `TB_CHECK_EQ(backpressure_cycles, 32'd0, "SPEC continuous input has no packet-boundary backpressure");
         `TB_CHECK(m_stall_cycles > 0, "SPEC output exercises randomized downstream backpressure");
+
+        // Clear an actively selected, incomplete SPEC frame and prove that a
+        // new frame can cross both domains immediately afterwards.
+        random_m_backpressure = 1'b0;
+        force_m_stall = 1'b1;
+        restart_out_before = out_count;
+        restart_last_before = last_count;
+        send_payload_packet(0);
+        wait (m_tvalid);
+        @(negedge m_clk);
+        force_m_stall = 1'b0;
+        while (out_count < restart_out_before + 4) begin
+            @(posedge m_clk);
+        end
+        @(negedge m_clk);
+        force_m_stall = 1'b1;
+        `TB_CHECK_EQ(last_count, restart_last_before, "partial SPEC frame has no tlast before clear");
+
+        @(negedge s_clk);
+        s_clear = 1'b1;
+        m_clear = 1'b1;
+        repeat (4) @(posedge s_clk);
+        @(negedge s_clk);
+        s_clear = 1'b0;
+        m_clear = 1'b0;
+        repeat (8) @(posedge s_clk);
+        force_m_stall = 1'b0;
+
+        send_payload_packet(1);
+        restart_timeout = 0;
+        while ((last_count < restart_last_before + 1) && (restart_timeout < 30000)) begin
+            @(posedge m_clk);
+            restart_timeout = restart_timeout + 1;
+        end
+        `TB_CHECK_EQ(last_count, restart_last_before + 1, "SPEC emits a complete frame after runtime clear");
+        `TB_CHECK_EQ(packet_count, 32'd1, "SPEC packet counter restarts after clear");
+        `TB_CHECK_EQ(output_frame_count, 32'd1, "SPEC output frame counter restarts after clear");
+        `TB_CHECK(!fifo_full, "SPEC FIFO is not left full after clear/restart");
 
         `TB_PASS("tb_spec_udp_cmac512")
     end

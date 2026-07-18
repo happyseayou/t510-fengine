@@ -1206,7 +1206,8 @@ module t510_fengine_top (
             ) u_time_live_ddr_ring (
                 .clk(cmac_tx_clk),
                 .rst_n(cmac_tx_rst_n),
-                .clear(tx_clear_pulse_cmac || time_ddr_ring_clear_pulse_cmac),
+                .clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac ||
+                       time_ddr_ring_clear_pulse_cmac),
                 .enable(time_ddr_ring_enable_cmac),
                 .base_addr(time_ddr_ring_base_cmac[39:0]),
                 .ring_slots_cfg(time_ddr_ring_slots_cmac),
@@ -1314,7 +1315,7 @@ module t510_fengine_top (
     ) u_time_live_cmac_tx_slice (
         .clk(cmac_tx_clk),
         .rst_n(cmac_tx_rst_n),
-        .clear(tx_clear_pulse_cmac),
+        .clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
         .s_axis_tdata(time_live_ddr_tdata),
         .s_axis_tkeep(time_live_ddr_tkeep),
         .s_axis_tvalid(time_live_ddr_tvalid),
@@ -1484,7 +1485,11 @@ module t510_fengine_top (
     assign packet_stream_reset_pulse_cmac =
         packet_stream_reset_toggle_cmac_sync[2] ^ packet_stream_reset_toggle_cmac_seen;
     assign mode_change_pulse = (mode != mode_prev);
-    assign packet_stream_reset_pulse = epoch_reset_pulse || stop_pulse || soft_reset_pulse || tx_clear_pulse || mode_change_pulse;
+    // One logical flush owns every stateful science/TX stage.  In particular,
+    // ABORT must not leave a partial TIME/SPEC frame behind for the next run.
+    assign packet_stream_reset_pulse = epoch_reset_pulse || stop_pulse ||
+        soft_reset_pulse || stage31_abort_pulse || tx_clear_pulse ||
+        mode_change_pulse;
     assign rfdc_active_port_mask = rfdc_active_mask;
     assign dac_tone_enable = ctrl_dac_tone_enable;
     assign dac_tone_amplitude = ctrl_dac_tone_amplitude;
@@ -2367,6 +2372,7 @@ module t510_fengine_top (
         .adc_raw_sample0(s_axis_adc_sample0),
         .adc_observation_sample0(observation_adc_sample0),
         .science_valid(science_tvalid),
+        .science_ready(science_tready),
         .science_sample0(science_sample0),
         .time_packet_event(time_enable && time_tvalid && time_tready),
         .time_packet_sample0(time_input_sample0),
@@ -2405,7 +2411,7 @@ module t510_fengine_top (
     ) u_science_rate_selector (
         .clk(clk),
         .rst_n(rst_n),
-        .clear(epoch_reset_pulse || pfb_clear_pulse),
+        .clear(packet_stream_reset_pulse || pfb_clear_pulse),
         .bandwidth_mode(science_bandwidth_mode),
         .s_axis_tdata(s_axis_adc_tdata),
         .s_axis_tuser(s_axis_adc_tuser),
@@ -2429,7 +2435,7 @@ module t510_fengine_top (
     monitor_counters u_monitor_counters (
         .clk(clk),
         .rst_n(rst_n),
-        .clear(epoch_reset_pulse),
+        .clear(packet_stream_reset_pulse),
         .sample_valid(s_axis_adc_tvalid && s_axis_adc_tready),
         .sample_tdata(s_axis_adc_tdata[255:0]),
         .sample_count(monitor_sample_count),
@@ -3005,7 +3011,7 @@ module t510_fengine_top (
         .s_axis_tready(wide_pfb_spec_tready),
         .m_clk(cmac_tx_clk),
         .m_rst_n(cmac_tx_rst_n),
-        .m_clear(tx_clear_pulse_cmac),
+        .m_clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
         .m_axis_tdata(wide_spec_live_cmac_tdata),
         .m_axis_tkeep(wide_spec_live_cmac_tkeep),
         .m_axis_tvalid(wide_spec_live_cmac_tvalid),
@@ -3135,7 +3141,7 @@ module t510_fengine_top (
         .s_axis_tready(wide_time_tready),
         .m_clk(cmac_tx_clk),
         .m_rst_n(cmac_tx_rst_n),
-        .m_clear(tx_clear_pulse_cmac),
+        .m_clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
         .m_axis_tdata(wide_time_live_cmac_tdata),
         .m_axis_tkeep(wide_time_live_cmac_tkeep),
         .m_axis_tvalid(wide_time_live_cmac_tvalid),
@@ -3494,7 +3500,7 @@ module t510_fengine_top (
         .clk(cmac_tx_clk),
         .rst_n(cmac_tx_rst_n),
         .enable(tx_qsfp_test_enable),
-        .clear(tx_clear_pulse_cmac),
+        .clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
         .interval_cycles(tx_qsfp_test_interval_cmac),
         .src_mac(src_mac_cmac),
         .src_ip(src_ip_cmac),
@@ -3519,7 +3525,7 @@ module t510_fengine_top (
     cmac_tx_source_mux u_cmac_tx_source_mux (
         .clk(cmac_tx_clk),
         .rst_n(cmac_tx_rst_n),
-        .clear(tx_clear_pulse_cmac),
+        .clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
         .select_time_live(time_live_full_rate_cmac),
         .select_spec_live(spec_live_requested_cmac),
         .heartbeat_tdata(heartbeat_cmac_tdata),
@@ -3552,7 +3558,7 @@ module t510_fengine_top (
     ) u_cmac_tx_output_slice (
         .clk(cmac_tx_clk),
         .rst_n(cmac_tx_rst_n),
-        .clear(tx_clear_pulse_cmac),
+        .clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
         .s_axis_tdata(cmac_mux_axis_tdata),
         .s_axis_tkeep(cmac_mux_axis_tkeep),
         .s_axis_tvalid(cmac_mux_axis_tvalid),

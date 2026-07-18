@@ -246,6 +246,8 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
                 "dac_atomic_update": true,
                 "scheduled_start": true,
                 "scheduled_sync_prepare_arm_abort": true,
+                "full_dual_clock_pipeline_flush": true,
+                "streaming_data_path_health": true,
                 "automatic_stop": false,
                 "delay_schedule": false,
                 "maintenance_lease": false

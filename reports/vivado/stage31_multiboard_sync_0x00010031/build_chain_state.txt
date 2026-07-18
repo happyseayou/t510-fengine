@@ -1,3 +1,6 @@
-stage=complete
+stage=board_recovery_smoke_complete
 status=write_bitstream Complete!
-updated_at=2026-07-17T23:16:44+0800
+updated_at=2026-07-18T16:38:12+0800
+board_install=complete_stage31-54a3e73cf7af-20260718083108
+board_smoke=pass_abort_stop_immediate_restart
+center_hub_scheduled_sync=pending_joint_test

@@ -120,6 +120,7 @@ set sim_files [list \
     [file join $repo_root sim tb_time_axis512_ddr_ring.sv] \
     [file join $repo_root sim tb_time_udp_cmac512.sv] \
     [file join $repo_root sim tb_spec_udp_cmac512.sv] \
+    [file join $repo_root sim tb_cmac_tx_source_mux.sv] \
     [file join $repo_root sim tb_stage25_cmac_live_tx.sv] \
     [file join $repo_root sim tb_tx_payload_witness_capture.sv] \
     [file join $repo_root sim tb_dac_tx_witness_capture.sv] \

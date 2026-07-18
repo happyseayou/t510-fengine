@@ -67,6 +67,9 @@ module tb_time_udp_cmac512;
     integer out_count = 0;
     integer last_count = 0;
     integer last_index = -1;
+    integer restart_out_before = 0;
+    integer restart_last_before = 0;
+    integer restart_timeout = 0;
 
     always #5 s_clk = ~s_clk;
     always #3 m_clk = ~m_clk;
@@ -341,6 +344,54 @@ module tb_time_udp_cmac512;
         `TB_CHECK(selected_route_is_time, "wide TIME selected route is time")
         `TB_CHECK_EQ(time_route_hit_count_vec[0 +: 32], 32'd32, "wide TIME route hit count")
         `TB_CHECK_EQ(output_frame_count, 32'd32, "wide TIME output frame counter")
+
+        // Reproduce STOP/ABORT while CMAC owns an incomplete frame.  Both
+        // clock-domain clears must discard it and allow the very next packet
+        // to terminate normally without a full bitstream reload.
+        @(negedge m_clk);
+        m_tready = 1'b0;
+        restart_out_before = out_count;
+        restart_last_before = last_count;
+        for (flow_idx = 0; flow_idx < 64; flow_idx = flow_idx + 1) begin
+            send_payload_beat(PACKETS, flow_idx);
+        end
+        @(negedge s_clk);
+        s_tvalid = 1'b0;
+        wait (m_tvalid);
+        @(negedge m_clk);
+        m_tready = 1'b1;
+        while (out_count < restart_out_before + 4) begin
+            @(posedge m_clk);
+        end
+        @(negedge m_clk);
+        m_tready = 1'b0;
+        `TB_CHECK_EQ(last_count, restart_last_before, "partial TIME frame has no tlast before clear")
+
+        @(negedge s_clk);
+        s_clear = 1'b1;
+        m_clear = 1'b1;
+        repeat (4) @(posedge s_clk);
+        @(negedge s_clk);
+        s_clear = 1'b0;
+        m_clear = 1'b0;
+        repeat (8) @(posedge s_clk);
+        @(negedge m_clk);
+        m_tready = 1'b1;
+
+        for (flow_idx = 0; flow_idx < 64; flow_idx = flow_idx + 1) begin
+            send_payload_beat(PACKETS + 1, flow_idx);
+        end
+        @(negedge s_clk);
+        s_tvalid = 1'b0;
+        restart_timeout = 0;
+        while ((last_count < restart_last_before + 1) && (restart_timeout < 30000)) begin
+            @(posedge m_clk);
+            restart_timeout = restart_timeout + 1;
+        end
+        `TB_CHECK_EQ(last_count, restart_last_before + 1, "TIME emits a complete frame after runtime clear")
+        `TB_CHECK_EQ(packet_count, 32'd1, "TIME packet counter restarts after clear")
+        `TB_CHECK_EQ(output_frame_count, 32'd1, "TIME output frame counter restarts after clear")
+        `TB_CHECK(!fifo_full, "TIME FIFO is not left full after clear/restart")
 
         `TB_PASS("tb_time_udp_cmac512")
     end

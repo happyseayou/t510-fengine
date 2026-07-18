@@ -172,6 +172,25 @@ class FakeStage29FEngine(T510FEngine):
         return {}
 
 
+class LifecycleCore:
+    def __init__(self, statuses: list[dict]) -> None:
+        self.statuses = list(statuses)
+        self.last_status = dict(statuses[-1])
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def read_status(self) -> dict:
+        if self.statuses:
+            self.last_status = dict(self.statuses.pop(0))
+        return dict(self.last_status)
+
+
 class Stage29ConfigTests(unittest.TestCase):
     def test_five_profiles_and_rates(self) -> None:
         expected = {
@@ -477,6 +496,79 @@ class Stage29ConfigTests(unittest.TestCase):
         self.assertEqual(T510FEngine._stage31_first_sample0_rule(1, False), (8, 0, 32768))
         self.assertEqual(T510FEngine._stage31_first_sample0_rule(1, True), (8, 4, 32788))
         self.assertEqual(T510FEngine._stage31_first_sample0_rule(2, False), (4, 0, 32768))
+
+    def test_low_level_stop_preserves_configuration_and_flushes_both_domains(self) -> None:
+        core = FakeStage29FEngine()
+        core.ctrl.values[core.regs.PFB_CONTROL] = 0x1
+        core.ctrl.values[core.regs.TX_CONTROL] = 0x1D
+        core.stop()
+        self.assertEqual(
+            core.ctrl.writes[-3:],
+            [
+                (core.regs.CONTROL, 0x4),
+                (core.regs.PFB_CONTROL, 0x3),
+                (core.regs.TX_CONTROL, 0x3D),
+            ],
+        )
+
+    def test_low_level_abort_also_flushes_pre_fix_bitstreams(self) -> None:
+        core = FakeStage29FEngine()
+        core.ctrl.values[core.regs.PFB_CONTROL] = 0x1
+        core.ctrl.values[core.regs.TX_CONTROL] = 0x16
+        core.read_scheduled_sync_status = lambda: {  # type: ignore[method-assign]
+            "error": False,
+            "selected": False,
+        }
+        status = core.abort_scheduled_sync(timeout_s=0.01)
+        self.assertTrue(status["pipeline_flush"]["tx_clear_pulsed"])
+        self.assertEqual(
+            core.ctrl.writes[-3:],
+            [
+                (core.regs.STAGE31_SYNC_COMMAND, 0x4),
+                (core.regs.PFB_CONTROL, 0x3),
+                (core.regs.TX_CONTROL, 0x36),
+            ],
+        )
+
+    def test_start_waits_for_accepting_rfdc_path(self) -> None:
+        core = LifecycleCore(
+            [
+                {"streaming": 1, "rfdc_downstream_ready": 0},
+                {"streaming": 1, "rfdc_downstream_ready": 1},
+            ]
+        )
+        controller = Stage29Controller("overlay/t510_fengine.bit", core=core)  # type: ignore[arg-type]
+        status = controller.start_immediate(timeout=0.1)
+        self.assertTrue(core.started)
+        self.assertEqual(status["rfdc_downstream_ready"], 1)
+
+    def test_stop_rejects_stale_science_frame_until_flush_is_visible(self) -> None:
+        core = LifecycleCore(
+            [
+                {
+                    "streaming": 0,
+                    "time_packet_count": 5,
+                    "spec_packet_count": 0,
+                    "tx_frame_sent_count": 5,
+                    "rfdc_downstream_ready": 1,
+                    "tx_cmac_source_mux_locked": 1,
+                    "tx_cmac_mux_selected_source": 2,
+                },
+                {
+                    "streaming": 0,
+                    "time_packet_count": 5,
+                    "spec_packet_count": 0,
+                    "tx_frame_sent_count": 5,
+                    "rfdc_downstream_ready": 1,
+                    "tx_cmac_source_mux_locked": 0,
+                    "tx_cmac_mux_selected_source": 0,
+                },
+            ]
+        )
+        controller = Stage29Controller("overlay/t510_fengine.bit", core=core)  # type: ignore[arg-type]
+        status = controller.stop_and_verify(settle_seconds=0.01, timeout=0.1)
+        self.assertTrue(core.stopped)
+        self.assertEqual(status["tx_cmac_source_mux_locked"], 0)
 
     def test_stage28_api_and_thin_notebook(self) -> None:
         stage28 = inspect.signature(T510FEngine.run_stage28_validation)

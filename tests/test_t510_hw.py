@@ -41,7 +41,13 @@ class FakeHardwareCore:
             "tx_route_miss_count": 0,
             "tx_route_error_count": 0,
             "rfdc_dropped_count": 4,
+            "rfdc_downstream_ready": 1,
             "science_dropped_beat_count": 5,
+            "tx_cmac_source_mux_locked": 0,
+            "tx_cmac_mux_selected_source": 0,
+            "tx_time_live_bridge_fifo_full": 0,
+            "tx_time_live_bridge_fifo_empty": 1,
+            "pfb_input_fifo_level": 0,
             "time_sample0": 1234,
             "rfdc_sample_count": 5678,
             "error_flags": 0,
@@ -248,6 +254,7 @@ class T510HelperTests(unittest.TestCase):
         stopped = t510_hw._stop({"bitstream": self.proof, "request": {}})
         self.assertTrue(stopped["stopped"])
         self.assertEqual(stopped["status"]["streaming"], 0)
+        self.assertTrue(stopped["snapshot"]["pipeline"]["flush_clean"])
         reset = t510_hw._reset(request)
         self.assertTrue(reset["reset"])
         self.assertTrue(FakeController.instances[-1].core.reset_called)

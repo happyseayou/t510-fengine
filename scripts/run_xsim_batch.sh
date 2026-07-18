@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VIVADO_ROOT="${VIVADO_ROOT:-/run/media/astrolab/data/xilinx-ep/Vivado/2022.2}"
 LOCAL_LOCALE="${HOME}/.local/share/locale"
-WORK_DIR="${REPO_ROOT}/.xsim_batch"
+WORK_DIR="${T510_XSIM_WORK_DIR:-${REPO_ROOT}/.xsim_batch}"
 
 if [[ ! -d "${LOCAL_LOCALE}/en_US.UTF-8" ]]; then
   mkdir -p "${LOCAL_LOCALE}/en_US.UTF-8"
@@ -83,6 +83,7 @@ tb_files=(
   sim/tb_time_axis512_ddr_ring.sv
   sim/tb_time_udp_cmac512.sv
   sim/tb_spec_udp_cmac512.sv
+  sim/tb_cmac_tx_source_mux.sv
   sim/tb_stage25_cmac_live_tx.sv
   sim/tb_t510_qsfp_test_frame_gen.sv
   sim/tb_tx_payload_witness_capture.sv
@@ -119,6 +120,7 @@ if [[ ${#tb_tops[@]} -eq 0 ]]; then
     tb_time_axis512_ddr_ring
     tb_time_udp_cmac512
     tb_spec_udp_cmac512
+    tb_cmac_tx_source_mux
     tb_stage25_cmac_live_tx
     tb_t510_qsfp_test_frame_gen
     tb_tx_payload_witness_capture

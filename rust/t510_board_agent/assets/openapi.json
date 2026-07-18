@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "T510 Stateless Board Agent",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "Lightweight Stage 31 control and scheduled-sync API. security_mode=none; laboratory LAN only."
   },
   "servers": [{"url": "http://192.168.100.117:8010"}],
@@ -21,9 +21,9 @@
     "/api/v1/sync/status": {"get": {"summary": "Stage 31 scheduled-sync status and commit telemetry", "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}},
     "/api/v1/sync/prepare": {"post": {"summary": "Prepare an immutable Stage 31 generation bundle", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ScheduledSyncPrepareRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "400": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}},
     "/api/v1/sync/arm": {"post": {"summary": "Arm the previously prepared generation", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExpectedBoardRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}},
-    "/api/v1/sync/abort": {"post": {"summary": "Abort a prepared or armed generation", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExpectedBoardRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}},
-    "/api/v1/stop": {"post": {"summary": "Unconditional safe stop", "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}},
-    "/api/v1/reset": {"post": {"summary": "Safe stop then reset", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExpectedBoardRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}},
+    "/api/v1/sync/abort": {"post": {"summary": "Abort a generation and flush the dual-clock data path", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExpectedBoardRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}},
+    "/api/v1/stop": {"post": {"summary": "Safe stop, full pipeline flush, and idle verification", "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}},
+    "/api/v1/reset": {"post": {"summary": "Safe stop and full pipeline flush, then reset", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExpectedBoardRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}},
     "/api/v1/dac": {"put": {"summary": "Atomic eight-channel DAC update", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DacRequest"}}}}, "responses": {"200": {"$ref": "#/components/responses/Success"}, "400": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}, "504": {"$ref": "#/components/responses/Error"}}}}
   },
   "components": {

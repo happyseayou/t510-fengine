@@ -18,7 +18,7 @@
 </head>
 <body><main>
   <h1>T510 Board Agent API</h1>
-  <p class="muted">Stage 31 · stateless Rust service · OpenAPI 3.1 · Agent version 0.2.0</p>
+  <p class="muted">Stage 31 · stateless Rust service · OpenAPI 3.1 · Agent version 0.2.1</p>
   <p class="warning"><strong>开发网络安全模式：</strong><code>security_mode=none</code>。服务不校验 token、allowlist 或 mTLS，不启用 CORS。请仅放在受控实验室局域网中。</p>
 
   <section>
@@ -44,15 +44,15 @@
   <section>
     <h2>硬件接口</h2>
     <table><thead><tr><th>方法</th><th>路径</th><th>行为</th></tr></thead><tbody>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/status</code></td><td>一次性读取 core、board ID、streaming、时钟/PPS/QSFP、累计 packet/drop/TX counters、error flags 和 sample0。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/status</code></td><td>一次性读取 core、board ID、streaming、时钟/PPS/QSFP、数据通路健康、累计 packet/drop/TX counters、error flags 和 sample0。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v1/configure</code></td><td>加载 catalog bitstream，配置 profile/source/24 endpoints/board ID；完成后保持停流。重复调用会真实重配。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v1/start</code></td><td>校验 <code>expected_board_id</code> 后立即启动。</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/v1/sync/status</code></td><td>读取 Stage 31 prepare/arm/commit、generation、sample0 和错误状态。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v1/sync/prepare</code></td><td>写入并冻结 generation、目标 PPS、TAI epoch、first_sample0、观测/信号链标签及 MTS 结果 ID。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v1/sync/arm</code></td><td>仅在所有板 prepare 成功后 arm；板端再次检查时钟、RFDC、PPS 和提前量。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/sync/abort</code></td><td>撤销 prepared/armed generation。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/stop</code></td><td>无条件安全停止并验证 counters 稳定；无需请求体。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/reset</code></td><td>校验 <code>expected_board_id</code>，先安全停止再 reset。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/sync/abort</code></td><td>撤销 generation，并清空数据侧与 CMAC 侧流水。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/stop</code></td><td>无条件安全停止，双时钟域完整清空，并验证 counters 稳定和流水可恢复；无需请求体。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/reset</code></td><td>校验 <code>expected_board_id</code>，先安全停止并完整清空，再 reset。</td></tr>
       <tr><td><span class="method put">PUT</span></td><td><code>/api/v1/dac</code></td><td>校验 board ID，短暂 mute，原子更新完整八路 DAC，phase commit，恢复 enable mask 并回读。</td></tr>
     </tbody></table>
   </section>

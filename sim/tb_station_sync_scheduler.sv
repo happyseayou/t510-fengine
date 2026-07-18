@@ -18,6 +18,7 @@ module tb_station_sync_scheduler;
     logic adc_valid = 0;
     logic [63:0] adc_raw_sample0 = 0;
     logic science_valid = 0;
+    logic science_ready = 1;
     logic [63:0] science_sample0 = 0;
     logic time_event = 0, spec_event = 0;
     logic [63:0] time_sample0 = 0, spec_sample0 = 0;
@@ -43,7 +44,8 @@ module tb_station_sync_scheduler;
         .science_bandwidth_mode(bandwidth_mode), .science_aa100_active(aa100_active),
         .adc_valid(adc_valid), .adc_raw_sample0(adc_raw_sample0),
         .adc_observation_sample0(observation_sample0),
-        .science_valid(science_valid), .science_sample0(science_sample0),
+        .science_valid(science_valid), .science_ready(science_ready),
+        .science_sample0(science_sample0),
         .time_packet_event(time_event), .time_packet_sample0(time_sample0),
         .spec_packet_event(spec_event), .spec_packet_sample0(spec_sample0),
         .selected(selected), .armed(armed), .streaming(streaming),
@@ -105,9 +107,13 @@ module tb_station_sync_scheduler;
         `TB_CHECK_EQ(epoch_valid, 1'b1, "epoch mapping becomes valid")
 
         @(negedge clk);
-        science_sample0 = 16; science_valid = 1;
+        science_sample0 = 16; science_valid = 1; science_ready = 0;
         time_sample0 = 16; spec_sample0 = 16; time_event = 1; spec_event = 1;
         #1 `TB_CHECK_EQ(release_now, 1'b1, "first_sample0 is released without losing its beat")
+        @(posedge clk);
+        @(negedge clk);
+        `TB_CHECK_EQ(streaming, 1'b0, "STREAMING waits for actual science handshake")
+        science_ready = 1;
         @(posedge clk);
         @(negedge clk); science_valid = 0; time_event = 0; spec_event = 0;
         `TB_CHECK_EQ(streaming, 1'b1, "streaming starts at configured first_sample0")

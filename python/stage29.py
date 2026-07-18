@@ -565,22 +565,54 @@ class Stage29Controller:
         }
 
     def start_immediate(self, *, timeout: float = 2.0) -> dict[str, Any]:
-        """Start the current hardware immediately and prove the streaming bit when available."""
+        """Start immediately and prove streaming plus an accepting data path."""
         core = self.require_core()
         core.start()
         deadline = time.monotonic() + max(float(timeout), 0.0)
         status = core.read_status()
         if "streaming" not in status:
             return status
-        while not bool(status.get("streaming")) and time.monotonic() < deadline:
+        while not self._stream_path_accepting(status) and time.monotonic() < deadline:
             time.sleep(0.01)
             status = core.read_status()
-        if not bool(status.get("streaming")):
-            raise RuntimeError("Stage 29 immediate start did not assert the hardware streaming state")
+        if not self._stream_path_accepting(status):
+            raise RuntimeError(
+                "Stage 29 immediate start did not produce an accepting streaming "
+                f"data path: {status}"
+            )
         return status
 
+    @staticmethod
+    def _stream_path_accepting(status: dict[str, Any]) -> bool:
+        if not bool(status.get("streaming")):
+            return False
+        if "rfdc_downstream_ready" in status and not bool(
+            status.get("rfdc_downstream_ready")
+        ):
+            return False
+        if bool(status.get("tx_time_live_bridge_fifo_full", 0)):
+            return False
+        return True
+
+    @staticmethod
+    def _pipeline_flush_clean(status: dict[str, Any]) -> bool:
+        if "rfdc_downstream_ready" in status and not bool(
+            status.get("rfdc_downstream_ready")
+        ):
+            return False
+        if bool(status.get("tx_time_live_bridge_fifo_full", 0)):
+            return False
+        # A diagnostic heartbeat may legitimately lock source 0 after STOP.
+        # A lock that still selects TIME or SPEC is a stale partial science
+        # frame and must not be carried into the next run.
+        if bool(status.get("tx_cmac_source_mux_locked", 0)) and int(
+            status.get("tx_cmac_mux_selected_source", 0)
+        ) in (1, 2):
+            return False
+        return True
+
     def stop_and_verify(self, *, settle_seconds: float = 0.1, timeout: float = 2.0) -> dict[str, Any]:
-        """Stop science streaming and prove that packet counters have become stable."""
+        """Stop, fully flush the science/TX path, and prove quiescent recovery."""
         core = self.require_core()
         core.stop()
         deadline = time.monotonic() + max(float(timeout), 0.0)
@@ -593,7 +625,11 @@ class Stage29Controller:
             counters_stable = previous is not None and all(
                 int(status.get(key, 0)) == int(previous.get(key, 0)) for key in counter_keys
             )
-            if not bool(status.get("streaming")) and counters_stable:
+            if (
+                not bool(status.get("streaming"))
+                and counters_stable
+                and self._pipeline_flush_clean(status)
+            ):
                 return status
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"Stage 29 stop could not be proven: {status}")

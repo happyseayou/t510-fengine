@@ -46,6 +46,8 @@ module tb_t510_fengine_top_smoke;
     wire          cmac_tx_axis_tlast;
     wire          irq;
     integer       adc_beat_idx = 0;
+    integer       data_pipeline_reset_count = 0;
+    integer       cmac_pipeline_reset_count = 0;
 
     always #5 clk = ~clk;
 
@@ -212,14 +214,24 @@ module tb_t510_fengine_top_smoke;
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             adc_beat_idx <= 0;
+            data_pipeline_reset_count <= 0;
+            cmac_pipeline_reset_count <= 0;
             s_axis_adc_tdata <= make_sample(0);
             s_axis_adc_tuser <= START_TUSER;
             s_axis_adc_sample0 <= START_SAMPLE0;
-        end else if (s_axis_adc_tvalid && s_axis_adc_tready) begin
-            adc_beat_idx <= adc_beat_idx + 1;
-            s_axis_adc_tdata <= make_sample(adc_beat_idx + 1);
-            s_axis_adc_tuser <= s_axis_adc_tuser + 32'd1;
-            s_axis_adc_sample0 <= s_axis_adc_sample0 + 64'd4;
+        end else begin
+            if (dut.packet_stream_reset_pulse) begin
+                data_pipeline_reset_count <= data_pipeline_reset_count + 1;
+            end
+            if (dut.packet_stream_reset_pulse_cmac) begin
+                cmac_pipeline_reset_count <= cmac_pipeline_reset_count + 1;
+            end
+            if (s_axis_adc_tvalid && s_axis_adc_tready) begin
+                adc_beat_idx <= adc_beat_idx + 1;
+                s_axis_adc_tdata <= make_sample(adc_beat_idx + 1);
+                s_axis_adc_tuser <= s_axis_adc_tuser + 32'd1;
+                s_axis_adc_sample0 <= s_axis_adc_sample0 + 64'd4;
+            end
         end
     end
 
@@ -371,6 +383,27 @@ module tb_t510_fengine_top_smoke;
             `TB_CHECK_EQ(rd[1], 1'b0, "default external PPS mode does not stream without PPS")
             `TB_CHECK_EQ(rd[3:2], 2'd0, "default sync mode is external PPS")
             `TB_CHECK_EQ(rd[4], 1'b1, "default mode waits for epoch")
+        end
+    endtask
+
+    task automatic check_stop_and_abort_flush_both_domains;
+        integer data_before;
+        integer cmac_before;
+        begin
+            reset_dut();
+            data_before = data_pipeline_reset_count;
+            cmac_before = cmac_pipeline_reset_count;
+            axi_write(16'h000c, 32'h0000_0004);
+            repeat (16) @(posedge clk);
+            `TB_CHECK_EQ(data_pipeline_reset_count, data_before + 1, "top STOP flushes data domain")
+            `TB_CHECK_EQ(cmac_pipeline_reset_count, cmac_before + 1, "top STOP flushes CMAC domain")
+
+            data_before = data_pipeline_reset_count;
+            cmac_before = cmac_pipeline_reset_count;
+            axi_write(16'hac04, 32'h0000_0004);
+            repeat (16) @(posedge clk);
+            `TB_CHECK_EQ(data_pipeline_reset_count, data_before + 1, "top ABORT flushes data domain")
+            `TB_CHECK_EQ(cmac_pipeline_reset_count, cmac_before + 1, "top ABORT flushes CMAC domain")
         end
     endtask
 
@@ -672,6 +705,7 @@ module tb_t510_fengine_top_smoke;
     endtask
 
     initial begin
+        check_stop_and_abort_flush_both_domains();
         check_default_waits_without_pps();
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
         run_production_spec_cmac();

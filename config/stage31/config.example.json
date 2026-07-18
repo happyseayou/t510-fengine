@@ -11,7 +11,7 @@
     {
       "id": "fengine-0x00010031",
       "path": "/opt/t510-agent/current/overlay/t510_fengine.bit",
-      "sha256": "3696845d30dc471f572904b7039aa231bc766a21be05de7796d53704f8d08eec",
+      "sha256": "21357385978297a688e9418e086852d4a8aac2deaa25078e1570b81cdc4266c9",
       "core_version": "0x00010031",
       "profiles": [
         {

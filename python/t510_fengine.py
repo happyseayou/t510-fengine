@@ -6982,7 +6982,14 @@ class T510FEngine:
 
     def abort_scheduled_sync(self, *, timeout_s: float = 0.25) -> dict[str, Any]:
         self.ctrl.write(self.regs.STAGE31_SYNC_COMMAND, 0x4)
-        return self._wait_scheduled_sync(lambda value: not bool(value["selected"]), timeout_s=timeout_s)
+        status = self._wait_scheduled_sync(
+            lambda value: not bool(value["selected"]), timeout_s=timeout_s
+        )
+        # Keep ABORT recoverable on both the fixed RTL and already-deployed
+        # Stage 31 images.  Older images stopped the scheduler but could leave
+        # the science selector or a CMAC-side partial frame alive.
+        status["pipeline_flush"] = self.flush_science_pipeline()
+        return status
 
     def clear_scheduled_sync_status(self) -> None:
         self.ctrl.write(self.regs.STAGE31_SYNC_COMMAND, 0x8)
@@ -7005,11 +7012,33 @@ class T510FEngine:
     def trigger_epoch(self) -> None:
         self.ctrl.write(self.regs.CONTROL, 0x2)
 
+    def flush_science_pipeline(self) -> dict[str, int]:
+        """Flush both sides of the science-to-CMAC path without changing config.
+
+        PFB_CONTROL[1] clears the science selector/PFB state while preserving
+        PFB_CONTROL[0].  TX_CONTROL[5] clears packet/TX state and the CMAC-side
+        frame lock while preserving the persistent TX policy bits [4:0].
+        Keeping both pulses here also provides a software recovery path for
+        Stage 31 bitstreams made before STOP/ABORT owned the unified RTL reset.
+        """
+        pfb_control = int(self.ctrl.read(self.regs.PFB_CONTROL)) & 0x1
+        tx_control = int(self.ctrl.read(self.regs.TX_CONTROL)) & 0x1F
+        self.ctrl.write(self.regs.PFB_CONTROL, pfb_control | 0x2)
+        self.ctrl.write(self.regs.TX_CONTROL, tx_control | 0x20)
+        return {
+            "pfb_control_preserved": pfb_control,
+            "tx_control_preserved": tx_control,
+            "pfb_clear_pulsed": 1,
+            "tx_clear_pulsed": 1,
+        }
+
     def stop(self) -> None:
         self.ctrl.write(self.regs.CONTROL, 0x4)
+        self.flush_science_pipeline()
 
     def reset(self) -> None:
         self.ctrl.write(self.regs.CONTROL, 0x8)
+        self.flush_science_pipeline()
 
     def read_status(self) -> dict[str, int]:
         keys = {

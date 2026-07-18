@@ -190,11 +190,19 @@ def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
     if dac_centers and max(dac_centers) - min(dac_centers) < 1e-6:
         center_mhz = sum(dac_centers) / len(dac_centers)
     tx_flags = int(status.get("tx_link_status_flags", 0))
+    mux_locked = bool(status.get("tx_cmac_source_mux_locked", 0))
+    mux_source = int(status.get("tx_cmac_mux_selected_source", 0))
+    time_fifo_full = bool(status.get("tx_time_live_bridge_fifo_full", 0))
+    downstream_ready = bool(status.get("rfdc_downstream_ready", 0))
+    streaming = bool(status.get("streaming", 0))
+    stale_science_frame = (
+        not streaming and mux_locked and mux_source in (1, 2)
+    )
     return {
         "captured_at_unix_ms": time.time_ns() // 1_000_000,
         "core_version": f"0x{int(status.get('core_version', 0)):08x}",
         "board_id": int(status.get("board_id", 0)),
-        "streaming": bool(status.get("streaming", 0)),
+        "streaming": streaming,
         "profile": {
             **_profile_name(status),
             "center_mhz": center_mhz,
@@ -229,6 +237,27 @@ def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
             "tx_route_error": int(status.get("tx_route_error_count", 0)),
             "rfdc_dropped": int(status.get("rfdc_dropped_count", 0)),
             "science_dropped_beats": int(status.get("science_dropped_beat_count", 0)),
+        },
+        "pipeline": {
+            "rfdc_downstream_ready": downstream_ready,
+            "cmac_mux_locked": mux_locked,
+            "cmac_mux_selected_source": mux_source,
+            "cmac_mux_stale_science_frame": stale_science_frame,
+            "time_fifo_full": time_fifo_full,
+            "time_fifo_empty": bool(status.get("tx_time_live_bridge_fifo_empty", 0)),
+            "pfb_input_fifo_level": int(status.get("pfb_input_fifo_level", 0)),
+            "flush_clean": bool(
+                downstream_ready and not time_fifo_full and not stale_science_frame
+            ),
+            "stream_accepting": bool(
+                streaming and downstream_ready and not time_fifo_full
+            ),
+            "first_time_seen": bool(
+                scheduled_sync and scheduled_sync.get("first_time_seen", False)
+            ),
+            "first_spec_seen": bool(
+                scheduled_sync and scheduled_sync.get("first_spec_seen", False)
+            ),
         },
         "sample0": {
             "time": int(status.get("time_sample0", 0)),

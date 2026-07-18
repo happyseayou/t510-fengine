@@ -58,6 +58,7 @@ set sim_files [list \
     [file join $repo_root sim tb_time_axis512_ddr_ring.sv] \
     [file join $repo_root sim tb_time_udp_cmac512.sv] \
     [file join $repo_root sim tb_spec_udp_cmac512.sv] \
+    [file join $repo_root sim tb_cmac_tx_source_mux.sv] \
     [file join $repo_root sim tb_stage25_cmac_live_tx.sv] \
     [file join $repo_root sim tb_t510_qsfp_test_frame_gen.sv] \
     [file join $repo_root sim tb_tx_payload_witness_capture.sv] \
@@ -87,6 +88,7 @@ set tb_tops [list \
     tb_time_axis512_ddr_ring \
     tb_time_udp_cmac512 \
     tb_spec_udp_cmac512 \
+    tb_cmac_tx_source_mux \
     tb_stage25_cmac_live_tx \
     tb_t510_qsfp_test_frame_gen \
     tb_tx_payload_witness_capture \

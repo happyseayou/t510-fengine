@@ -13,6 +13,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -52,6 +53,86 @@ def read_snapshots(boards: list[tuple[str, int]]) -> list[tuple[str, int, dict]]
         return list(pool.map(read_one, boards))
 
 
+def _progress_sample(result: dict, *, generation: int) -> tuple[bool, dict]:
+    sync = dict(result.get("sync", {}))
+    snapshot = dict(result.get("snapshot", {}))
+    pipeline = dict(snapshot.get("pipeline", {}))
+    counters = dict(snapshot.get("counters", {}))
+    mode = str(dict(snapshot.get("profile", {})).get("mode", "unknown"))
+    need_time = mode in ("time_only", "time_spec")
+    need_spec = mode in ("spec_only", "time_spec")
+    checks = {
+        "generation": int(sync.get("active_generation", 0)) == int(generation),
+        "streaming": bool(sync.get("streaming", False)),
+        "stream_accepting": bool(pipeline.get("stream_accepting", False)),
+        "first_time_seen": not need_time or bool(sync.get("first_time_seen", False)),
+        "first_spec_seen": not need_spec or bool(sync.get("first_spec_seen", False)),
+        "no_stale_science_frame": not bool(
+            pipeline.get("cmac_mux_stale_science_frame", False)
+        ),
+    }
+    sample = {
+        "mode": mode,
+        "need_time": need_time,
+        "need_spec": need_spec,
+        "checks": checks,
+        "time_packets": int(counters.get("time_packets", 0)),
+        "spec_packets": int(counters.get("spec_packets", 0)),
+        "rfdc_dropped": int(counters.get("rfdc_dropped", 0)),
+        "result": result,
+    }
+    return all(checks.values()) and mode != "unknown", sample
+
+
+def wait_for_sustained_progress(
+    url: str,
+    board_id: int,
+    *,
+    generation: int,
+    timeout_seconds: float,
+    poll_seconds: float,
+) -> dict:
+    """Require two healthy samples with advancing required stream counters."""
+    deadline = time.monotonic() + max(float(timeout_seconds), 0.0)
+    previous: dict | None = None
+    last: dict | None = None
+    while time.monotonic() < deadline:
+        result = request(url, "/api/v1/sync/status")
+        healthy, sample = _progress_sample(result, generation=generation)
+        last = sample
+        if bool(dict(result.get("sync", {})).get("error", False)):
+            raise RuntimeError(f"board {board_id} Stage 31 error: {result['sync']}")
+        if healthy:
+            counters_advance = previous is not None
+            if sample["need_time"]:
+                counters_advance = counters_advance and (
+                    sample["time_packets"] > previous["time_packets"]
+                )
+            if sample["need_spec"]:
+                counters_advance = counters_advance and (
+                    sample["spec_packets"] > previous["spec_packets"]
+                )
+            drops_stable = previous is not None and (
+                sample["rfdc_dropped"] == previous["rfdc_dropped"]
+            )
+            if counters_advance and drops_stable:
+                return {
+                    "verified": True,
+                    "mode": sample["mode"],
+                    "time_packet_delta": sample["time_packets"] - previous["time_packets"],
+                    "spec_packet_delta": sample["spec_packets"] - previous["spec_packets"],
+                    "rfdc_drop_delta": sample["rfdc_dropped"] - previous["rfdc_dropped"],
+                    "snapshot": sample["result"],
+                }
+            previous = sample
+        else:
+            previous = None
+        time.sleep(max(float(poll_seconds), 0.05))
+    raise RuntimeError(
+        f"board {board_id} did not establish sustained Stage 31 data flow: {last}"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--board", action="append", required=True, type=parse_board)
@@ -66,6 +147,13 @@ def main() -> int:
     parser.add_argument("--observation-tag", type=lambda value: int(value, 0), default=0)
     parser.add_argument("--signal-chain-tag", type=lambda value: int(value, 0), required=True)
     parser.add_argument("--schedule-tag", type=lambda value: int(value, 0), default=0)
+    parser.add_argument("--verify-timeout-seconds", type=float, default=90.0)
+    parser.add_argument("--verify-poll-seconds", type=float, default=1.0)
+    parser.add_argument(
+        "--skip-progress-verify",
+        action="store_true",
+        help="return after ARM acknowledgements without proving sustained TIME/SPEC flow",
+    )
     args = parser.parse_args()
 
     board_ids = [board_id for _, board_id in args.board]
@@ -79,6 +167,8 @@ def main() -> int:
         parser.error("--lead-pps must be at least 2")
     if not 0 < args.signal_chain_tag <= 0xFFFF_FFFF:
         parser.error("--signal-chain-tag must be in 1..0xffffffff")
+    if args.verify_timeout_seconds <= 0 or args.verify_poll_seconds <= 0:
+        parser.error("verification timeout and poll interval must be positive")
     # Each helper response contains one internally consistent register snapshot.
     # Stateless PYNQ helper startup takes several seconds on the board, so a
     # second HTTP sample cannot prove a 50 ms PPS-free window. Read all boards
@@ -154,6 +244,28 @@ def main() -> int:
             for future in as_completed([job[0] for job in arm_jobs]):
                 _, url, board_id = next(job for job in arm_jobs if job[0] is future)
                 armed.append({"url": url, "board_id": board_id, "result": future.result()})
+
+        if not args.skip_progress_verify:
+            verify_jobs = []
+            with ThreadPoolExecutor(max_workers=len(prepared)) as pool:
+                for url, board_id in prepared:
+                    future = pool.submit(
+                        wait_for_sustained_progress,
+                        url,
+                        board_id,
+                        generation=args.generation,
+                        timeout_seconds=args.verify_timeout_seconds,
+                        poll_seconds=args.verify_poll_seconds,
+                    )
+                    verify_jobs.append((future, url, board_id))
+                for future in as_completed([job[0] for job in verify_jobs]):
+                    _, _url, board_id = next(
+                        job for job in verify_jobs if job[0] is future
+                    )
+                    verification = future.result()
+                    next(
+                        row for row in armed if row["board_id"] == board_id
+                    )["verification"] = verification
     except Exception:
         for url, board_id in prepared:
             try:

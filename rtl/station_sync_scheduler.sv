@@ -36,6 +36,7 @@ module station_sync_scheduler #(
     output wire [63:0] adc_observation_sample0,
 
     input  wire        science_valid,
+    input  wire        science_ready,
     input  wire [63:0] science_sample0,
     input  wire        time_packet_event,
     input  wire [63:0] time_packet_sample0,
@@ -102,6 +103,7 @@ module station_sync_scheduler #(
     wire capture_epoch_sample =
         selected && (state == ST_WAIT_EPOCH_SAMPLE) &&
         !epoch_reset_pulse && adc_valid;
+    wire science_fire = science_valid && science_ready;
     wire first_sample0_reachable =
         (schedule_first_sample0 != 64'd0) &&
         ((science_bandwidth_mode == 2'd0) ?
@@ -313,7 +315,10 @@ module station_sync_scheduler #(
                     end
 
                     ST_PRIMING: begin
-                        if (science_valid && (science_sample0 == active_first_sample0)) begin
+                        // release_stream_now enables the selected branches while
+                        // PRIMING.  Do not claim STREAMING until that exact beat
+                        // is actually accepted by the shared science fanout.
+                        if (science_fire && (science_sample0 == active_first_sample0)) begin
                             streaming <= 1'b1;
                             state <= ST_STREAMING;
                             if (time_packet_event && !time_seen) begin
@@ -324,7 +329,7 @@ module station_sync_scheduler #(
                                 spec_seen <= 1'b1;
                                 actual_first_spec_sample0 <= spec_packet_sample0;
                             end
-                        end else if (science_valid &&
+                        end else if (science_fire &&
                                     (science_sample0 > active_first_sample0)) begin
                             streaming <= 1'b0;
                             state <= ST_ERROR;

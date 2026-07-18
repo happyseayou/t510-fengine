@@ -9,7 +9,7 @@ RELEASE_ID="${STAGE31_RELEASE_ID:-stage31-$(git -C "${ROOT}" rev-parse --short=1
 BUILD_DIR="${ROOT}/build/stage31"
 STAGE="${BUILD_DIR}/${RELEASE_ID}"
 REMOTE_STAGE="/home/xilinx/.cache/t510-stage31/${RELEASE_ID}"
-EXPECTED_SHA="3696845d30dc471f572904b7039aa231bc766a21be05de7796d53704f8d08eec"
+EXPECTED_SHA="21357385978297a688e9418e086852d4a8aac2deaa25078e1570b81cdc4266c9"
 
 case "${MODE}" in
   --build-only|--install) ;;
