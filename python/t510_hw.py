@@ -14,14 +14,22 @@ from pathlib import Path
 import sys
 import time
 import traceback
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 
-from python.stage29 import (
-    DacChannelConfig,
-    FlowDestination,
-    Stage29Config,
-    Stage29Controller,
-)
+if TYPE_CHECKING:
+    from python.stage29 import (
+        DacChannelConfig,
+        FlowDestination,
+        Stage29Config,
+        Stage29Controller,
+    )
+else:
+    # Importing stage29 imports PYNQ. Keep that import behind the PL-state guard:
+    # on a cold boot even importing PYNQ can wait on platform initialization.
+    DacChannelConfig = None
+    FlowDestination = None
+    Stage29Config = None
+    Stage29Controller = None
 
 
 EXIT_INVALID = 2
@@ -29,6 +37,8 @@ EXIT_STATE_CONFLICT = 3
 EXIT_HARDWARE_UNAVAILABLE = 4
 EXIT_BITSTREAM_PROOF = 5
 EXIT_INTERNAL = 6
+
+FPGA_MANAGER_STATE_PATH = Path("/sys/class/fpga_manager/fpga0/state")
 
 
 class HelperError(RuntimeError):
@@ -38,6 +48,32 @@ class HelperError(RuntimeError):
         self.message = message
         self.exit_code = int(exit_code)
         self.details = details
+
+
+def _load_stage29() -> None:
+    global DacChannelConfig, FlowDestination, Stage29Config, Stage29Controller
+
+    if all(
+        value is not None
+        for value in (
+            DacChannelConfig,
+            FlowDestination,
+            Stage29Config,
+            Stage29Controller,
+        )
+    ):
+        return
+
+    from python import stage29
+
+    if DacChannelConfig is None:
+        DacChannelConfig = stage29.DacChannelConfig
+    if FlowDestination is None:
+        FlowDestination = stage29.FlowDestination
+    if Stage29Config is None:
+        Stage29Config = stage29.Stage29Config
+    if Stage29Controller is None:
+        Stage29Controller = stage29.Stage29Controller
 
 
 def _read_request() -> dict[str, Any]:
@@ -96,6 +132,111 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _sha1(path: Path) -> str:
+    digest = hashlib.sha1()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_fpga_manager_state() -> str:
+    try:
+        return FPGA_MANAGER_STATE_PATH.read_text(encoding="ascii").strip().lower()
+    except OSError as exc:
+        raise HelperError(
+            "FPGA_STATE_UNAVAILABLE",
+            "cannot read the FPGA manager state without accessing PL MMIO",
+            exit_code=EXIT_HARDWARE_UNAVAILABLE,
+            details={
+                "path": str(FPGA_MANAGER_STATE_PATH),
+                "reason": str(exc),
+            },
+        ) from exc
+
+
+def _read_pynq_global_pl_state() -> dict[str, Any] | None:
+    try:
+        from pynq.pl_server import global_state as pynq_global_state
+    except ImportError as exc:
+        raise HelperError(
+            "PYNQ_STATE_UNAVAILABLE",
+            "cannot import the PYNQ global PL state reader",
+            exit_code=EXIT_HARDWARE_UNAVAILABLE,
+            details={"reason": str(exc)},
+        ) from exc
+
+    state_path = Path(pynq_global_state.STATE_DIR) / "global_pl_state.json"
+    if not state_path.is_file():
+        return None
+    try:
+        value = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HelperError(
+            "PYNQ_STATE_UNAVAILABLE",
+            "cannot read the PYNQ global PL state safely",
+            exit_code=EXIT_HARDWARE_UNAVAILABLE,
+            details={"path": str(state_path), "reason": str(exc)},
+        ) from exc
+    if not isinstance(value, dict):
+        raise HelperError(
+            "PYNQ_STATE_UNAVAILABLE",
+            "the PYNQ global PL state is not a JSON object",
+            exit_code=EXIT_HARDWARE_UNAVAILABLE,
+            details={"path": str(state_path)},
+        )
+    return value
+
+
+def _require_active_bitstream(bitstream: dict[str, Any], path: Path) -> None:
+    state = _read_fpga_manager_state()
+    if state != "operating":
+        raise HelperError(
+            "PL_NOT_CONFIGURED",
+            "the PL is not configured; call POST /api/v1/configure before any hardware API",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={
+                "fpga_manager_state": state,
+                "required_action": "configure",
+            },
+        )
+
+    active = _read_pynq_global_pl_state()
+    if active is None:
+        raise HelperError(
+            "PL_NOT_CONFIGURED",
+            "PYNQ has no active bitstream for this boot; call POST /api/v1/configure",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={
+                "fpga_manager_state": state,
+                "required_action": "configure",
+            },
+        )
+
+    expected_path = path.resolve()
+    active_name = str(active.get("bitfile_name", "")).strip()
+    try:
+        active_path = Path(active_name).resolve() if active_name else None
+    except OSError:
+        active_path = None
+    stored_hash = str(active.get("bitfile_hash", "")).strip().lower()
+    actual_hash = _sha1(expected_path)
+    if active_path != expected_path or stored_hash != actual_hash:
+        raise HelperError(
+            "ACTIVE_BITSTREAM_MISMATCH",
+            "the active PYNQ bitstream does not match the Agent catalog; configure is required",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={
+                "bitstream_id": bitstream["id"],
+                "expected_path": str(expected_path),
+                "active_path": str(active_path) if active_path is not None else active_name,
+                "expected_sha1": actual_hash,
+                "active_sha1": stored_hash,
+                "required_action": "configure",
+            },
+        )
+
+
 def _verify_bitstream(value: dict[str, Any], *, hash_file: bool) -> Path:
     path = Path(str(value["path"]))
     if not path.is_absolute():
@@ -126,6 +267,10 @@ def _verify_bitstream(value: dict[str, Any], *, hash_file: bool) -> Path:
 def _controller(request: dict[str, Any], *, download: bool = False) -> Stage29Controller:
     bitstream = _bitstream(request)
     path = _verify_bitstream(bitstream, hash_file=download)
+    if not download:
+        _require_active_bitstream(bitstream, path)
+    _load_stage29()
+    assert Stage29Controller is not None
     controller = Stage29Controller(path)
     controller.connect(download=download)
     expected = int(str(bitstream["core_version"]), 0)
@@ -273,6 +418,10 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
     body = _body(request)
     bitstream = _bitstream(request)
     path = _verify_bitstream(bitstream, hash_file=True)
+    _load_stage29()
+    assert FlowDestination is not None
+    assert Stage29Config is not None
+    assert Stage29Controller is not None
     endpoints = sorted(body["endpoints"], key=lambda item: int(item["endpoint_id"]))
     time_destinations = tuple(
         FlowDestination(
@@ -400,6 +549,7 @@ def _set_dac(request: dict[str, Any]) -> dict[str, Any]:
     body = _body(request)
     controller = _controller(request)
     _expected_board(controller, body)
+    assert DacChannelConfig is not None
     channels = tuple(
         DacChannelConfig(
             enabled=bool(item["enabled"]),

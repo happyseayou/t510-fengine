@@ -183,8 +183,25 @@ class T510HelperTests(unittest.TestCase):
             "sha256": hashlib.sha256(b"test-bitstream").hexdigest(),
             "core_version": "0x00010030",
         }
+        self.fpga_state = mock.patch.object(
+            t510_hw,
+            "_read_fpga_manager_state",
+            return_value="operating",
+        )
+        self.pynq_state = mock.patch.object(
+            t510_hw,
+            "_read_pynq_global_pl_state",
+            return_value={
+                "bitfile_name": str(self.bitstream),
+                "bitfile_hash": hashlib.sha1(b"test-bitstream").hexdigest(),
+            },
+        )
+        self.fpga_state.start()
+        self.pynq_state.start()
 
     def tearDown(self) -> None:
+        self.pynq_state.stop()
+        self.fpga_state.stop()
         self.temp.cleanup()
 
     @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
@@ -312,6 +329,57 @@ class T510HelperTests(unittest.TestCase):
         proof = {**self.proof, "sha256": "0" * 64}
         with self.assertRaisesRegex(t510_hw.HelperError, "SHA256"):
             t510_hw._configure({"bitstream": proof, "request": configure_body()})
+
+    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    def test_cold_boot_rejects_mmio_before_constructing_controller(self) -> None:
+        with (
+            mock.patch.object(
+                t510_hw,
+                "_read_fpga_manager_state",
+                return_value="unknown",
+            ),
+            mock.patch.object(t510_hw, "_load_stage29") as load_stage29,
+        ):
+            with self.assertRaises(t510_hw.HelperError) as caught:
+                t510_hw._status({"bitstream": self.proof, "request": {}})
+        self.assertEqual(caught.exception.code, "PL_NOT_CONFIGURED")
+        self.assertEqual(caught.exception.exit_code, t510_hw.EXIT_STATE_CONFLICT)
+        load_stage29.assert_not_called()
+        self.assertEqual(FakeController.instances, [])
+
+    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    def test_active_bitstream_mismatch_rejects_mmio(self) -> None:
+        with mock.patch.object(
+            t510_hw,
+            "_read_pynq_global_pl_state",
+            return_value={
+                "bitfile_name": "/tmp/other.bit",
+                "bitfile_hash": "0" * 40,
+            },
+        ):
+            with self.assertRaises(t510_hw.HelperError) as caught:
+                t510_hw._start(
+                    {
+                        "bitstream": self.proof,
+                        "request": {"expected_board_id": 1},
+                    }
+                )
+        self.assertEqual(caught.exception.code, "ACTIVE_BITSTREAM_MISMATCH")
+        self.assertEqual(FakeController.instances, [])
+
+    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    def test_configure_is_allowed_when_pl_is_not_configured(self) -> None:
+        with mock.patch.object(
+            t510_hw,
+            "_read_fpga_manager_state",
+            return_value="unknown",
+        ) as read_state:
+            result = t510_hw._configure(
+                {"bitstream": self.proof, "request": configure_body()}
+            )
+        self.assertEqual(result["board_id"], 37)
+        self.assertTrue(FakeController.instances)
+        read_state.assert_not_called()
 
 
 if __name__ == "__main__":
