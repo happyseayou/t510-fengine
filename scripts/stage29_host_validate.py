@@ -59,27 +59,42 @@ def _delta(after: dict[str, Any], before: dict[str, Any], key: str) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Stage 29 Rust receiver/NIC gate")
-    parser.add_argument("--bandwidth-mhz", type=int, choices=(100, 200), required=True)
+    parser = argparse.ArgumentParser(
+        description="Stage 32 Rust receiver/NIC gate (legacy Stage29 filename)"
+    )
+    parser.add_argument("--bandwidth-mhz", type=int, choices=(160, 320), required=True)
     parser.add_argument("--mode", choices=("time_only", "spec_only", "time_spec"), required=True)
     parser.add_argument("--base-url", default="http://127.0.0.1:8089")
     parser.add_argument("--interface", default="ens2f0np0")
     parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--output")
+    parser.add_argument(
+        "--skip-config",
+        action="store_true",
+        help="do not change receiver mode; use when it was prepared before scheduled start",
+    )
     args = parser.parse_args()
-    if args.bandwidth_mhz == 200 and args.mode == "time_spec":
-        parser.error("Stage 29 rejects 200MHz TIME_SPEC")
+    if args.bandwidth_mhz == 320 and args.mode == "time_spec":
+        parser.error("Stage 32 rejects 320 MS/s TIME_SPEC")
 
     needs_time = args.mode in ("time_only", "time_spec")
     needs_spec = args.mode in ("spec_only", "time_spec")
     time_flows = 8 if needs_time else 0
     spec_flows = 16 if needs_spec else 0
     flow_count = time_flows + spec_flows
-    pps_min = 470_000.0 if args.bandwidth_mhz == 100 else 950_000.0
-    payload_min = 63_000.0 if args.bandwidth_mhz == 200 or args.mode == "time_spec" else 31_000.0
+    # Require at least 95% of the frozen nominal packet rate.  The measured
+    # application data rate includes the 128-byte T510 header plus 8192-byte
+    # payload; Ethernet framing overhead is checked independently by NIC stats.
+    pps_min = 593_750.0 if args.bandwidth_mhz == 160 else 1_187_500.0
+    payload_min = (
+        79_040.0
+        if args.bandwidth_mhz == 320 or args.mode == "time_spec"
+        else 39_520.0
+    )
     base = args.base_url.rstrip("/")
-    _post_config(base, args.bandwidth_mhz, args.mode)
-    time.sleep(0.25)
+    if not args.skip_config:
+        _post_config(base, args.bandwidth_mhz, args.mode)
+        time.sleep(0.25)
     state_before = _fetch(base + "/api/state")
     stats_before = state_before.get("stats", {})
     net_before = _net(args.interface)
@@ -151,28 +166,55 @@ def main() -> int:
         errors.append("WAVEFORM_PREVIEW_NOT_LIVE")
     if needs_spec and float(stats_after.get("spectrum_update_hz", 0.0) or 0.0) < 1.0:
         errors.append("SPECTRUM_PREVIEW_NOT_LIVE")
+    warnings: list[str] = []
     if needs_spec:
         preview = state_after.get("spec_preview", {})
-        if not bool(preview.get("complete")) or int(preview.get("coverage_blocks", 0) or 0) < 16:
-            errors.append("SPEC_PREVIEW_INCOMPLETE")
+        preview_blocks = int(preview.get("coverage_blocks", 0) or 0)
+        preview_block_count = int(preview.get("block_count", 0) or 0)
+        if preview_block_count != 16:
+            errors.append(f"SPEC_PREVIEW_BLOCK_COUNT_{preview_block_count}")
+        if preview.get("last_error"):
+            errors.append("SPEC_PREVIEW_ERROR")
+        # `spec_preview` describes the frame currently being assembled and is
+        # reset as soon as the next frame starts.  At 320 MS/s an arbitrary
+        # status read will therefore usually observe 1..15 blocks even though
+        # complete spectra are publishing continuously.  spectrum_update_hz
+        # increments only after all 16 blocks form one coherent spectrum, so
+        # the >=1 Hz gate above is the persistent completion evidence.
+        if not bool(preview.get("complete")) or preview_blocks < 16:
+            warnings.append(
+                "SPEC_PREVIEW_SNAPSHOT_IN_PROGRESS="
+                f"{preview_blocks}/{preview_block_count}"
+            )
 
     net_delta = {key: int(net_after.get(key, 0)) - int(net_before.get(key, 0)) for key in set(net_before) | set(net_after)}
     for key in ("rx_dropped", "rx_errors", "rx_missed_errors", "rx_crc_errors"):
         if net_delta.get(key, 0) != 0:
             errors.append(f"NIC_{key.upper()}")
     eth_delta = {key: int(eth_after.get(key, 0)) - int(eth_before.get(key, 0)) for key in set(eth_before) | set(eth_after)}
+    # The dedicated T510 NIC installs an exact 4300..4323 ntuple whitelist.
+    # mlx5 rx_steer_missed_packets therefore also counts unrelated background
+    # frames intentionally rejected for not matching that table.  Keep the
+    # value as evidence, but rely on per-flow T510 continuity plus the actual
+    # ring/kernel/app and physical error counters for the science-loss gate.
+    steer_missed = max(0, eth_delta.get("rx_steer_missed_packets", 0))
     physical_discard = sum(
         max(0, value) for key, value in eth_delta.items()
-        if re.search(r"rx.*(discard|drop|miss|error)|prio.*discard", key, re.IGNORECASE)
+        if key != "rx_steer_missed_packets"
+        and re.search(r"rx.*(discard|drop|miss|error)|prio.*discard", key, re.IGNORECASE)
     )
     if physical_discard:
         errors.append("NIC_PHYSICAL_DISCARD")
+    if steer_missed:
+        warnings.append(
+            f"NIC_RX_STEER_MISSED_OUTSIDE_T510_WHITELIST={steer_missed}"
+        )
 
     ok = not errors
     result = {
-        "classification": f"HOST_STAGE29_{args.bandwidth_mhz}MHZ_{args.mode}_RUST_RX_{'PASS' if ok else 'FAIL'}",
+        "classification": f"HOST_STAGE32_{args.bandwidth_mhz}MSPS_{args.mode}_RUST_RX_{'PASS' if ok else 'FAIL'}",
         "ok": ok,
-        "stage": 29,
+        "stage": 32,
         "bandwidth_mhz": args.bandwidth_mhz,
         "mode": args.mode,
         "seconds": elapsed,
@@ -180,11 +222,13 @@ def main() -> int:
         "rates": rates,
         "stats_before": stats_before,
         "stats_after": stats_after,
+        "spec_preview": state_after.get("spec_preview", {}),
         "net_delta": {key: value for key, value in net_delta.items() if value},
         "ethtool_delta": {key: value for key, value in eth_delta.items() if value},
+        "warnings": warnings,
         "errors": errors,
     }
-    output = Path(args.output) if args.output else _root() / "reports" / "board" / f"stage29_{args.bandwidth_mhz}mhz_{args.mode}_host.json"
+    output = Path(args.output) if args.output else _root() / "reports" / "board" / f"stage32_{args.bandwidth_mhz}msps_{args.mode}_host.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2, sort_keys=True))

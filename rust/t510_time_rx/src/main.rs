@@ -162,7 +162,7 @@ fn parse_u16_auto(value: &str) -> Result<u16, String> {
 #[command(
     author,
     version,
-    about = "T510 Stage 29 TIME/SPEC receiver and production F-engine preview"
+    about = "T510 Stage 32 TIME/SPEC receiver and production F-engine preview"
 )]
 struct Args {
     #[arg(long, default_value = "ens2f0np0")]
@@ -189,7 +189,7 @@ struct Args {
     waveform_max_points: usize,
     #[arg(long, default_value = "127.0.0.1:8088")]
     web: String,
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 160)]
     initial_bandwidth_mhz: u32,
     #[arg(long, value_enum, default_value_t = Backend::Mmap)]
     backend: Backend,
@@ -275,6 +275,12 @@ struct FlowStats {
     last_spec_sample0: Option<u64>,
     last_spec_chan0: Option<u32>,
     last_spec_chan_count: Option<u16>,
+    last_spec_gap_prev_seq_no: Option<u32>,
+    last_spec_gap_seq_no: Option<u32>,
+    last_spec_gap_seq_delta: Option<u32>,
+    last_spec_gap_prev_frame_id: Option<u64>,
+    last_spec_gap_frame_id: Option<u64>,
+    last_spec_gap_frame_delta: Option<u64>,
 }
 
 impl FlowStats {
@@ -303,7 +309,31 @@ impl FlowStats {
             last_spec_sample0: None,
             last_spec_chan0: None,
             last_spec_chan_count: None,
+            last_spec_gap_prev_seq_no: None,
+            last_spec_gap_seq_no: None,
+            last_spec_gap_seq_delta: None,
+            last_spec_gap_prev_frame_id: None,
+            last_spec_gap_frame_id: None,
+            last_spec_gap_frame_delta: None,
         }
+    }
+
+    fn clear_continuity(&mut self) {
+        self.detected_bandwidth_mhz = None;
+        self.last_seq_no = None;
+        self.last_frame_id = None;
+        self.last_sample0 = None;
+        self.last_spec_seq_no = None;
+        self.last_spec_frame_id = None;
+        self.last_spec_sample0 = None;
+        self.last_spec_chan0 = None;
+        self.last_spec_chan_count = None;
+        self.last_spec_gap_prev_seq_no = None;
+        self.last_spec_gap_seq_no = None;
+        self.last_spec_gap_seq_delta = None;
+        self.last_spec_gap_prev_frame_id = None;
+        self.last_spec_gap_frame_id = None;
+        self.last_spec_gap_frame_delta = None;
     }
 }
 
@@ -575,7 +605,7 @@ impl ReceiverStats {
             last_spec_chan0: None,
             last_spec_chan_count: None,
             selected_bandwidth_mhz: BandwidthMode::from_mhz(args.initial_bandwidth_mhz)
-                .unwrap_or(BandwidthMode::Mhz100)
+                .unwrap_or(BandwidthMode::Msps160)
                 .mhz(),
             detected_bandwidth_mhz: None,
             selected_detected_mismatch: false,
@@ -1236,10 +1266,13 @@ impl DisplayConfigPatch {
 
 fn sanitize_config(config: &mut DisplayConfig) {
     if BandwidthMode::from_mhz(config.bandwidth_mhz).is_none() {
-        config.bandwidth_mhz = 100;
+        config.bandwidth_mhz = 160;
     }
     if !matches!(config.output_mode.as_str(), "time_only" | "spec_only" | "time_spec") {
         config.output_mode = "time_spec".to_string();
+    }
+    if config.bandwidth_mhz == 320 && config.output_mode == "time_spec" {
+        config.output_mode = "time_only".to_string();
     }
     config.display_points = config.display_points.clamp(64, 16384);
     if !matches!(config.waveform_view_mode.as_str(), "dual" | "samples" | "curve") {
@@ -2081,6 +2114,12 @@ impl ReorderTracker {
             last_accepted: None,
             window: window.max(1),
         }
+    }
+
+    fn reset(&mut self) {
+        self.expected_seq = None;
+        self.pending.clear();
+        self.last_accepted = None;
     }
 
     fn ingest(
@@ -3054,12 +3093,18 @@ impl ReceiverRuntime {
                 if seq_delta != expected_delta {
                     flow.spec_seq_gaps = flow.spec_seq_gaps.saturating_add(1);
                     self.stats.spec_seq_gaps = self.stats.spec_seq_gaps.saturating_add(1);
+                    flow.last_spec_gap_prev_seq_no = Some(prev.seq_no);
+                    flow.last_spec_gap_seq_no = Some(header.seq_no);
+                    flow.last_spec_gap_seq_delta = Some(seq_delta);
                     gap = true;
                 }
                 let frame_delta = header.frame_id.wrapping_sub(prev.frame_id);
                 if frame_delta != self.spec_flow_count.max(1) as u64 {
                     flow.spec_frame_gaps = flow.spec_frame_gaps.saturating_add(1);
                     self.stats.spec_frame_gaps = self.stats.spec_frame_gaps.saturating_add(1);
+                    flow.last_spec_gap_prev_frame_id = Some(prev.frame_id);
+                    flow.last_spec_gap_frame_id = Some(header.frame_id);
+                    flow.last_spec_gap_frame_delta = Some(frame_delta);
                     gap = true;
                 }
             }
@@ -3099,6 +3144,13 @@ impl ReceiverRuntime {
             if let Ok(guard) = self.shared.lock() {
                 if self.config_generation != guard.config_generation {
                     self.config_generation = guard.config_generation;
+                    self.reorder.reset();
+                    self.flow_previous_headers.fill(None);
+                    self.spec_previous_headers.fill(None);
+                    for flow in &mut self.stats.per_flow {
+                        flow.clear_continuity();
+                    }
+                    self.stats.detected_bandwidth_mhz = None;
                     self.display_capture.arm();
                     let now = Instant::now();
                     self.last_waveform = now.checked_sub(self.waveform_interval).unwrap_or(now);
@@ -3608,12 +3660,18 @@ impl FanoutWorkerRuntime {
                 if seq_delta != expected_delta {
                     flow.spec_seq_gaps = flow.spec_seq_gaps.saturating_add(1);
                     self.stats.spec_seq_gaps = self.stats.spec_seq_gaps.saturating_add(1);
+                    flow.last_spec_gap_prev_seq_no = Some(prev.seq_no);
+                    flow.last_spec_gap_seq_no = Some(header.seq_no);
+                    flow.last_spec_gap_seq_delta = Some(seq_delta);
                     gap = true;
                 }
                 let frame_delta = header.frame_id.wrapping_sub(prev.frame_id);
                 if frame_delta != self.spec_flow_count.max(1) as u64 {
                     flow.spec_frame_gaps = flow.spec_frame_gaps.saturating_add(1);
                     self.stats.spec_frame_gaps = self.stats.spec_frame_gaps.saturating_add(1);
+                    flow.last_spec_gap_prev_frame_id = Some(prev.frame_id);
+                    flow.last_spec_gap_frame_id = Some(header.frame_id);
+                    flow.last_spec_gap_frame_delta = Some(frame_delta);
                     gap = true;
                 }
             }
@@ -3640,6 +3698,12 @@ impl FanoutWorkerRuntime {
             if let Ok(guard) = self.shared.lock() {
                 if self.config_generation != guard.config_generation {
                     self.config_generation = guard.config_generation;
+                    self.flow_previous_headers.fill(None);
+                    self.spec_previous_headers.fill(None);
+                    for flow in &mut self.per_flow {
+                        flow.clear_continuity();
+                    }
+                    self.stats.detected_bandwidth_mhz = None;
                     self.display_capture.arm();
                     if self.worker_id == 0 {
                         self.spectrum_gate.reset();
@@ -3816,6 +3880,16 @@ fn merge_flow_stats(dst: &mut FlowStats, src: &FlowStats) {
         dst.last_spec_chan0 = src.last_spec_chan0;
         dst.last_spec_chan_count = src.last_spec_chan_count;
         dst.src_port = src.src_port;
+    }
+    if src.last_spec_gap_seq_no.is_some()
+        && (src_active || dst.last_spec_gap_seq_no.is_none())
+    {
+        dst.last_spec_gap_prev_seq_no = src.last_spec_gap_prev_seq_no;
+        dst.last_spec_gap_seq_no = src.last_spec_gap_seq_no;
+        dst.last_spec_gap_seq_delta = src.last_spec_gap_seq_delta;
+        dst.last_spec_gap_prev_frame_id = src.last_spec_gap_prev_frame_id;
+        dst.last_spec_gap_frame_id = src.last_spec_gap_frame_id;
+        dst.last_spec_gap_frame_delta = src.last_spec_gap_frame_delta;
     }
 }
 
@@ -4542,7 +4616,7 @@ mod tests {
             waveform_points: 4096,
             waveform_max_points: 16384,
             web: "127.0.0.1:0".to_string(),
-            initial_bandwidth_mhz: 100,
+            initial_bandwidth_mhz: 160,
             backend: Backend::Mmap,
             worker_count: 32,
             fanout_group: 0x27d,
@@ -4650,7 +4724,7 @@ mod tests {
         PacketCopy {
             header,
             payload,
-            detected_bandwidth: Some(BandwidthMode::Mhz100),
+            detected_bandwidth: Some(BandwidthMode::Msps160),
             gap_before: false,
         }
     }
@@ -4669,7 +4743,7 @@ mod tests {
         PacketCopy {
             header,
             payload,
-            detected_bandwidth: Some(BandwidthMode::Mhz100),
+            detected_bandwidth: Some(BandwidthMode::Msps160),
             gap_before: false,
         }
     }
@@ -4687,17 +4761,17 @@ mod tests {
         PacketCopy {
             header,
             payload,
-            detected_bandwidth: Some(BandwidthMode::Mhz100),
+            detected_bandwidth: Some(BandwidthMode::Msps160),
             gap_before: false,
         }
     }
 
     #[test]
-    fn display_defaults_to_stage27h_100mhz() {
+    fn display_defaults_to_stage32_160msps() {
         let config = DisplayConfig::default();
-        assert_eq!(config.bandwidth_mhz, 100);
+        assert_eq!(config.bandwidth_mhz, 160);
         assert_eq!(config.output_mode, "time_spec");
-        assert_eq!(config.bandwidth_mode(), BandwidthMode::Mhz100);
+        assert_eq!(config.bandwidth_mode(), BandwidthMode::Msps160);
         assert_eq!(config.center_mhz, 100.0);
         assert_eq!(config.expected_mhz, 60.010);
         assert_eq!(config.dac_mhz, 60.010);
@@ -4706,12 +4780,12 @@ mod tests {
         let mut invalid = config.clone();
         invalid.bandwidth_mhz = 1234;
         sanitize_config(&mut invalid);
-        assert_eq!(invalid.bandwidth_mhz, 100);
+        assert_eq!(invalid.bandwidth_mhz, 160);
 
         let mut args = test_args();
         args.initial_bandwidth_mhz = 1234;
         let stats = ReceiverStats::new(&args);
-        assert_eq!(stats.selected_bandwidth_mhz, 100);
+        assert_eq!(stats.selected_bandwidth_mhz, 160);
     }
 
     #[test]
@@ -4803,7 +4877,10 @@ mod tests {
         let center_mhz = 100.0_f64;
         let nchan = 4096.0_f64;
         for (sample_rate_hz, half_span_mhz, bin_width_khz) in
-            [(122_880_000.0, 61.44, 30.0), (245_760_000.0, 122.88, 60.0)]
+            [
+                (160_000_000.0, 80.0, 39.0625),
+                (320_000_000.0, 160.0, 78.125),
+            ]
         {
             let left = center_mhz - sample_rate_hz / 2.0 / 1.0e6;
             let width = sample_rate_hz / nchan / 1.0e3;
@@ -4873,12 +4950,12 @@ mod tests {
             spectrum_preview: SpecPreviewCapture::default(),
         };
         state.spectrum_preview.status.complete = true;
-        state.stats.detected_bandwidth_mhz = Some(100);
+        state.stats.detected_bandwidth_mhz = Some(160);
 
         let (config, generation) = apply_display_config_patch_to_shared(
             &mut state,
             DisplayConfigPatch {
-                bandwidth_mhz: Some(20),
+                bandwidth_mhz: Some(320),
                 output_mode: None,
                 center_mhz: None,
                 expected_mhz: None,
@@ -4897,14 +4974,14 @@ mod tests {
         );
 
         assert_eq!(generation, 8);
-        assert_eq!(config.bandwidth_mhz, 20);
+        assert_eq!(config.bandwidth_mhz, 320);
         assert_eq!(state.config_generation, 8);
         assert!(state.waveform_binary.is_none());
         assert!(state.waveform_updated.is_none());
         assert!(state.spectrum_binary.is_none());
         assert!(state.spectrum_updated.is_none());
         assert!(!state.spectrum_preview.status.complete);
-        assert_eq!(state.stats.selected_bandwidth_mhz, 20);
+        assert_eq!(state.stats.selected_bandwidth_mhz, 320);
         assert!(state.stats.selected_detected_mismatch);
     }
 
@@ -5023,7 +5100,7 @@ mod tests {
         let args = test_args();
         let base = ReceiverStats::new(&args);
         let mut config = DisplayConfig::default();
-        config.bandwidth_mhz = 200;
+        config.bandwidth_mhz = 320;
 
         let mut worker0 = WorkerStats::new(0);
         worker0.time_packets = 10;
@@ -5045,11 +5122,11 @@ mod tests {
         let mut flow0 = FlowStats::new(0, 4300, 4000);
         flow0.time_packets = 10;
         flow0.packets_per_sec = 10.0;
-        flow0.detected_bandwidth_mhz = Some(200);
+        flow0.detected_bandwidth_mhz = Some(320);
         let mut flow1 = FlowStats::new(1, 4301, 4001);
         flow1.time_packets = 20;
         flow1.packets_per_sec = 20.0;
-        flow1.detected_bandwidth_mhz = Some(200);
+        flow1.detected_bandwidth_mhz = Some(320);
 
         let reports = vec![
             Some(FanoutWorkerReport {
@@ -5069,7 +5146,7 @@ mod tests {
         assert_eq!(stats.active_worker_count, 2);
         assert_eq!(stats.last_board_id, Some(37));
         assert_eq!(stats.rx_processed_packets_per_sec, 30.0);
-        assert_eq!(stats.detected_bandwidth_mhz, Some(200));
+        assert_eq!(stats.detected_bandwidth_mhz, Some(320));
         assert_eq!(stats.per_flow[0].time_packets, 10);
         assert_eq!(stats.per_flow[1].time_packets, 20);
     }
@@ -5079,13 +5156,13 @@ mod tests {
         let args = test_args();
         let base = ReceiverStats::new(&args);
         let mut config = DisplayConfig::default();
-        config.bandwidth_mhz = 20;
+        config.bandwidth_mhz = 320;
 
         let mut stale_worker = WorkerStats::new(0);
         stale_worker.last_time_count = Some(DEFAULT_TIME_COUNT);
         let mut stale_flow = FlowStats::new(1, 4301, 4001);
         stale_flow.time_packets = 10_000;
-        stale_flow.detected_bandwidth_mhz = Some(100);
+        stale_flow.detected_bandwidth_mhz = Some(160);
         stale_flow.last_seq_no = Some(1_000);
 
         let mut active_worker = WorkerStats::new(1);
@@ -5095,7 +5172,7 @@ mod tests {
         let mut active_flow = FlowStats::new(1, 4301, 4001);
         active_flow.time_packets = 100;
         active_flow.packets_per_sec = 15_000.0;
-        active_flow.detected_bandwidth_mhz = Some(20);
+        active_flow.detected_bandwidth_mhz = Some(320);
         active_flow.last_seq_no = Some(20_000);
 
         let reports = vec![
@@ -5111,9 +5188,9 @@ mod tests {
             }),
         ];
         let stats = aggregate_fanout_stats(&base, &reports, &config, 0, 0, 0);
-        assert_eq!(stats.per_flow[1].detected_bandwidth_mhz, Some(20));
+        assert_eq!(stats.per_flow[1].detected_bandwidth_mhz, Some(320));
         assert_eq!(stats.per_flow[1].last_seq_no, Some(20_000));
-        assert_eq!(stats.detected_bandwidth_mhz, Some(20));
+        assert_eq!(stats.detected_bandwidth_mhz, Some(320));
     }
 
     #[test]
@@ -5122,18 +5199,42 @@ mod tests {
         let mut stats = ReceiverStats::new(&args);
         let mut reorder = ReorderTracker::new(8);
 
-        let (_, gap0) = reorder.ingest(test_header(0), BandwidthMode::Mhz200, &mut stats);
-        let (_, gap2) = reorder.ingest(test_header(2), BandwidthMode::Mhz200, &mut stats);
-        let (detected, gap1) = reorder.ingest(test_header(1), BandwidthMode::Mhz200, &mut stats);
+        let (_, gap0) = reorder.ingest(test_header(0), BandwidthMode::Msps320, &mut stats);
+        let (_, gap2) = reorder.ingest(test_header(2), BandwidthMode::Msps320, &mut stats);
+        let (detected, gap1) = reorder.ingest(test_header(1), BandwidthMode::Msps320, &mut stats);
 
         assert!(!gap0);
         assert!(!gap2);
         assert!(!gap1);
-        assert_eq!(detected, Some(BandwidthMode::Mhz200));
+        assert_eq!(detected, Some(BandwidthMode::Msps320));
         assert_eq!(stats.seq_gaps, 0);
         assert_eq!(stats.frame_gaps, 0);
         assert_eq!(stats.sample0_gaps, 0);
         assert_eq!(stats.last_seq_no, Some(2));
+    }
+
+    #[test]
+    fn observation_reset_does_not_compare_new_first_packet_to_old_tail() {
+        let args = test_args();
+        let mut stats = ReceiverStats::new(&args);
+        let mut reorder = ReorderTracker::new(8);
+        let _ = reorder.ingest(test_header(0), BandwidthMode::Msps320, &mut stats);
+        reorder.reset();
+        let (_, gap) =
+            reorder.ingest(test_header(10_000), BandwidthMode::Msps320, &mut stats);
+        assert!(!gap);
+        assert_eq!(stats.seq_gaps, 0);
+        assert_eq!(stats.frame_gaps, 0);
+        assert_eq!(stats.sample0_gaps, 0);
+
+        let mut flow = FlowStats::new(0, 4300, 4000);
+        flow.detected_bandwidth_mhz = Some(160);
+        flow.last_seq_no = Some(99);
+        flow.last_sample0 = Some(1234);
+        flow.clear_continuity();
+        assert_eq!(flow.detected_bandwidth_mhz, None);
+        assert_eq!(flow.last_seq_no, None);
+        assert_eq!(flow.last_sample0, None);
     }
 
     #[test]
@@ -5142,8 +5243,8 @@ mod tests {
         let mut stats = ReceiverStats::new(&args);
         let mut reorder = ReorderTracker::new(2);
 
-        let _ = reorder.ingest(test_header(0), BandwidthMode::Mhz200, &mut stats);
-        let (_, gap) = reorder.ingest(test_header(4), BandwidthMode::Mhz200, &mut stats);
+        let _ = reorder.ingest(test_header(0), BandwidthMode::Msps320, &mut stats);
+        let (_, gap) = reorder.ingest(test_header(4), BandwidthMode::Msps320, &mut stats);
 
         assert!(gap);
         assert_eq!(stats.seq_gaps, 1);
@@ -5162,11 +5263,11 @@ mod tests {
         ];
         assert_eq!(per_flow_detected_consensus(&flows), None);
 
-        flows[0].detected_bandwidth_mhz = Some(100);
-        flows[2].detected_bandwidth_mhz = Some(100);
-        assert_eq!(per_flow_detected_consensus(&flows), Some(100));
+        flows[0].detected_bandwidth_mhz = Some(160);
+        flows[2].detected_bandwidth_mhz = Some(160);
+        assert_eq!(per_flow_detected_consensus(&flows), Some(160));
 
-        flows[1].detected_bandwidth_mhz = Some(200);
+        flows[1].detected_bandwidth_mhz = Some(320);
         assert_eq!(per_flow_detected_consensus(&flows), None);
     }
 
@@ -5181,8 +5282,8 @@ mod tests {
             sample0: 123_456,
             seq_no: 10,
             frame_id: 10,
-            selected_bandwidth_mhz: 200,
-            detected_bandwidth_mhz: Some(100),
+            selected_bandwidth_mhz: 320,
+            detected_bandwidth_mhz: Some(160),
             decimation: 1,
             sample_rate_hz: RAW_SAMPLE_RATE_HZ,
             requested_window_us: 2.0,
@@ -5234,8 +5335,8 @@ mod tests {
         assert_eq!(le_u64(&bytes, 8), 123_456);
         assert_eq!(le_u32(&bytes, 16), 10);
         assert_eq!(le_u32(&bytes, 20), 12);
-        assert_eq!(le_u32(&bytes, 24), 200);
-        assert_eq!(le_u32(&bytes, 28), 100);
+        assert_eq!(le_u32(&bytes, 24), 320);
+        assert_eq!(le_u32(&bytes, 28), 160);
         assert_eq!(le_u32(&bytes, 32), 0b11);
         assert_eq!(le_u32(&bytes, 36), 0b1001);
         assert_eq!(le_u32(&bytes, 40), 2);
@@ -5295,7 +5396,7 @@ mod tests {
         config.display_points = 1024;
         config.time_window_us = 1.0;
         config.vertical_scale = 1.0;
-        config.center_mhz = 61.44; // RAW_SAMPLE_RATE_HZ / 4.
+        config.center_mhz = 80.0; // RAW_SAMPLE_RATE_HZ / 4.
 
         let mut header = test_header(0);
         header.sample0 = 1;
@@ -5319,7 +5420,7 @@ mod tests {
         let snapshot = build_waveform_from_packets(&[packet], &config).unwrap();
         assert!((snapshot.rf_window_cycles - 120.0).abs() < 1.0e-9);
         assert_eq!(snapshot.expected_mhz, 120.0);
-        assert!((snapshot.expected_baseband_mhz - 58.56).abs() < 1.0e-9);
+        assert!((snapshot.expected_baseband_mhz - 40.0).abs() < 1.0e-9);
         assert_eq!(snapshot.channels[0].sample_rf.len(), 4);
         assert_eq!(snapshot.channels[1].sample_rf.len(), 4);
         assert_eq!(snapshot.channels[0].rf.len(), 1024);
@@ -5388,7 +5489,7 @@ mod tests {
     fn rf_scope_uses_measured_iq_sideband_for_lower_rf_tone() {
         let mut config = DisplayConfig::default();
         config.channel_mask = 0x0001;
-        config.bandwidth_mhz = 100;
+        config.bandwidth_mhz = 160;
         config.display_points = 1024;
         config.time_window_us = 0.25;
         config.vertical_scale = 1.0;
@@ -5398,7 +5499,7 @@ mod tests {
 
         let amplitude = 1000.0;
         let raw_hz = 40_000_000.0;
-        let sample_rate_hz = BandwidthMode::Mhz100.sample_rate_hz();
+        let sample_rate_hz = BandwidthMode::Msps160.sample_rate_hz();
         let mut samples = Vec::new();
         for n in 0..64 {
             let phase = 2.0 * std::f64::consts::PI * raw_hz * n as f64 / sample_rate_hz;
@@ -5410,7 +5511,7 @@ mod tests {
         let packet = time_packet_channel_samples(header, 0, &samples);
         let snapshot = build_waveform_from_packets(&[packet], &config).unwrap();
         assert_eq!(snapshot.channels.len(), 1);
-        assert_eq!(snapshot.channels[0].sample_rf.len(), 32);
+        assert_eq!(snapshot.channels[0].sample_rf.len(), 41);
         assert_eq!(snapshot.channels[0].rf.len(), 1024);
         assert!((snapshot.rf_window_cycles - 15.0).abs() < 1.0e-9);
         assert!((dominant_curve_mhz(&snapshot) - 60.0).abs() < 2.5);
@@ -5421,7 +5522,7 @@ mod tests {
     fn rf_scope_curve_shows_upper_rf_tone_cycles() {
         let mut config = DisplayConfig::default();
         config.channel_mask = 0x0001;
-        config.bandwidth_mhz = 100;
+        config.bandwidth_mhz = 160;
         config.display_points = 1024;
         config.time_window_us = 0.25;
         config.vertical_scale = 1.0;
@@ -5431,7 +5532,7 @@ mod tests {
 
         let amplitude = 1000.0;
         let raw_hz = 40_000_000.0;
-        let sample_rate_hz = BandwidthMode::Mhz100.sample_rate_hz();
+        let sample_rate_hz = BandwidthMode::Msps160.sample_rate_hz();
         let mut samples = Vec::new();
         for n in 0..64 {
             let phase = 2.0 * std::f64::consts::PI * raw_hz * n as f64 / sample_rate_hz;
@@ -5442,7 +5543,7 @@ mod tests {
         header.sample0 = 0;
         let packet = time_packet_channel_samples(header, 0, &samples);
         let snapshot = build_waveform_from_packets(&[packet], &config).unwrap();
-        assert_eq!(snapshot.channels[0].sample_rf.len(), 32);
+        assert_eq!(snapshot.channels[0].sample_rf.len(), 41);
         assert_eq!(snapshot.channels[0].rf.len(), 1024);
         assert!((snapshot.rf_window_cycles - 35.0).abs() < 1.0e-9);
         assert!((dominant_curve_mhz(&snapshot) - 140.0).abs() < 3.5);

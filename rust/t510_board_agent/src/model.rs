@@ -137,15 +137,15 @@ impl ConfigureRequest {
     pub fn validate(&self) -> Result<(), String> {
         let legal_profile = matches!(
             (&self.profile.bandwidth_mhz, &self.profile.mode),
-            (100, ProfileMode::TimeOnly)
-                | (100, ProfileMode::SpecOnly)
-                | (100, ProfileMode::TimeSpec)
-                | (200, ProfileMode::TimeOnly)
-                | (200, ProfileMode::SpecOnly)
+            (160, ProfileMode::TimeOnly)
+                | (160, ProfileMode::SpecOnly)
+                | (160, ProfileMode::TimeSpec)
+                | (320, ProfileMode::TimeOnly)
+                | (320, ProfileMode::SpecOnly)
         );
         if !legal_profile {
             return Err(
-                "profile supports 100MHz time_only/spec_only/time_spec and 200MHz time_only/spec_only"
+                "Stage 32 profile supports 160MS/s time_only/spec_only/time_spec and 320MS/s time_only/spec_only"
                     .into(),
             );
         }

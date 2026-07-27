@@ -24,6 +24,7 @@ from python.stage29 import (
     TIME_SRC_PORT_BASE,
 )
 from python.t510_fengine import RegisterMap, T510FEngine
+from scripts.stage32_agent_host_gate import _qsfp_physical_health
 
 
 class FakeCore:
@@ -192,13 +193,31 @@ class LifecycleCore:
 
 
 class Stage29ConfigTests(unittest.TestCase):
+    def test_qsfp_health_does_not_treat_axis_backpressure_as_link_loss(self) -> None:
+        health = _qsfp_physical_health(
+            {"link_up": False, "raw_flags": 0x988C_F00C}
+        )
+        self.assertTrue(health["physical_healthy"])
+        self.assertFalse(health["link_up_sample"])
+        self.assertFalse(health["tx_ready_sample"])
+
+    def test_qsfp_health_rejects_missing_alignment_or_real_fault(self) -> None:
+        missing_alignment = _qsfp_physical_health(
+            {"link_up": False, "raw_flags": 0x988C_F00C & ~(1 << 18)}
+        )
+        local_fault = _qsfp_physical_health(
+            {"link_up": False, "raw_flags": 0x988C_F00C | (1 << 5)}
+        )
+        self.assertFalse(missing_alignment["physical_healthy"])
+        self.assertFalse(local_fault["physical_healthy"])
+
     def test_five_profiles_and_rates(self) -> None:
         expected = {
-            (100, "time_only"): (8, 31_948.8),
-            (100, "spec_only"): (16, 31_948.8),
-            (100, "time_spec"): (24, 63_897.6),
-            (200, "time_only"): (8, 63_897.6),
-            (200, "spec_only"): (16, 63_897.6),
+            (160, "time_only"): (8, 41_600.0),
+            (160, "spec_only"): (16, 41_600.0),
+            (160, "time_spec"): (24, 83_200.0),
+            (320, "time_only"): (8, 83_200.0),
+            (320, "spec_only"): (16, 83_200.0),
         }
         for (bandwidth, mode), (flows, payload) in expected.items():
             with self.subTest(bandwidth=bandwidth, mode=mode):
@@ -206,9 +225,37 @@ class Stage29ConfigTests(unittest.TestCase):
                 self.assertEqual(config.flow_count, flows)
                 self.assertAlmostEqual(config.expected_packet_rates["combined_t510_udp_payload_mbps"], payload)
 
-    def test_200mhz_dual_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "200MHz"):
-            Stage29Config(bandwidth_mhz=200, mode="time_spec")
+    def test_320msps_dual_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "320MS/s"):
+            Stage29Config(bandwidth_mhz=320, mode="time_spec")
+
+    def test_stage32_production_scope_uses_sample_rate_names(self) -> None:
+        scope = T510FEngine.STAGE32_PRODUCTION_SCOPE
+        self.assertEqual(
+            scope["production_modes"],
+            (
+                "160MS/s TIME_ONLY",
+                "160MS/s SPEC_ONLY",
+                "160MS/s TIME_SPEC",
+                "320MS/s TIME_ONLY",
+                "320MS/s SPEC_ONLY",
+            ),
+        )
+        self.assertTrue(
+            any(
+                item.startswith("320MS/s TIME_SPEC")
+                for item in scope["excluded_from_gate"]
+            )
+        )
+        self.assertNotIn("100MHz", json.dumps(scope))
+        self.assertNotIn("200MHz", json.dumps(scope))
+
+    def test_stage32_mts_targets_are_exposed_by_real_observation_api(self) -> None:
+        signature = inspect.signature(
+            T510FEngine.apply_sysref_locked_observation_config
+        )
+        self.assertEqual(signature.parameters["mts_adc_target_latency"].default, -1)
+        self.assertEqual(signature.parameters["mts_dac_target_latency"].default, -1)
 
     def test_destination_defaults_and_validation(self) -> None:
         config = Stage29Config()
@@ -251,19 +298,19 @@ class Stage29ConfigTests(unittest.TestCase):
         for kwargs in ({"amplitude": -1}, {"rf_frequency_mhz": float("nan")}, {"phase_deg": 181}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 DacChannelConfig(**kwargs)
-        edge_100 = tuple(DacChannelConfig(rf_frequency_mhz=value) for value in (50.0, 161.44) + (100.0,) * 6)
-        Stage29Config(bandwidth_mhz=100, dac_channels=edge_100)
+        edge_160 = tuple(DacChannelConfig(rf_frequency_mhz=value) for value in (50.0, 180.0) + (100.0,) * 6)
+        Stage29Config(bandwidth_mhz=160, dac_channels=edge_160)
         with self.assertRaisesRegex(ValueError, "Nyquist"):
-            Stage29Config(bandwidth_mhz=100, dac_channels=(DacChannelConfig(rf_frequency_mhz=161.441),) * 8)
-        edge_200 = tuple(DacChannelConfig(rf_frequency_mhz=value) for value in (50.0, 222.88) + (100.0,) * 6)
-        Stage29Config(bandwidth_mhz=200, mode="spec_only", dac_channels=edge_200)
+            Stage29Config(bandwidth_mhz=160, dac_channels=(DacChannelConfig(rf_frequency_mhz=180.001),) * 8)
+        edge_320 = tuple(DacChannelConfig(rf_frequency_mhz=value) for value in (50.0, 260.0) + (100.0,) * 6)
+        Stage29Config(bandwidth_mhz=320, mode="spec_only", dac_channels=edge_320)
 
     def test_frozen_contract_and_frequency_geometry(self) -> None:
         self.assertEqual((TIME_DST_PORT_BASE, SPEC_DST_PORT_BASE), (4300, 4308))
         self.assertEqual((TIME_SRC_PORT_BASE, SPEC_SRC_PORT_BASE), (4000, 4008))
         self.assertEqual((PFB_NCHAN, PFB_TAPS), (4096, 4))
         self.assertEqual((PFB_BLOCK_COUNT, PFB_CHAN_COUNT, PFB_TIME_COUNT), (16, 256, 1))
-        for bandwidth, half_span, bin_width in ((100, 61.44, 30_000.0), (200, 122.88, 60_000.0)):
+        for bandwidth, half_span, bin_width in ((160, 80.0, 39_062.5), (320, 160.0, 78_125.0)):
             config = Stage29Config(bandwidth_mhz=bandwidth, mode="spec_only", center_mhz=100.0)
             info = config.nearest_fft_bin()
             self.assertEqual(info["bin_width_hz"], bin_width)
@@ -275,7 +322,7 @@ class Stage29ConfigTests(unittest.TestCase):
         time = list(Stage29Config().time_destinations)
         time[3] = FlowDestination(ip="10.0.1.33", mac="02:11:22:33:44:55", destination_port=5303, source_port=5103)
         config = Stage29Config(
-            bandwidth_mhz=100,
+            bandwidth_mhz=160,
             mode="time_only",
             board_id=37,
             source_ip="10.20.30.40",
@@ -491,6 +538,31 @@ class Stage29ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cannot be overridden"):
             core.configure_science_29(time_dst_port_base=9999)
 
+    def test_stage32_clock_recovery_resets_all_eight_rfdc_tiles(self) -> None:
+        events: list[str] = []
+
+        class Tile:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            def Reset(self):
+                events.append(self.name)
+                return 0
+
+        class Rfdc:
+            adc_tiles = [Tile(f"adc{index}") for index in range(4)]
+            dac_tiles = [Tile(f"dac{index}") for index in range(4)]
+
+        core = object.__new__(T510FEngine)
+        core.rfdc = Rfdc()
+        calls = core.reset_all_rfdc_tiles()
+        self.assertEqual(
+            events,
+            ["adc0", "adc1", "adc2", "adc3", "dac0", "dac1", "dac2", "dac3"],
+        )
+        self.assertEqual(len(calls), 8)
+        self.assertTrue(all(call["method"] == "Reset" for call in calls))
+
     def test_stage31_first_sample_alignment_tracks_active_science_path(self) -> None:
         self.assertEqual(T510FEngine._stage31_first_sample0_rule(0, False), (32, 0, 32768))
         self.assertEqual(T510FEngine._stage31_first_sample0_rule(1, False), (8, 0, 32768))
@@ -573,7 +645,7 @@ class Stage29ConfigTests(unittest.TestCase):
     def test_stage28_api_and_thin_notebook(self) -> None:
         stage28 = inspect.signature(T510FEngine.run_stage28_validation)
         stage29 = inspect.signature(T510FEngine.run_stage29_validation)
-        self.assertEqual(stage28.parameters["expected_core_version"].default, EXPECTED_CORE_VERSION)
+        self.assertEqual(stage28.parameters["expected_core_version"].default, 0x0001_0031)
         self.assertNotIn("expected_core_version", stage29.parameters)
         path = Path(__file__).resolve().parents[1] / "notebooks" / "00_stage29_fengine_production_control.ipynb"
         notebook = json.loads(path.read_text())

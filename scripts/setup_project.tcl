@@ -209,7 +209,18 @@ if {[file exists $sim_header] && [llength [get_files -quiet $sim_header]] != 0} 
     set_property file_type {Verilog Header} [get_files $sim_header]
 }
 set_property include_dirs [list [file join $repo_root sim]] [get_filesets sim_1]
-set_property verilog_define {T510_SIM_FFT_MODEL} [get_filesets sim_1]
+set source_defines [get_property verilog_define [get_filesets sources_1]]
+if {[lsearch -exact $source_defines T510_STAGE32] < 0} {
+    lappend source_defines T510_STAGE32
+}
+set_property verilog_define $source_defines [get_filesets sources_1]
+set_property verilog_define {
+    T510_SIM_FFT_MODEL
+    T510_STAGE27H_PRODUCTION_ONLY
+    T510_STAGE27I_ANTI_ALIAS
+    T510_STAGE27J_PFB
+    T510_STAGE32
+} [get_filesets sim_1]
 
 set_property top t510_fengine_board_top [get_filesets sources_1]
 

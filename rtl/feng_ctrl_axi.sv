@@ -332,7 +332,9 @@ module feng_ctrl_axi #(
     output wire [2:0]                   science_output_mode_cfg
 );
 
-`ifdef T510_STAGE27J_PFB
+`ifdef T510_STAGE32
+    localparam [31:0] CORE_VERSION = 32'h0001_0032;
+`elsif T510_STAGE27J_PFB
     localparam [31:0] CORE_VERSION = 32'h0001_0031;
 `elsif T510_STAGE27I_ANTI_ALIAS
     localparam [31:0] CORE_VERSION = 32'h0001_002B;
@@ -342,9 +344,15 @@ module feng_ctrl_axi #(
     localparam [31:0] CORE_VERSION = 32'h0001_0029;
 `endif
     localparam [31:0] DEBUG_NFFT = 32'd1024;
+`ifdef T510_STAGE32
+    localparam [31:0] DEBUG_OBS_SAMPLE_RATE_HZ = 32'd80_000_000;
+    localparam [31:0] PREVIEW_SAMPLE_RATE_HZ = 32'd320_000_000;
+    localparam [31:0] PREVIEW_AXIS_BEAT_RATE_HZ = 32'd80_000_000;
+`else
     localparam [31:0] DEBUG_OBS_SAMPLE_RATE_HZ = 32'd61_440_000;
     localparam [31:0] PREVIEW_SAMPLE_RATE_HZ = 32'd245_760_000;
     localparam [31:0] PREVIEW_AXIS_BEAT_RATE_HZ = 32'd61_440_000;
+`endif
     localparam [31:0] PREVIEW_MODE_FULLRATE_IQ = 32'd1;
     localparam [31:0] SCIENCE_CAPABILITY_WORD = 32'h0000_0707;
     localparam [2:0]  SCIENCE_MODE_OFF              = 3'd0;
@@ -728,10 +736,17 @@ module feng_ctrl_axi #(
     function automatic [31:0] science_sample_rate_hz(input logic [1:0] bw_mode);
         begin
             case (bw_mode)
+`ifdef T510_STAGE32
+                2'd0: science_sample_rate_hz = 32'd160_000_000;
+                2'd1: science_sample_rate_hz = 32'd160_000_000;
+                2'd2: science_sample_rate_hz = 32'd320_000_000;
+                default: science_sample_rate_hz = 32'd160_000_000;
+`else
                 2'd0: science_sample_rate_hz = 32'd30_720_000;
                 2'd1: science_sample_rate_hz = 32'd122_880_000;
                 2'd2: science_sample_rate_hz = 32'd245_760_000;
                 default: science_sample_rate_hz = 32'd30_720_000;
+`endif
             endcase
         end
     endfunction
@@ -739,10 +754,17 @@ module feng_ctrl_axi #(
     function automatic [31:0] science_decim_factor(input logic [1:0] bw_mode);
         begin
             case (bw_mode)
+`ifdef T510_STAGE32
+                2'd0: science_decim_factor = 32'd2;
+                2'd1: science_decim_factor = 32'd2;
+                2'd2: science_decim_factor = 32'd1;
+                default: science_decim_factor = 32'd2;
+`else
                 2'd0: science_decim_factor = 32'd8;
                 2'd1: science_decim_factor = 32'd2;
                 2'd2: science_decim_factor = 32'd1;
                 default: science_decim_factor = 32'd8;
+`endif
             endcase
         end
     endfunction
@@ -750,10 +772,17 @@ module feng_ctrl_axi #(
     function automatic [31:0] science_single_stream_mbps(input logic [1:0] bw_mode);
         begin
             case (bw_mode)
+`ifdef T510_STAGE32
+                2'd0: science_single_stream_mbps = 32'd40_960;
+                2'd1: science_single_stream_mbps = 32'd40_960;
+                2'd2: science_single_stream_mbps = 32'd81_920;
+                default: science_single_stream_mbps = 32'd40_960;
+`else
                 2'd0: science_single_stream_mbps = 32'd7_864;
                 2'd1: science_single_stream_mbps = 32'd31_457;
                 2'd2: science_single_stream_mbps = 32'd62_915;
                 default: science_single_stream_mbps = 32'd7_864;
+`endif
             endcase
         end
     endfunction
@@ -1494,9 +1523,14 @@ module feng_ctrl_axi #(
                     end
                     16'hd008: begin
                         case (write_exec_data[1:0])
+`ifdef T510_STAGE32
+                            2'd1,
+                            2'd2: science_bandwidth_mode <= write_exec_data[1:0];
+`else
                             2'd0,
                             2'd1,
                             2'd2: science_bandwidth_mode <= write_exec_data[1:0];
+`endif
                             default: science_bandwidth_mode <= 2'd1;
                         endcase
                     end
@@ -1505,8 +1539,14 @@ module feng_ctrl_axi #(
                             SCIENCE_MODE_OFF,
                             SCIENCE_MODE_TIME_ONLY,
                             SCIENCE_MODE_SPEC_ONLY,
-                            SCIENCE_MODE_TIME_SPEC,
-                            SCIENCE_MODE_TIME_MONITOR_SPEC: science_output_mode <= write_exec_data[2:0];
+                            SCIENCE_MODE_TIME_SPEC: science_output_mode <= write_exec_data[2:0];
+                            SCIENCE_MODE_TIME_MONITOR_SPEC: begin
+`ifdef T510_STAGE32
+                                science_output_mode <= SCIENCE_MODE_OFF;
+`else
+                                science_output_mode <= write_exec_data[2:0];
+`endif
+                            end
                             default: science_output_mode <= SCIENCE_MODE_OFF;
                         endcase
                     end
@@ -2046,7 +2086,11 @@ module feng_ctrl_axi #(
                             22'd0,
                             science_aa100_primed,
                             science_aa100_active,
+`ifdef T510_STAGE32
+                            8'd55
+`else
                             8'd41
+`endif
                         };
                         16'hd058: read_data_next = science_aa100_coeff_version;
                         16'hd060: read_data_next = {15'd0, diag_dac_gate, diag_adc_channel_mask, 6'd0, diag_adc_force_hold, diag_adc_force_zero};
@@ -2485,7 +2529,11 @@ module feng_ctrl_axi #(
                 22'd0,
                 science_aa100_primed,
                 science_aa100_active,
+`ifdef T510_STAGE32
+                8'd55
+`else
                 8'd41
+`endif
             };
             16'hd058: read_data_next = science_aa100_coeff_version;
             16'hd060: read_data_next = {15'd0, diag_dac_gate, diag_adc_channel_mask, 6'd0, diag_adc_force_hold, diag_adc_force_zero};

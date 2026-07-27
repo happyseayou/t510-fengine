@@ -1,0 +1,19 @@
+[Unit]
+Description=T510 Stage 32 TIME/SPEC receiver
+Requires=t510-rx-tune.service
+After=t510-rx-tune.service network-online.target
+
+[Service]
+Type=simple
+User=astrolab
+Group=astrolab
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+ExecStart=/opt/t510-time-rx/current/t510_time_rx --interface enp1s0f0np0 --dst-port-base 4300 --src-port-base 4000 --flow-count 24 --time-flow-count 8 --spec-flow-count 16 --backend fanout --fanout-mode port --fanout-group 0x27d --worker-count 24 --pin-workers off --spec-layout stage27j --initial-bandwidth-mhz 160 --ring-mb 512 --block-mb 4 --batch-size 4096 --web 0.0.0.0:8089 --web-fps 30 --waveform-points 4096 --waveform-max-points 16384
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -121,7 +121,13 @@ if {[llength [get_files -quiet $header_file]] != 0} {
 }
 
 set_property include_dirs [list [file join $repo_root sim]] [get_filesets sim_1]
-set_property verilog_define {T510_SIM_FFT_MODEL} [get_filesets sim_1]
+set_property verilog_define {
+    T510_SIM_FFT_MODEL
+    T510_STAGE27H_PRODUCTION_ONLY
+    T510_STAGE27I_ANTI_ALIAS
+    T510_STAGE27J_PFB
+    T510_STAGE32
+} [get_filesets sim_1]
 set_property xsim.simulate.runtime 0ns [get_filesets sim_1]
 
 set failed 0

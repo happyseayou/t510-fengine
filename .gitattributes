@@ -17,6 +17,11 @@
 *.xci text eol=lf
 *.xpr text eol=lf
 
+# TICS Pro exports are frozen byte-for-byte and use CRLF.  Preserve their
+# original bytes so the documented LMK profile SHA256 remains reproducible.
+reports/arch/*.tcs binary
+reports/arch/lmk04828*_registers.txt binary
+
 # Binary documentation/assets
 *.pdf binary
 *.png binary

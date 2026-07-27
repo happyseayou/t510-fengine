@@ -384,8 +384,20 @@ module t510_fengine_board_top (
     (* ASYNC_REG = "TRUE" *) logic         diag_dac_gate_meta = 1'b0;
     (* ASYNC_REG = "TRUE" *) logic         diag_dac_gate_sync = 1'b0;
 
+`ifdef T510_STAGE32
+    // Do not use an exact one-second timeout here.  The external PPS and the
+    // 80 MHz ADC AXIS clock have finite phase/frequency tolerance, so an exact
+    // 80,000,000-cycle limit can deassert pps_recent briefly just before a
+    // healthy PPS edge.  Scheduled streaming is safety-gated by pps_recent;
+    // that false timeout therefore truncates an in-flight PFB frame.  A 25%
+    // guard interval still stops a scheduled observation about 250 ms after
+    // one expected PPS is missed, while tolerating normal edge wander.
+    localparam [27:0] PPS_RECENT_TIMEOUT_CYCLES = 28'd100_000_000;
+    localparam [23:0] PPS_BLINK_CYCLES          = 24'd4_000_000;
+`else
     localparam [27:0] PPS_RECENT_TIMEOUT_CYCLES = 28'd122_880_000;
     localparam [23:0] PPS_BLINK_CYCLES          = 24'd6_144_000;
+`endif
 
     logic [27:0] heartbeat = 28'd0;
     logic [1:0]  pps_sync = 2'b00;

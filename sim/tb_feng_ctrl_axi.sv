@@ -434,7 +434,11 @@ module tb_feng_ctrl_axi;
         .pfb_coeff_error_count(pfb_coeff_error_count),
         .science_aa100_active(science_aa100_active_tb),
         .science_aa100_primed(science_aa100_primed_tb),
+`ifdef T510_STAGE32
+        .science_aa100_coeff_version(32'hAA16_0055),
+`else
         .science_aa100_coeff_version(32'hAA10_0041),
+`endif
         .debug_busy(1'b0),
         .debug_done(1'b1),
         .debug_error(1'b0),
@@ -1001,7 +1005,9 @@ module tb_feng_ctrl_axi;
         reset_dut();
 
         axi_read(16'h0000, rd);
-`ifdef T510_STAGE27J_PFB
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'h0001_0032, "CORE_VERSION Stage 32")
+`elsif T510_STAGE27J_PFB
         `TB_CHECK_EQ(rd, 32'h0001_0031, "CORE_VERSION Stage 31 scheduled sync")
 `elsif T510_STAGE27I_ANTI_ALIAS
         `TB_CHECK_EQ(rd, 32'h0001_002b, "CORE_VERSION 100MHz anti-alias candidate")
@@ -1083,19 +1089,25 @@ module tb_feng_ctrl_axi;
         axi_read(16'hd000, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0001, "default science control forces dry-run")
         axi_read(16'hd004, rd);
-`ifdef T510_STAGE27I_ANTI_ALIAS
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'h0000_0d10, "default Stage 32 status is 160MS/s/OFF with half-band active")
+`elsif T510_STAGE27I_ANTI_ALIAS
         `TB_CHECK_EQ(rd, 32'h0000_0d10, "default science status is 100MHz/OFF with anti-alias active and primed inputs")
 `else
         `TB_CHECK_EQ(rd, 32'h0000_0110, "default science status is 100MHz/OFF without F-engine valid")
 `endif
         axi_read(16'hd008, rd);
-        `TB_CHECK_EQ(rd, 32'd1, "default science bandwidth is 100MHz")
+        `TB_CHECK_EQ(rd, 32'd1, "default science rate tier is narrow")
         `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd1, "default science bandwidth output")
         axi_read(16'hd00c, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default science mode is OFF")
         `TB_CHECK_EQ(science_output_mode_cfg, 3'd0, "default science mode output")
         axi_read(16'hd010, rd);
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'd160_000_000, "default Stage 32 science sample rate")
+`else
         `TB_CHECK_EQ(rd, 32'd122_880_000, "default science sample rate")
+`endif
         axi_read(16'hd014, rd);
         `TB_CHECK_EQ(rd, 32'd2, "default science decim factor")
         axi_read(16'hd01c, rd);
@@ -1103,7 +1115,9 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(rd[4], 1'b0, "RFDC science bus truncation block is cleared")
         `TB_CHECK_EQ(rd[11], 1'b0, "science rate drop block is clear by default")
         axi_read(16'hd020, rd);
-`ifdef T510_STAGE27I_ANTI_ALIAS
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'h0000_0707, "Stage 32 science capability word")
+`elsif T510_STAGE27I_ANTI_ALIAS
         `TB_CHECK_EQ(rd, 32'h0000_0707, "science capability word with 100MHz anti-alias")
 `else
         `TB_CHECK_EQ(rd, 32'h0000_0307, "science capability word")
@@ -1137,9 +1151,17 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(time_multiflow_base_endpoint, 3'd0, "default TIME multiflow base endpoint")
         `TB_CHECK_EQ(time_multiflow_count, 4'd1, "default TIME multiflow count")
         axi_read(16'hd054, rd);
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'h0000_0337, "Stage 32 half-band status active primed 55 taps")
+`else
         `TB_CHECK_EQ(rd, 32'h0000_0329, "Stage 27i 100MHz anti-alias status active primed 41 taps")
+`endif
         axi_read(16'hd058, rd);
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'haa16_0055, "Stage 32 half-band coefficient version")
+`else
         `TB_CHECK_EQ(rd, 32'haa10_0041, "Stage 27i 100MHz anti-alias coefficient version")
+`endif
         axi_read(16'hd060, rd);
         `TB_CHECK_EQ(rd, 32'h0000_ff00, "default Stage 27i diagnostic controls disabled")
         `TB_CHECK_EQ(diag_adc_force_zero, 1'b0, "default ADC force-zero disabled")
@@ -1389,21 +1411,41 @@ module tb_feng_ctrl_axi;
         axi_write(16'hd008, 32'd0);
         axi_write(16'hd00c, 32'd3);
         axi_read(16'hd004, rd);
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'h0000_6d13, "unsupported tier zero falls back to 160MS/s TIME_SPEC")
+`else
         `TB_CHECK_EQ(rd, 32'h0000_6013, "20MHz TIME_SPEC enables time and spec but waits for F-engine valid")
+`endif
         axi_read(16'hd010, rd);
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'd160_000_000, "fallback narrow science sample rate")
+`else
         `TB_CHECK_EQ(rd, 32'd30_720_000, "20MHz science sample rate")
+`endif
         axi_read(16'hd014, rd);
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'd2, "fallback narrow science decim factor")
+`else
         `TB_CHECK_EQ(rd, 32'd8, "20MHz science decim factor")
+`endif
         axi_read(16'hd01c, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0140, "20MHz TIME_SPEC blocks dry-run and missing F-engine backend")
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd1, "invalid Stage 32 tier falls back to narrow")
+`else
         `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd0, "20MHz science bandwidth output")
+`endif
         `TB_CHECK_EQ(science_output_mode_cfg, 3'd3, "TIME_SPEC science mode output")
 
         axi_write(16'hd008, 32'd2);
         axi_read(16'hd004, rd);
         `TB_CHECK_EQ(rd, 32'h0000_6217, "200MHz TIME_SPEC is explicitly rejected")
         axi_read(16'hd010, rd);
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'd320_000_000, "320MS/s science sample rate")
+`else
         `TB_CHECK_EQ(rd, 32'd245_760_000, "200MHz science sample rate")
+`endif
         axi_read(16'hd014, rd);
         `TB_CHECK_EQ(rd, 32'd1, "200MHz science decim factor")
         axi_read(16'hd01c, rd);
@@ -1849,9 +1891,17 @@ module tb_feng_ctrl_axi;
         axi_read(16'h0718, rd);
         `TB_CHECK_EQ(rd, 32'd1024, "preview nsamp readback")
         axi_read(16'h071c, rd);
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'd320_000_000, "Stage 32 preview sample rate readback")
+`else
         `TB_CHECK_EQ(rd, 32'd245_760_000, "preview sample rate readback")
+`endif
         axi_read(16'h0720, rd);
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'd80_000_000, "Stage 32 preview AXIS beat rate readback")
+`else
         `TB_CHECK_EQ(rd, 32'd61_440_000, "preview axis beat rate readback")
+`endif
         axi_read(16'h0724, rd);
         `TB_CHECK_EQ(rd, 32'd1, "preview mode readback")
         axi_write(16'h0730, 32'h0000_0207);

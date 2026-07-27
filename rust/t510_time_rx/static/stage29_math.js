@@ -7,7 +7,7 @@
   function sampleRateHz(headerRate,bandwidthMhz){
     const header=Number(headerRate);
     if(Number.isFinite(header)&&header>0)return header;
-    return Number(bandwidthMhz)===200?245760000:122880000;
+    return Number(bandwidthMhz)===320?320000000:160000000;
   }
   function rfForBin(centerMhz,sampleRate,bins,index){
     return Number(centerMhz)-signedBin(index,bins)*Number(sampleRate)/Number(bins)/1e6;

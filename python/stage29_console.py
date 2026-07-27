@@ -38,7 +38,7 @@ def _jsonable(value: Any) -> Any:
 
 
 def create_console(project_root: str | Path):
-    """Build the single Stage 29 PYNQ production console."""
+    """Build the Stage 32 PYNQ production console."""
     import ipywidgets as W
     import numpy as np
     import plotly.graph_objects as go
@@ -53,7 +53,16 @@ def create_console(project_root: str | Path):
     label_style = {"description_width": "115px"}
     wide = W.Layout(width="420px")
 
-    bandwidth = W.Dropdown(options=[("100 MHz", 100), ("200 MHz", 200)], value=100, description="Bandwidth", style=label_style, layout=wide)
+    bandwidth = W.Dropdown(
+        options=[
+            ("160 MS/s（约128 MHz可用科学带宽）", 160),
+            ("320 MS/s（约256 MHz可用科学带宽）", 320),
+        ],
+        value=160,
+        description="Sample rate",
+        style=label_style,
+        layout=wide,
+    )
     mode = W.Dropdown(options=[("TIME only", "time_only"), ("SPEC only", "spec_only"), ("TIME + SPEC", "time_spec")], value="time_spec", description="Mode", style=label_style, layout=wide)
     center_mhz = W.FloatText(value=100.0, description="RF center MHz", style=label_style, layout=wide)
     rust_url = W.Text(value="http://192.168.100.192:8089", description="Rust Web", style=label_style, layout=wide)
@@ -153,7 +162,7 @@ def create_console(project_root: str | Path):
     spectrum_max = W.IntSlider(value=-20, min=-80, max=10, step=5, description="Spectrum max", style=label_style, layout=wide)
     smoothing = W.Checkbox(value=True, description="Smooth spectrum")
 
-    status = W.HTML("<pre>Stage 29 console ready. Apply + Start performs a fresh download.</pre>")
+    status = W.HTML("<pre>Stage 32 console ready. Apply + Start performs a fresh download.</pre>")
     board_status = W.HTML("<pre>Board not connected.</pre>")
     rust_status = W.HTML("<pre>Rust receiver not queried.</pre>")
     network_status = W.HTML("<pre>Network source/endpoints not applied.</pre>")
@@ -198,7 +207,7 @@ def create_console(project_root: str | Path):
         )
 
     def update_mode_options(change: Any = None) -> None:
-        if int(bandwidth.value) == 200:
+        if int(bandwidth.value) == 320:
             mode.options = [("TIME only", "time_only"), ("SPEC only", "spec_only")]
             if mode.value == "time_spec":
                 mode.value = "time_only"
@@ -329,7 +338,7 @@ def create_console(project_root: str | Path):
     def apply_clicked(_button: Any) -> None:
         try:
             config = current_config()
-            set_status("Fresh download and deterministic Stage 29 start in progress…")
+            set_status("Fresh download and deterministic Stage 32 start in progress…")
             result = controller.apply(config, fresh_download=True)
             refresh_visibility(config)
             show_network_apply(result, config)
@@ -338,7 +347,7 @@ def create_console(project_root: str | Path):
             warnings = result.get("flow_warnings", [])
             suffix = f" Warnings: {'; '.join(warnings)}" if warnings else ""
             set_status(
-                f"Applied board {config.board_id}, {config.bandwidth_mhz}MHz {config.mode.value}; "
+                f"Applied board {config.board_id}, {config.bandwidth_mhz} MS/s {config.mode.value}; "
                 f"source {config.source_ip} / {config.source_mac}; "
                 f"{len(result['endpoints'])} endpoints verified.{suffix}",
                 "warn" if warnings else "ok",
@@ -401,7 +410,7 @@ def create_console(project_root: str | Path):
         health.set_title(index, title)
     health.selected_index = None
     preview_box = W.VBox([wave_panel, spec_panel])
-    return W.VBox([W.HTML("<h2>Stage 29 F-engine Production Control</h2>"), status, controls, tabs, health, preview_box])
+    return W.VBox([W.HTML("<h2>Stage 32 F-engine Production Control</h2>"), status, controls, tabs, health, preview_box])
 
 
 __all__ = ["create_console"]

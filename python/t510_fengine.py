@@ -511,13 +511,35 @@ class T510Clock:
         self.require_low_level = require_low_level
         self.last_config: dict[str, Any] = {}
 
-    def configure(self, ref: str) -> dict[str, Any]:
+    def configure(
+        self,
+        ref: str,
+        *,
+        profile: str = "stage31_245p76",
+    ) -> dict[str, Any]:
         try:
             from .t510_clock import T510ClockController
         except ImportError:
             from t510_clock import T510ClockController
 
-        if ref == "tcxo_10mhz":
+        if profile == "stage32_160":
+            if ref != "external_10mhz":
+                self.last_config = {
+                    "ref": ref,
+                    "profile": profile,
+                    "configured": False,
+                    "reason": "Stage 32 clock profile requires external_10mhz on manual CLKin2",
+                }
+            else:
+                self.last_config = T510ClockController().configure_external_10mhz_stage32_160()
+        elif profile != "stage31_245p76":
+            self.last_config = {
+                "ref": ref,
+                "profile": profile,
+                "configured": False,
+                "reason": "unsupported clock profile selected",
+            }
+        elif ref == "tcxo_10mhz":
             self.last_config = T510ClockController().configure_tcxo_245p76()
         elif ref == "external_10mhz":
             self.last_config = T510ClockController().configure_external_10mhz_245p76()
@@ -544,8 +566,9 @@ class T510Clock:
         except ImportError:
             from t510_clock import T510ClockController
 
-        result = T510ClockController().set_sysref(bool(enable))
-        self.last_config["sysref_enabled"] = bool(enable)
+        mode = str(self.last_config.get("sysref_mode", T510ClockController.SYSREF_REQUEST))
+        result = T510ClockController().set_sysref(bool(enable), mode=mode)
+        self.last_config["sysref_enabled"] = bool(result.get("enabled", enable))
         return result
 
     def pulse_sysref(self, *, width_s: float = 0.05, settle_s: float = 0.05) -> dict[str, Any]:
@@ -554,12 +577,19 @@ class T510Clock:
         except ImportError:
             from t510_clock import T510ClockController
 
-        result = T510ClockController().pulse_sysref(width_s=width_s, settle_s=settle_s)
+        mode = str(self.last_config.get("sysref_mode", T510ClockController.SYSREF_REQUEST))
+        result = T510ClockController().pulse_sysref(
+            width_s=width_s,
+            settle_s=settle_s,
+            mode=mode,
+        )
         self.last_config["sysref_enabled"] = False
         return result
 
 
 class T510FEngine:
+    RFDC_CLOCK_RECOVERY_SETTLE_SECONDS = 1.0
+
     MODES = {
         "spec": 0,
         "time": 1,
@@ -577,7 +607,16 @@ class T510FEngine:
         "gps_10mhz": 2,
     }
     PRODUCTION_CLOCK_REF = "external_10mhz"
+    PRODUCTION_CLOCK_PROFILE = "stage32_160"
     PRODUCTION_SYNC_MODE = "external_pps"
+    RFDC_ANALOG_SAMPLE_RATE_HZ = 1_600_000_000
+    RFDC_COMPLEX_SAMPLE_RATE_HZ = 320_000_000
+    RFDC_DECIMATION = 5
+    RFDC_INTERPOLATION = 5
+    ADC_AXIS_RATE_HZ = 80_000_000
+    DAC_AXIS_RATE_HZ = 80_000_000
+    STAGE32_ADC_TARGET_MARGIN = 20
+    STAGE32_DAC_TARGET_MARGIN = 16
     DAC_MODES = {
         "single_tone": 0,
         "tone": 0,
@@ -586,9 +625,8 @@ class T510FEngine:
         "phasor": 1,
     }
     SCIENCE_BANDWIDTHS: dict[int, dict[str, Any]] = {
-        20: {"code": 0, "pl_decim": 8, "sample_rate_hz": 30_720_000.0},
-        100: {"code": 1, "pl_decim": 2, "sample_rate_hz": 122_880_000.0},
-        200: {"code": 2, "pl_decim": 1, "sample_rate_hz": 245_760_000.0},
+        160: {"code": 1, "pl_decim": 2, "sample_rate_hz": 160_000_000.0},
+        320: {"code": 2, "pl_decim": 1, "sample_rate_hz": 320_000_000.0},
     }
     SCIENCE_BANDWIDTH_BY_CODE = {
         int(item["code"]): bandwidth_mhz for bandwidth_mhz, item in SCIENCE_BANDWIDTHS.items()
@@ -705,20 +743,21 @@ class T510FEngine:
             "X-engine/beamformer interfaces",
         ),
     }
-    STAGE29_PRODUCTION_SCOPE = {
+    STAGE32_PRODUCTION_SCOPE = {
         "data_streams": "TIME native 512b + SPEC/F-engine FENGINE_IQ16 4-tap RTL PFB 4096-channel science streams",
         "control_preview": "Jupyter notebook 00_stage29_fengine_production_control.ipynb",
         "production_preview": "mode-selective RF reconstructed waveform and/or 4096-bin PFB spectrum",
         "production_modes": (
-            "100MHz TIME_ONLY",
-            "100MHz SPEC_ONLY",
-            "100MHz TIME_SPEC",
-            "200MHz TIME_ONLY",
-            "200MHz SPEC_ONLY",
+            "160MS/s TIME_ONLY",
+            "160MS/s SPEC_ONLY",
+            "160MS/s TIME_SPEC",
+            "320MS/s TIME_ONLY",
+            "320MS/s SPEC_ONLY",
         ),
         "convergence_gate": "fresh-download board counters plus mode-sized Rust/Web receive at the mode full rate",
         "spec_contract": "4096 channels, 16 blocks x 256 channels x 1 spectrum-time x 8 inputs x IQ16, 8192B payload",
         "pfb_contract": "4-tap programmable Q1.17 coefficient bank, stopped/idle commit only",
+        "rate_contract": "RFDC 320MS/s complex base path; PL 55-tap half-band decim2 for 160MS/s",
         "fixed_runtime_contract": (
             "external_10mhz + external_pps",
             "default TIME destination UDP 4300..4307",
@@ -727,7 +766,7 @@ class T510FEngine:
             "8 logical RFDC inputs",
         ),
         "excluded_from_gate": (
-            "200MHz TIME_SPEC (exceeds the 100GbE capacity)",
+            "320MS/s TIME_SPEC (exceeds the 100GbE capacity)",
             "X-engine/beamformer interfaces",
             "payload or wire-format changes",
         ),
@@ -861,6 +900,39 @@ class T510FEngine:
             self.rfdc_bind_error = "; ".join(bind_errors)
         return direct
 
+    def reset_all_rfdc_tiles(self) -> list[dict[str, Any]]:
+        """Restart all ADC/DAC tiles after an RFDC reference-clock interruption."""
+        if self.rfdc is None:
+            raise RuntimeError("RFDC handle is unavailable")
+        calls: list[dict[str, Any]] = []
+        for kind, attribute in (("adc", "adc_tiles"), ("dac", "dac_tiles")):
+            for tile_index, tile in enumerate(list(getattr(self.rfdc, attribute, []))):
+                method = next(
+                    (
+                        (name, getattr(tile, name))
+                        for name in ("Reset", "reset")
+                        if callable(getattr(tile, name, None))
+                    ),
+                    None,
+                )
+                if method is None:
+                    raise RuntimeError(f"{kind} tile {tile_index} has no Reset API")
+                name, function = method
+                value = function()
+                calls.append(
+                    {
+                        "kind": kind,
+                        "tile": tile_index,
+                        "method": name,
+                        "result": repr(value),
+                    }
+                )
+        if len(calls) != 8:
+            raise RuntimeError(
+                f"Stage 32 expected eight RFDC tile reset calls, observed {len(calls)}"
+            )
+        return calls
+
     def _write64(self, lo_offset: int, value: int) -> None:
         self.ctrl.write(lo_offset, value & 0xFFFF_FFFF)
         self.ctrl.write(lo_offset + 4, (value >> 32) & 0xFFFF_FFFF)
@@ -890,12 +962,17 @@ class T510FEngine:
             value = (value & ~(0x3 << 16)) | ((clock_ref & 0x3) << 16)
         self.ctrl.write(self.regs.SYNC_CONFIG, value)
 
-    def configure_clock(self, ref: str = "external_10mhz") -> dict[str, Any]:
+    def configure_clock(
+        self,
+        ref: str = "external_10mhz",
+        *,
+        profile: str = PRODUCTION_CLOCK_PROFILE,
+    ) -> dict[str, Any]:
         try:
             clock_ref = self.CLOCK_REFS[ref]
         except KeyError as exc:
             raise ValueError(f"Unsupported reference source: {ref}")
-        self.clock_status = self.clock.configure(ref)
+        self.clock_status = self.clock.configure(ref, profile=profile)
         self._write_sync_config(clock_ref=clock_ref)
         self.clock_reference = ref
         return dict(self.clock_status)
@@ -971,10 +1048,11 @@ class T510FEngine:
             require=require,
         )
         self.rfdc_config = {
-            "fs_adc": 245_760_000,
+            "fs_adc": self.RFDC_COMPLEX_SAMPLE_RATE_HZ,
+            "fs_analog": self.RFDC_ANALOG_SAMPLE_RATE_HZ,
             "f_center": center_freq_hz,
             "bandwidth": bandwidth_hz,
-            "decimation": 20,
+            "decimation": self.RFDC_DECIMATION,
             "nco_configured": result["configured"],
             "nco_results": result["results"],
         }
@@ -1551,6 +1629,8 @@ class T510FEngine:
         adc_ref_tile: int = 0,
         dac_ref_tile: int = 0,
         target_latency: int = -1,
+        adc_target_latency: int | None = None,
+        dac_target_latency: int | None = None,
     ) -> dict[str, Any]:
         if self.rfdc is None:
             raise RuntimeError("RFDC_SYSREF_API_UNAVAILABLE: RFDC handle missing")
@@ -1571,19 +1651,29 @@ class T510FEngine:
                 return {"available": False, "calls": [], "failures": [str(exc)], "shim": "unavailable"}
             dac_tile_mask = int(dac_tiles) & 0xF if dac_tiles is not None else self._rfdc_tile_mask(getattr(self.rfdc, "dac_tiles", []))
             adc_tile_mask = int(adc_tiles) & 0xF if adc_tiles is not None else self._rfdc_tile_mask(getattr(self.rfdc, "adc_tiles", []))
+            effective_adc_target = (
+                int(target_latency)
+                if adc_target_latency is None
+                else int(adc_target_latency)
+            )
+            effective_dac_target = (
+                int(target_latency)
+                if dac_target_latency is None
+                else int(dac_target_latency)
+            )
             dac_cfg, dac_init = self._new_mts_config(
                 ffi,
                 lib,
                 tiles=dac_tile_mask,
                 ref_tile=int(dac_ref_tile),
-                target_latency=int(target_latency),
+                target_latency=effective_dac_target,
             )
             adc_cfg, adc_init = self._new_mts_config(
                 ffi,
                 lib,
                 tiles=adc_tile_mask,
                 ref_tile=int(adc_ref_tile),
-                target_latency=int(target_latency),
+                target_latency=effective_adc_target,
             )
             calls.extend(
                 [
@@ -1705,6 +1795,8 @@ class T510FEngine:
         ref_tiles: Iterable[int] = (0, 1, 2, 3),
         tile_masks: Iterable[int] = (0x1, 0x3, 0xF),
         target_latency: int = -1,
+        adc_target_latency: int | None = None,
+        dac_target_latency: int | None = None,
         max_cases: int = 16,
     ) -> dict[str, Any]:
         """Run bounded MTS sync probes across tile masks/ref tiles.
@@ -1743,6 +1835,8 @@ class T510FEngine:
                         adc_ref_tile=ref_i,
                         dac_ref_tile=ref_i,
                         target_latency=int(target_latency),
+                        adc_target_latency=adc_target_latency,
+                        dac_target_latency=dac_target_latency,
                     )
                     rows.append(
                         {
@@ -1775,6 +1869,8 @@ class T510FEngine:
         mts_dac_tiles: int | None = None,
         mts_adc_ref_tile: int = 0,
         mts_dac_ref_tile: int = 0,
+        mts_adc_target_latency: int = -1,
+        mts_dac_target_latency: int = -1,
         rfdc_mixer_sequence: str = "sysref_reset_before_pulse",
     ) -> dict[str, Any]:
         if self.rfdc is None:
@@ -1798,6 +1894,8 @@ class T510FEngine:
             dac_tiles=mts_dac_tiles,
             adc_ref_tile=int(mts_adc_ref_tile),
             dac_ref_tile=int(mts_dac_ref_tile),
+            adc_target_latency=int(mts_adc_target_latency),
+            dac_target_latency=int(mts_dac_target_latency),
         )
         mixer = self._configure_rfdc_mixer_blocks_sysref(
             adc_nco_hz=float(adc_nco_hz),
@@ -2212,6 +2310,8 @@ class T510FEngine:
         mts_dac_tiles: int | None = None,
         mts_adc_ref_tile: int = 0,
         mts_dac_ref_tile: int = 0,
+        mts_adc_target_latency: int = -1,
+        mts_dac_target_latency: int = -1,
         force_clock_reconfigure: bool = False,
         dac_source_mode: str = "constant_phasor",
         input_source_mode: str = "dac_loopback",
@@ -2233,11 +2333,16 @@ class T510FEngine:
             raise ValueError("dac_signal_hz must be in the 50..350 MHz science band")
         if not 50_000_000.0 <= expected_signal_hz <= 350_000_000.0:
             raise ValueError("expected_signal_hz must be in the 50..350 MHz science band")
-        if not 5_000_000.0 <= view_bw_hz <= 200_000_000.0:
-            raise ValueError("view_bw_hz must be in the 5..200 MHz display band")
+        if not 5_000_000.0 <= view_bw_hz <= 320_000_000.0:
+            raise ValueError("view_bw_hz must be in the 5..320 MHz complex-rate band")
         if input_source_mode == "dac_loopback" and abs(expected_signal_hz - dac_signal_hz) > 1.0:
             raise ValueError("dac_loopback input_source_mode requires expected_signal_hz to match dac_signal_hz")
 
+        clock_recovery: dict[str, Any] = {
+            "clock_reconfigured": False,
+            "settle_seconds": 0.0,
+            "tile_reset_calls": [],
+        }
         if initialize:
             self.stop()
             time.sleep(0.05)
@@ -2245,6 +2350,12 @@ class T510FEngine:
             status_ref = str(clock.get("selected_ref", clock.get("ref", "")))
             if bool(force_clock_reconfigure) or not bool(clock.get("configured", False)) or status_ref != str(clock_ref):
                 clock = self.configure_clock(ref=str(clock_ref))
+                clock_recovery["clock_reconfigured"] = True
+                if bool(clock.get("configured", False)):
+                    settle_seconds = float(self.RFDC_CLOCK_RECOVERY_SETTLE_SECONDS)
+                    time.sleep(settle_seconds)
+                    clock_recovery["settle_seconds"] = settle_seconds
+                    clock_recovery["tile_reset_calls"] = self.reset_all_rfdc_tiles()
             else:
                 self._write_sync_config(clock_ref=self.CLOCK_REFS[str(clock_ref)])
                 self.clock_reference = str(clock_ref)
@@ -2261,7 +2372,12 @@ class T510FEngine:
         dac_tone_hz = 0.0 if dac_source_mode == "constant_phasor" else (dac_signal_hz - observe_center_hz)
         dac_tone_mode = "constant_phasor" if dac_source_mode == "constant_phasor" else "single_tone"
 
-        self.configure_rfdc(fs_adc=245_760_000, f_center=observe_center_hz, bandwidth=view_bw_hz, decimation=20)
+        self.configure_rfdc(
+            fs_adc=self.RFDC_COMPLEX_SAMPLE_RATE_HZ,
+            f_center=observe_center_hz,
+            bandwidth=view_bw_hz,
+            decimation=self.RFDC_DECIMATION,
+        )
         nco = self._configure_rfdc_sysref_locked_pair(
             adc_nco_hz=-observe_center_hz,
             dac_nco_hz=dac_nco_hz,
@@ -2272,10 +2388,13 @@ class T510FEngine:
             mts_dac_tiles=mts_dac_tiles,
             mts_adc_ref_tile=mts_adc_ref_tile,
             mts_dac_ref_tile=mts_dac_ref_tile,
+            mts_adc_target_latency=int(mts_adc_target_latency),
+            mts_dac_target_latency=int(mts_dac_target_latency),
             rfdc_mixer_sequence=str(rfdc_mixer_sequence),
         )
         self.rfdc_config = {
-            "fs_adc": 245_760_000,
+            "fs_adc": self.RFDC_COMPLEX_SAMPLE_RATE_HZ,
+            "fs_analog": self.RFDC_ANALOG_SAMPLE_RATE_HZ,
             "f_center": observe_center_hz,
             "observe_center_hz": observe_center_hz,
             "dac_signal_hz": dac_signal_hz,
@@ -2283,7 +2402,7 @@ class T510FEngine:
             "input_signal_hz": expected_signal_hz,
             "input_source_mode": input_source_mode,
             "bandwidth": view_bw_hz,
-            "decimation": 20,
+            "decimation": self.RFDC_DECIMATION,
             "nco_configured": nco["configured"],
             "nco_results": nco,
             "sysref_locked": bool(nco["configured"]),
@@ -2295,7 +2414,7 @@ class T510FEngine:
             phase_deg_per_channel=float(phase_deg_per_channel),
             phase_deg_by_channel=phase_deg_by_channel,
             enable_mask=int(enable_mask),
-            dac_sample_rate_hz=245_760_000.0,
+            dac_sample_rate_hz=float(self.RFDC_COMPLEX_SAMPLE_RATE_HZ),
             mode=dac_tone_mode,
         )
         epoch = self.reset_dac_phase()
@@ -2323,6 +2442,7 @@ class T510FEngine:
             "sync_mode": str(sync_mode),
             "rfdc_mixer_sequence": str(rfdc_mixer_sequence),
             "clock": dict(clock) if isinstance(clock, Mapping) else clock,
+            "clock_recovery": clock_recovery,
             "nco": nco,
             "tone": tone,
             "dac_phase_epoch": int(epoch),
@@ -2814,7 +2934,7 @@ class T510FEngine:
         except Exception as exc:
             raise ValueError(f"Unsupported science bandwidth: {bandwidth_mhz!r}") from exc
         if value not in cls.SCIENCE_BANDWIDTHS:
-            raise ValueError("science bandwidth must be one of 20, 100, 200 MHz")
+            raise ValueError("Stage 32 complex sample-rate setting must be 160 or 320 MS/s")
         return value
 
     @classmethod
@@ -2823,6 +2943,8 @@ class T510FEngine:
             code = int(output_mode)
             if code not in cls.SCIENCE_OUTPUT_MODE_NAMES:
                 raise ValueError("science output mode code must be in range 0..4")
+            if code == 4:
+                raise ValueError("Stage 32 does not support TIME_MONITOR_SPEC")
             return cls.SCIENCE_OUTPUT_MODE_NAMES[code], code
         key = str(output_mode).strip().lower().replace("-", "_").replace(" ", "_")
         if key not in cls.SCIENCE_OUTPUT_MODES:
@@ -2831,6 +2953,8 @@ class T510FEngine:
                 "TIME_SPEC, or TIME_MONITOR_SPEC"
             )
         code = int(cls.SCIENCE_OUTPUT_MODES[key])
+        if code == 4:
+            raise ValueError("Stage 32 does not support TIME_MONITOR_SPEC")
         return cls.SCIENCE_OUTPUT_MODE_NAMES[code], code
 
     @classmethod
@@ -2867,7 +2991,7 @@ class T510FEngine:
             full_stream_factor += 1.0 / 64.0
 
         block_mask = 0
-        if bandwidth == 200 and mode_code == 3:
+        if bandwidth == 320 and mode_code == 3:
             block_mask |= 1 << 0
         payload_bps = sample_rate_hz * int(ninput) * 2.0 * int(iq_bits) * full_stream_factor
         payload_mbps = payload_bps / 1_000_000.0
@@ -2907,7 +3031,7 @@ class T510FEngine:
         raw_multiflow = int(self.ctrl.read(self.regs.SCIENCE_TIME_MULTIFLOW_CONTROL))
         raw_antialias = int(self.ctrl.read(self.regs.SCIENCE_ANTIALIAS_STATUS))
         raw_antialias_coeff = int(self.ctrl.read(self.regs.SCIENCE_ANTIALIAS_COEFF_VERSION))
-        bandwidth = self.SCIENCE_BANDWIDTH_BY_CODE.get(raw_bw & 0x3, 20)
+        bandwidth = self.SCIENCE_BANDWIDTH_BY_CODE.get(raw_bw & 0x3, 160)
         mode_name = self.SCIENCE_OUTPUT_MODE_NAMES.get(raw_mode & 0x7, f"UNKNOWN_{raw_mode & 0x7}")
         status = {
             "science_control": raw_control,
@@ -2938,6 +3062,10 @@ class T510FEngine:
             "science_antialias_100m_active": (raw_antialias >> 8) & 0x1,
             "science_antialias_100m_primed": (raw_antialias >> 9) & 0x1,
             "science_antialias_coeff_version": raw_antialias_coeff,
+            "halfband_active": (raw_antialias >> 8) & 0x1,
+            "halfband_primed": (raw_antialias >> 9) & 0x1,
+            "halfband_taps": raw_antialias & 0xFF,
+            "halfband_coeff_id": raw_antialias_coeff,
             "force_dry_run": raw_control & 0x1,
             "cmac_enable": (raw_control >> 1) & 0x1,
             "live_requested": (raw_control >> 2) & 0x1,
@@ -4374,7 +4502,7 @@ class T510FEngine:
     def configure_science_29(
         self,
         *,
-        bandwidth_mhz: int | float | str = 100,
+        bandwidth_mhz: int | float | str = 160,
         output_mode: str | int = "time_spec",
         dst_ip: str = "10.0.1.16",
         dst_mac: str = "08:c0:eb:d5:95:b2",
@@ -4382,7 +4510,7 @@ class T510FEngine:
         src_mac: str = "02:00:00:00:00:01",
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Configure one of the five frozen Stage 29 production profiles.
+        """Configure one of the five frozen Stage 32 production profiles.
 
         Wire layout, port allocation, flow counts, PFB layout, synchronization
         policy, and diagnostic controls remain fixed.  The board-global CMAC
@@ -4392,16 +4520,16 @@ class T510FEngine:
         mode_name, mode_code = self._normalize_science_output_mode(output_mode)
         bandwidth = self._normalize_science_bandwidth_mhz(bandwidth_mhz)
         allowed = {
-            (100, self.SCIENCE_OUTPUT_MODES["time_only"]),
-            (100, self.SCIENCE_OUTPUT_MODES["spec_only"]),
-            (100, self.SCIENCE_OUTPUT_MODES["time_spec"]),
-            (200, self.SCIENCE_OUTPUT_MODES["time_only"]),
-            (200, self.SCIENCE_OUTPUT_MODES["spec_only"]),
+            (160, self.SCIENCE_OUTPUT_MODES["time_only"]),
+            (160, self.SCIENCE_OUTPUT_MODES["spec_only"]),
+            (160, self.SCIENCE_OUTPUT_MODES["time_spec"]),
+            (320, self.SCIENCE_OUTPUT_MODES["time_only"]),
+            (320, self.SCIENCE_OUTPUT_MODES["spec_only"]),
         }
         if (bandwidth, mode_code) not in allowed:
             raise ValueError(
-                "Stage 29 production supports 100MHz TIME_ONLY/SPEC_ONLY/TIME_SPEC "
-                "and 200MHz TIME_ONLY/SPEC_ONLY"
+                "Stage 32 production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
+                "and 320MS/s TIME_ONLY/SPEC_ONLY"
             )
         normalized_src_ip = _normalize_unicast_ipv4(src_ip)
         normalized_src_mac = _normalize_unicast_mac(src_mac)
@@ -4415,10 +4543,10 @@ class T510FEngine:
         }
         supplied = sorted(forbidden.intersection(kwargs))
         if supplied:
-            raise ValueError(f"Stage 29 fixed production parameters cannot be overridden: {supplied}")
+            raise ValueError(f"Stage 32 fixed production parameters cannot be overridden: {supplied}")
         unexpected = sorted(set(kwargs).difference({"start", "clear_counters"}))
         if unexpected:
-            raise ValueError(f"unsupported Stage 29 production parameters: {unexpected}")
+            raise ValueError(f"unsupported Stage 32 production parameters: {unexpected}")
 
         start_requested = bool(kwargs.pop("start", True))
         result = self.configure_science_live_27e(
@@ -4476,16 +4604,16 @@ class T510FEngine:
             self.start()
             time.sleep(0.05)
 
-        rate_scale = 0.5 if bandwidth == 100 else 1.0
+        rate_scale = 0.5 if bandwidth == 160 else 1.0
         result.update(
             {
                 "science_status": self.read_science_output_status(),
                 "tx_status": self.read_tx_status(),
                 "channelizer_status": self.read_channelizer_status(),
-                "stage": "29",
+                "stage": "32",
                 "science_product": "FENGINE_IQ16_COMPLEX_VOLTAGE_4TAP_RTL_PFB",
-                "production_scope": dict(self.STAGE29_PRODUCTION_SCOPE),
-                "convergence_target": "STAGE29_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
+                "production_scope": dict(self.STAGE32_PRODUCTION_SCOPE),
+                "convergence_target": "STAGE32_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
                 "fengine_nchan": 4096,
                 "fengine_taps": 4 if expects_spec else None,
                 "fengine_fft_shift": self.FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT if expects_spec else None,
@@ -4495,9 +4623,9 @@ class T510FEngine:
                 "spec_ports": "4308..4323",
                 "host_flow_count": (8 if expects_time else 0) + (16 if expects_spec else 0),
                 "expected_packet_rates": {
-                    "time_pps": 960_000.0 * rate_scale if expects_time else 0.0,
-                    "spec_pps": 960_000.0 * rate_scale if expects_spec else 0.0,
-                    "combined_t510_udp_payload_mbps": 63_897.6 * rate_scale * (2.0 if expects_time and expects_spec else 1.0),
+                    "time_pps": 1_250_000.0 * rate_scale if expects_time else 0.0,
+                    "spec_pps": 1_250_000.0 * rate_scale if expects_spec else 0.0,
+                    "combined_t510_udp_payload_mbps": 83_200.0 * rate_scale * (2.0 if expects_time and expects_spec else 1.0),
                 },
                 "payload_contract": {
                     "product": "FENGINE_IQ16",
@@ -5671,27 +5799,27 @@ class T510FEngine:
         self,
         *,
         configure: bool = True,
-        bandwidth_mhz: int | float | str = 100,
+        bandwidth_mhz: int | float | str = 160,
         output_mode: str | int = "time_spec",
         seconds: float = 10.0,
         measurement_ready_timeout_s: float = 10.0,
         **config_kwargs: Any,
     ) -> dict[str, Any]:
-        """Run the frozen Stage 29 board gate for any production profile."""
-        expected_core_version = 0x0001_0031
+        """Run the Stage 32 board gate for any production profile."""
+        expected_core_version = 0x0001_0032
         mode_name, mode_code = self._normalize_science_output_mode(output_mode)
         bandwidth = self._normalize_science_bandwidth_mhz(bandwidth_mhz)
         allowed = {
-            (100, self.SCIENCE_OUTPUT_MODES["time_only"]),
-            (100, self.SCIENCE_OUTPUT_MODES["spec_only"]),
-            (100, self.SCIENCE_OUTPUT_MODES["time_spec"]),
-            (200, self.SCIENCE_OUTPUT_MODES["time_only"]),
-            (200, self.SCIENCE_OUTPUT_MODES["spec_only"]),
+            (160, self.SCIENCE_OUTPUT_MODES["time_only"]),
+            (160, self.SCIENCE_OUTPUT_MODES["spec_only"]),
+            (160, self.SCIENCE_OUTPUT_MODES["time_spec"]),
+            (320, self.SCIENCE_OUTPUT_MODES["time_only"]),
+            (320, self.SCIENCE_OUTPUT_MODES["spec_only"]),
         }
         if (bandwidth, mode_code) not in allowed:
             raise ValueError(
-                "Stage 29 production supports 100MHz TIME_ONLY/SPEC_ONLY/TIME_SPEC "
-                "and 200MHz TIME_ONLY/SPEC_ONLY"
+                "Stage 32 production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
+                "and 320MS/s TIME_ONLY/SPEC_ONLY"
             )
 
         start_requested = bool(config_kwargs.pop("start", True))
@@ -5705,39 +5833,16 @@ class T510FEngine:
             )
             config_kwargs = {}
         elif config_kwargs:
-            raise ValueError(f"unused Stage 29 config kwargs when configure=False: {sorted(config_kwargs)}")
+            raise ValueError(f"unused Stage 32 config kwargs when configure=False: {sorted(config_kwargs)}")
 
-        stage28_profiles = {
-            (100, self.SCIENCE_OUTPUT_MODES["time_spec"]),
-            (200, self.SCIENCE_OUTPUT_MODES["time_only"]),
-            (200, self.SCIENCE_OUTPUT_MODES["spec_only"]),
-        }
-        if (bandwidth, mode_code) in stage28_profiles:
-            result = self.run_stage28_validation(
-                configure=False,
-                expected_core_version=expected_core_version,
-                bandwidth_mhz=bandwidth,
-                output_mode=mode_name,
-                seconds=seconds,
-                measurement_ready_timeout_s=measurement_ready_timeout_s,
-                start=start_requested,
-            )
-            ok = not result.get("errors") and not result.get("blockers")
-            result.update(
-                {
-                    "classification": f"STAGE29_{bandwidth}MHZ_{mode_name}_BOARD_{'PASS' if ok else 'FAIL'}",
-                    "ok": ok,
-                    "full_science_validated": ok,
-                    "stage": "29",
-                    "production_scope": dict(self.STAGE29_PRODUCTION_SCOPE),
-                    "convergence_target": "STAGE29_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
-                    "config": config,
-                }
-            )
-            return result
-
-        expects_time = mode_code == self.SCIENCE_OUTPUT_MODES["time_only"]
-        expects_spec = mode_code == self.SCIENCE_OUTPUT_MODES["spec_only"]
+        expects_time = mode_code in (
+            self.SCIENCE_OUTPUT_MODES["time_only"],
+            self.SCIENCE_OUTPUT_MODES["time_spec"],
+        )
+        expects_spec = mode_code in (
+            self.SCIENCE_OUTPUT_MODES["spec_only"],
+            self.SCIENCE_OUTPUT_MODES["time_spec"],
+        )
         ready_before_measurement = None
         if start_requested:
             self.start()
@@ -5802,10 +5907,18 @@ class T510FEngine:
             errors.append("TIME_ENABLE_MISMATCH")
         if bool(int(science.get("spec_enabled", 0))) != expects_spec:
             errors.append("SPEC_ENABLE_MISMATCH")
-        if not int(science.get("science_antialias_100m_active", 0)) or not int(science.get("science_antialias_100m_primed", 0)):
-            errors.append("SCIENCE_100MHZ_ANTIALIAS_NOT_READY")
-        if int(science.get("science_antialias_taps", 0)) != 41 or int(science.get("science_antialias_coeff_version", 0)) != 0xAA10_0041:
-            errors.append("SCIENCE_100MHZ_ANTIALIAS_CONTRACT_MISMATCH")
+        halfband_expected = bandwidth == 160
+        halfband_active = bool(int(science.get("halfband_active", 0)))
+        halfband_primed = bool(int(science.get("halfband_primed", 0)))
+        if halfband_active != halfband_expected:
+            errors.append("STAGE32_HALFBAND_ACTIVE_MISMATCH")
+        if halfband_expected and not halfband_primed:
+            errors.append("STAGE32_HALFBAND_NOT_PRIMED")
+        if (
+            int(science.get("halfband_taps", 0)) != 55
+            or int(science.get("halfband_coeff_id", 0)) != 0xAA16_0055
+        ):
+            errors.append("STAGE32_HALFBAND_CONTRACT_MISMATCH")
 
         for key, label in (
             ("gt_locked", "GT_NOT_LOCKED"),
@@ -5832,17 +5945,20 @@ class T510FEngine:
         for key in sorted(zero_delta):
             if deltas[key] != 0:
                 errors.append(f"NONZERO_{key.upper()}")
-        if expects_time and deltas["spec_packet_count"] != 0:
+        if not expects_spec and deltas["spec_packet_count"] != 0:
             errors.append("SPEC_PACKETS_PRESENT_IN_TIME_ONLY")
-        if expects_spec and deltas["time_packet_count"] != 0:
+        if not expects_time and deltas["time_packet_count"] != 0:
             errors.append("TIME_PACKETS_PRESENT_IN_SPEC_ONLY")
-        if expects_time and rates["time_pps"] < 470_000.0:
-            errors.append(f"TIME_PPS_LOW {rates['time_pps']:.3f} < 470000")
-        if expects_spec and rates["spec_pps"] < 470_000.0:
-            errors.append(f"SPEC_PPS_LOW {rates['spec_pps']:.3f} < 470000")
-        if rates["combined_t510_udp_payload_mbps"] < 31_000.0:
+        pps_min = 593_750.0 if bandwidth == 160 else 1_187_500.0
+        payload_mbps_min = pps_min * (int(expects_time) + int(expects_spec)) * 8320.0 * 8.0 / 1_000_000.0
+        if expects_time and rates["time_pps"] < pps_min:
+            errors.append(f"TIME_PPS_LOW {rates['time_pps']:.3f} < {pps_min:.3f}")
+        if expects_spec and rates["spec_pps"] < pps_min:
+            errors.append(f"SPEC_PPS_LOW {rates['spec_pps']:.3f} < {pps_min:.3f}")
+        if rates["combined_t510_udp_payload_mbps"] < payload_mbps_min:
             errors.append(
-                f"COMBINED_T510_UDP_PAYLOAD_LOW {rates['combined_t510_udp_payload_mbps']:.3f} < 31000"
+                "COMBINED_T510_UDP_PAYLOAD_LOW "
+                f"{rates['combined_t510_udp_payload_mbps']:.3f} < {payload_mbps_min:.3f}"
             )
 
         enabled_time = [route for route in time_routes if int(route.get("enable", 0))]
@@ -5874,20 +5990,20 @@ class T510FEngine:
 
         ok = not errors and not blockers
         return {
-            "classification": f"STAGE29_{bandwidth}MHZ_{mode_name}_BOARD_{'PASS' if ok else 'FAIL'}",
+            "classification": f"STAGE32_{bandwidth}MSPS_{mode_name}_BOARD_{'PASS' if ok else 'FAIL'}",
             "ok": ok,
             "full_science_validated": ok,
-            "stage": "29",
-            "production_scope": dict(self.STAGE29_PRODUCTION_SCOPE),
-            "convergence_target": "STAGE29_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
+            "stage": "32",
+            "production_scope": dict(self.STAGE32_PRODUCTION_SCOPE),
+            "convergence_target": "STAGE32_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
             "host_receiver_required": True,
             "expected_core_version": f"0x{int(expected_core_version):08x}",
             "bandwidth_mhz": bandwidth,
             "output_mode": mode_name,
             "required_rates": {
-                "time_pps_min": 470_000.0 if expects_time else 0.0,
-                "spec_pps_min": 470_000.0 if expects_spec else 0.0,
-                "combined_t510_udp_payload_mbps_min": 31_000.0,
+                "time_pps_min": pps_min if expects_time else 0.0,
+                "spec_pps_min": pps_min if expects_spec else 0.0,
+                "combined_t510_udp_payload_mbps_min": payload_mbps_min,
             },
             "config": config,
             "ready_before_measurement": ready_before_measurement,
@@ -6891,8 +7007,9 @@ class T510FEngine:
             return 32, 0, 32768
         if bandwidth_mode == 1:
             if bool(aa100_active):
-                # The 41-tap half-band filter labels output by its 20-sample
-                # group delay, then advances by eight raw samples per beat.
+                # Stage 32 retains the established narrow-path first-beat
+                # alignment while the 55-tap filter advances by eight
+                # 320-MS/s base samples per output beat.
                 return 8, 4, 32788
             return 8, 0, 32768
         return 4, 0, 32768
@@ -7459,7 +7576,7 @@ class T510FEngine:
         science_status = status["science_status"]
         science_bw = int(status["science_bandwidth_mode"]) & 0x3
         science_mode = int(status["science_output_mode"]) & 0x7
-        status["science_bandwidth_mhz"] = self.SCIENCE_BANDWIDTH_BY_CODE.get(science_bw, 20)
+        status["science_bandwidth_mhz"] = self.SCIENCE_BANDWIDTH_BY_CODE.get(science_bw, 160)
         status["science_output_mode_name"] = self.SCIENCE_OUTPUT_MODE_NAMES.get(science_mode, f"UNKNOWN_{science_mode}")
         status["science_time_enabled"] = science_status & 0x1
         status["science_spec_enabled"] = (science_status >> 1) & 0x1
@@ -8043,7 +8160,7 @@ class T510FEngine:
     def compute_dac_source_phase_metrics(
         dac_iq: Mapping[str, Any] | Any,
         *,
-        sample_rate_hz: float = 245_760_000.0,
+        sample_rate_hz: float = 320_000_000.0,
         tone_hz: Optional[float] = None,
         phase_step: Optional[int] = None,
         sample_offsets: Optional[Any] = None,
@@ -8184,7 +8301,7 @@ class T510FEngine:
         payload_iq: Mapping[str, Any] | Any,
         *,
         sample0: Optional[int] = None,
-        sample_rate_hz: float = 245_760_000.0,
+        sample_rate_hz: float = 320_000_000.0,
         observe_center_hz: float,
         dac_signal_hz: float,
         expected_signal_hz: Optional[float] = None,
@@ -8335,7 +8452,7 @@ class T510FEngine:
             raise RuntimeError(
                 "debug capture cannot run: PL/RFDC data clock is not locked "
                 "(RFDC_FLAGS bit3=0). Run configure_clock/init_lab_rfdc and "
-                "verify the LMK/245.76 MHz clock path first."
+                "verify the Stage 32 LMK160 clock path first."
             )
         if not status["rfdc_adc_valid"]:
             raise RuntimeError(
@@ -8604,7 +8721,7 @@ class T510FEngine:
         n: int = 512,
         input_mask: int = 0x01,
         sample0: int = 0,
-        sample_rate_hz: float = 245_760_000.0,
+        sample_rate_hz: float = 320_000_000.0,
         observe_center_hz: float = 100_000_000.0,
         dac_signal_hz: float = 100_000_000.0,
         amplitude: float = 2048.0,
@@ -9271,7 +9388,7 @@ class T510FEngine:
     @staticmethod
     def observation_capture_count(
         *,
-        sample_rate_hz: float = 245_760_000.0,
+        sample_rate_hz: float = 320_000_000.0,
         time_window_us: float = 0.25,
         oversample: float = 2.5,
         min_count: int = 512,

@@ -17,6 +17,12 @@ export LD_LIBRARY_PATH="${VIVADO_ROOT}/lib/lnx64.o/SuSE${LD_LIBRARY_PATH:+:${LD_
 mkdir -p "${WORK_DIR}"
 
 extra_xvlog_args=()
+extra_xvlog_args+=(
+  "-d" "T510_STAGE27H_PRODUCTION_ONLY"
+  "-d" "T510_STAGE27I_ANTI_ALIAS"
+  "-d" "T510_STAGE27J_PFB"
+  "-d" "T510_STAGE32"
+)
 for define in ${EXTRA_XVLOG_DEFINES:-}; do
   extra_xvlog_args+=("-d" "${define}")
 done

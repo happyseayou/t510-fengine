@@ -34,7 +34,9 @@ module science_rate_selector #(
     localparam [1:0] BW_20MHZ  = 2'd0;
     localparam [1:0] BW_100MHZ = 2'd1;
     localparam [1:0] BW_200MHZ = 2'd2;
-`ifdef T510_STAGE27I_ANTI_ALIAS
+`ifdef T510_STAGE32
+    localparam bit AA100_ENABLED = 1'b1;
+`elsif T510_STAGE27I_ANTI_ALIAS
     localparam bit AA100_ENABLED = 1'b1;
 `else
     localparam bit AA100_ENABLED = 1'b0;

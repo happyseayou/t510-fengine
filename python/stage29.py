@@ -15,7 +15,7 @@ from typing import Any, Iterable
 from .t510_fengine import T510FEngine
 
 
-EXPECTED_CORE_VERSION = 0x0001_0031
+EXPECTED_CORE_VERSION = 0x0001_0032
 TIME_DST_PORT_BASE = 4300
 SPEC_DST_PORT_BASE = 4308
 TIME_FLOW_COUNT = 8
@@ -28,7 +28,7 @@ PFB_TIME_COUNT = 1
 PAYLOAD_BYTES = 8192
 INPUT_MASK = 0x00FF
 DAC_AMPLITUDE_FULL_SCALE = 8192
-DAC_SAMPLE_RATE_HZ = 245_760_000.0
+DAC_SAMPLE_RATE_HZ = 320_000_000.0
 DEFAULT_RECEIVER_IP = "10.0.1.16"
 DEFAULT_RECEIVER_MAC = "08:c0:eb:d5:95:b2"
 DEFAULT_SOURCE_IP = "10.0.1.1"
@@ -157,10 +157,14 @@ def default_dac_channels() -> tuple[DacChannelConfig, ...]:
 
 @dataclass(frozen=True)
 class Stage29Config:
-    bandwidth_mhz: int = 100
+    # The field name is frozen for API compatibility.  Stage 32 interprets it
+    # as a complex sample-rate tier in MS/s.
+    bandwidth_mhz: int = 160
     mode: Stage29Mode | str = Stage29Mode.TIME_SPEC
     center_mhz: float = 100.0
     board_id: int = 0
+    mts_adc_target_latency: int = -1
+    mts_dac_target_latency: int = -1
     source_ip: str = DEFAULT_SOURCE_IP
     source_mac: str = DEFAULT_SOURCE_MAC
     time_destinations: tuple[FlowDestination, ...] = default_time_destinations()
@@ -171,16 +175,16 @@ class Stage29Config:
         bandwidth = int(self.bandwidth_mhz)
         mode = Stage29Mode.parse(self.mode)
         allowed = {
-            (100, Stage29Mode.TIME_ONLY),
-            (100, Stage29Mode.SPEC_ONLY),
-            (100, Stage29Mode.TIME_SPEC),
-            (200, Stage29Mode.TIME_ONLY),
-            (200, Stage29Mode.SPEC_ONLY),
+            (160, Stage29Mode.TIME_ONLY),
+            (160, Stage29Mode.SPEC_ONLY),
+            (160, Stage29Mode.TIME_SPEC),
+            (320, Stage29Mode.TIME_ONLY),
+            (320, Stage29Mode.SPEC_ONLY),
         }
         if (bandwidth, mode) not in allowed:
             raise ValueError(
-                "Stage 29 supports 100MHz TIME_ONLY/SPEC_ONLY/TIME_SPEC and "
-                "200MHz TIME_ONLY/SPEC_ONLY"
+                "Stage 32 supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC and "
+                "320MS/s TIME_ONLY/SPEC_ONLY"
             )
         center = float(self.center_mhz)
         if not math.isfinite(center) or not 50.0 <= center <= 350.0:
@@ -188,6 +192,10 @@ class Stage29Config:
         board_id = int(self.board_id)
         if not 0 <= board_id <= 0xFFFF:
             raise ValueError("board_id must be within 0..65535")
+        mts_adc_target_latency = int(self.mts_adc_target_latency)
+        mts_dac_target_latency = int(self.mts_dac_target_latency)
+        if mts_adc_target_latency < -1 or mts_dac_target_latency < -1:
+            raise ValueError("MTS target latencies must be -1 for discovery or non-negative")
         source_ip = _normalize_source_ip(self.source_ip)
         source_mac = _normalize_source_mac(self.source_mac)
         time_destinations = tuple(
@@ -214,13 +222,15 @@ class Stage29Config:
         for channel, dac in enumerate(dac_channels):
             if not lower <= dac.rf_frequency_mhz <= upper:
                 raise ValueError(
-                    f"DAC CH{channel} frequency must stay within the {bandwidth}MHz science "
+                    f"DAC CH{channel} frequency must stay within the {bandwidth} MS/s science "
                     f"Nyquist band {lower:.6f}..{upper:.6f} MHz"
                 )
         object.__setattr__(self, "bandwidth_mhz", bandwidth)
         object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "center_mhz", center)
         object.__setattr__(self, "board_id", board_id)
+        object.__setattr__(self, "mts_adc_target_latency", mts_adc_target_latency)
+        object.__setattr__(self, "mts_dac_target_latency", mts_dac_target_latency)
         object.__setattr__(self, "source_ip", source_ip)
         object.__setattr__(self, "source_mac", source_mac)
         object.__setattr__(self, "time_destinations", time_destinations)
@@ -229,7 +239,7 @@ class Stage29Config:
 
     @staticmethod
     def sample_rate_hz_for(bandwidth_mhz: int) -> float:
-        return 122_880_000.0 if int(bandwidth_mhz) == 100 else 245_760_000.0
+        return 160_000_000.0 if int(bandwidth_mhz) == 160 else 320_000_000.0
 
     @property
     def needs_time(self) -> bool:
@@ -261,7 +271,7 @@ class Stage29Config:
 
     @property
     def expected_packet_rates(self) -> dict[str, float]:
-        pps = 480_000.0 if self.bandwidth_mhz == 100 else 960_000.0
+        pps = 625_000.0 if self.bandwidth_mhz == 160 else 1_250_000.0
         streams = int(self.needs_time) + int(self.needs_spec)
         return {
             "time_pps": pps if self.needs_time else 0.0,
@@ -288,7 +298,7 @@ class Stage29Config:
 
 
 class Stage29Controller:
-    """Narrow production facade used by the Stage 29 notebook and CLI."""
+    """Compatibility-named production facade for the Stage 32 contract."""
 
     def __init__(self, bitfile: str | Path, *, core: T510FEngine | None = None) -> None:
         self.bitfile = str(Path(bitfile))
@@ -301,13 +311,13 @@ class Stage29Controller:
         version = int(status.get("core_version", 0))
         if version != EXPECTED_CORE_VERSION:
             raise RuntimeError(
-                f"Stage 29 requires CORE_VERSION=0x{EXPECTED_CORE_VERSION:08x}; got 0x{version:08x}"
+                f"Stage 32 requires CORE_VERSION=0x{EXPECTED_CORE_VERSION:08x}; got 0x{version:08x}"
             )
         return status
 
     def require_core(self) -> T510FEngine:
         if self.core is None:
-            raise RuntimeError("connect the Stage 29 controller first")
+            raise RuntimeError("connect the Stage 32 production controller first")
         return self.core
 
     def _program_destinations(self, config: Stage29Config) -> list[dict[str, Any]]:
@@ -347,7 +357,7 @@ class Stage29Controller:
         if len(readback) != len(endpoints):
             mismatches.append(f"endpoint count requested={len(endpoints)} readback={len(readback)}")
         if mismatches:
-            raise RuntimeError("Stage 29 TX endpoint readback mismatch: " + "; ".join(mismatches))
+            raise RuntimeError("Stage 32 TX endpoint readback mismatch: " + "; ".join(mismatches))
         return endpoints
 
     @staticmethod
@@ -498,6 +508,8 @@ class Stage29Controller:
             input_source_mode="dac_loopback",
             clock_ref=T510FEngine.PRODUCTION_CLOCK_REF,
             sync_mode=T510FEngine.PRODUCTION_SYNC_MODE,
+            mts_adc_target_latency=config.mts_adc_target_latency,
+            mts_dac_target_latency=config.mts_dac_target_latency,
         )
         mts_payload = observation.get("nco", {}).get("mts", {})
         if (
@@ -507,7 +519,7 @@ class Stage29Controller:
             or bool(mts_payload.get("failures"))
         ):
             raise RuntimeError(
-                "Stage31 requires a successful configure-time MTS result with call evidence"
+                "Stage 32 requires a successful configure-time MTS result with call evidence"
             )
         mts_result_id = zlib.crc32(
             json.dumps(mts_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -533,7 +545,7 @@ class Stage29Controller:
         source_readback = core.configure_tx_source_identity(**requested_source)
         if requested_source != source_readback:
             raise RuntimeError(
-                "Stage 29 TX source identity readback mismatch: "
+                "Stage 32 TX source identity readback mismatch: "
                 f"requested={requested_source} readback={source_readback}"
             )
         endpoints = self._program_destinations(config)
@@ -545,7 +557,7 @@ class Stage29Controller:
         board_id_readback = core.configure_board_id(config.board_id)
         if board_id_readback != config.board_id:
             raise RuntimeError(
-                "Stage 29 board_id readback mismatch: "
+                "Stage 32 board_id readback mismatch: "
                 f"requested={config.board_id} readback={board_id_readback}"
             )
         core.stop()
@@ -577,7 +589,7 @@ class Stage29Controller:
             status = core.read_status()
         if not self._stream_path_accepting(status):
             raise RuntimeError(
-                "Stage 29 immediate start did not produce an accepting streaming "
+                "Stage 32 immediate start did not produce an accepting streaming "
                 f"data path: {status}"
             )
         return status
@@ -632,7 +644,7 @@ class Stage29Controller:
             ):
                 return status
             if time.monotonic() >= deadline:
-                raise RuntimeError(f"Stage 29 stop could not be proven: {status}")
+                raise RuntimeError(f"Stage 32 stop could not be proven: {status}")
             previous = status
             time.sleep(max(float(settle_seconds), 0.01))
 
@@ -673,7 +685,7 @@ class Stage29Controller:
         return result
 
     def apply(self, config: Stage29Config, *, fresh_download: bool = True) -> dict[str, Any]:
-        """Compatibility entry point used by the Stage 29 notebook and release gate."""
+        """Compatibility entry point used by the Stage 32 notebook and release gate."""
         result = self.prepare(config, fresh_download=fresh_download, program_dac=True)
         result["status"] = self.start_immediate()
         result["started"] = True
@@ -689,10 +701,10 @@ class Stage29Controller:
 
         ``center_mhz`` lets the stateless Stage 30 helper perform a live update
         after reconnecting to an already configured overlay. Existing notebook
-        callers continue to use the cached Stage 29 configuration.
+        callers continue to use the cached Stage 32 configuration.
         """
         if self.config is None and center_mhz is None:
-            raise RuntimeError("center_mhz is required when no Stage 29 configuration is cached")
+            raise RuntimeError("center_mhz is required when no Stage 32 configuration is cached")
         channels = tuple(
             item if isinstance(item, DacChannelConfig) else DacChannelConfig(**dict(item))
             for item in dac_channels
@@ -711,6 +723,8 @@ class Stage29Controller:
             mode=self.config.mode,
             center_mhz=active_center_mhz,
             board_id=self.config.board_id,
+            mts_adc_target_latency=self.config.mts_adc_target_latency,
+            mts_dac_target_latency=self.config.mts_dac_target_latency,
             source_ip=self.config.source_ip,
             source_mac=self.config.source_mac,
             time_destinations=self.config.time_destinations,
@@ -727,7 +741,7 @@ class Stage29Controller:
 
     def validate(self, *, seconds: float = 10.0) -> dict[str, Any]:
         if self.config is None:
-            raise RuntimeError("apply a Stage 29 production configuration first")
+            raise RuntimeError("apply a Stage 32 production configuration first")
         return self.require_core().run_stage29_validation(
             configure=False,
             bandwidth_mhz=self.config.bandwidth_mhz,
@@ -738,7 +752,7 @@ class Stage29Controller:
 
     def capture_preview(self, *, time_window_us: float = 0.25) -> dict[str, Any]:
         if self.config is None:
-            raise RuntimeError("apply a Stage 29 production configuration first")
+            raise RuntimeError("apply a Stage 32 production configuration first")
         core = self.require_core()
         preview = core.capture_preview_fast(n=1024, input_mask=0xFF, timeout=1.0)
         channel0 = self.config.dac_channels[0]

@@ -1966,7 +1966,13 @@ module feng_channelizer_4096_streaming_27j #(
 
     logic [3:0] xfft_reset_count;
     wire xfft_reset_active = (xfft_reset_count != 4'd0);
-    wire xfft_aresetn = rst_n && !xfft_reset_active;
+    // A scheduled observation can clear the science pipeline at the target
+    // PPS and intentionally wait until first_sample0 before enabling SPEC.
+    // Keep the realtime XFFT lanes in reset throughout that disabled window,
+    // matching the reset-to-enable ordering of the proven immediate-start
+    // path.  A clear while enabled still receives the existing 15-clock reset
+    // stretch from xfft_reset_count.
+    wire xfft_aresetn = rst_n && enable && !xfft_reset_active;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || clear) begin
@@ -1980,6 +1986,9 @@ module feng_channelizer_4096_streaming_27j #(
     logic [63:0]       fill_frame_sample0;
     logic [PACK_IDX_W-1:0] fill_subidx;
     logic              fill_word_valid;
+    logic [DATA_W-1:0] prefetch_word;
+    logic [63:0]       prefetch_sample0;
+    logic              prefetch_word_valid;
     logic [1:0]        fill_buf;
     logic [11:0]       fill_bin_idx;
     logic [2:0]        valid_frame_count;
@@ -2054,6 +2063,11 @@ module feng_channelizer_4096_streaming_27j #(
     wire input_word_fire = s_axis_tvalid && s_axis_tready;
     wire fill_last_cell = (fill_subidx == (CELLS_PER_BEAT - 1));
     wire fill_last_frame_cell = fill_word_valid && fill_last_cell && (fill_bin_idx == 12'd4095);
+    // Do not prefetch across the 4096-cell frame boundary.  The next frame can
+    // require a different backing buffer, and that ownership change is made
+    // only when the current frame's final cell is committed.
+    wire fill_last_word_of_frame =
+        fill_word_valid && (fill_bin_idx >= (NCHAN - CELLS_PER_BEAT));
     wire input_buffer_available =
         (valid_frame_count < 3'd4) ||
         feed_active ||
@@ -2108,9 +2122,12 @@ module feng_channelizer_4096_streaming_27j #(
         (cfg_time_count == 16'd1);
     wire science_valid = config_valid && xfft_configured;
 
+    // Stage 32 needs one 1024-bit word every four PFB clocks.  Keep one word
+    // active while a second word is prefetched, so the serializer can switch
+    // words without the former fifth (load-only) cycle.
     assign s_axis_tready = enable && config_valid && xfft_configured &&
-                           !fill_word_valid && input_buffer_available &&
-                           !new_frame_ready;
+                           !prefetch_word_valid && input_buffer_available &&
+                           !new_frame_ready && !fill_last_word_of_frame;
 
     wire [255:0] xfft_m_axis_tdata;
     wire [23:0]  xfft_m_axis_tuser;
@@ -2199,6 +2216,7 @@ module feng_channelizer_4096_streaming_27j #(
 
     wire feng_busy =
         fill_word_valid ||
+        prefetch_word_valid ||
         (fill_bin_idx != 12'd0) ||
         feed_active ||
         read_cmd_valid ||
@@ -2224,7 +2242,14 @@ module feng_channelizer_4096_streaming_27j #(
     assign packet_chan0 = packet_chan0_reg;
     assign packet_chan_count = 16'd256;
     assign packet_time_count = 16'd1;
-    assign input_fifo_level = {15'd0, new_frame_ready, shift_pending, valid_frame_count, fill_bin_idx};
+    assign input_fifo_level = {
+        14'd0,
+        prefetch_word_valid,
+        new_frame_ready,
+        shift_pending,
+        valid_frame_count,
+        fill_bin_idx
+    };
     assign coeff_status = {
         20'd0,
         coeff_active_taps,
@@ -2561,6 +2586,9 @@ module feng_channelizer_4096_streaming_27j #(
             fill_frame_sample0 <= 64'd0;
             fill_subidx <= {PACK_IDX_W{1'b0}};
             fill_word_valid <= 1'b0;
+            prefetch_word <= {DATA_W{1'b0}};
+            prefetch_sample0 <= 64'd0;
+            prefetch_word_valid <= 1'b0;
             fill_buf <= 2'd0;
             fill_bin_idx <= 12'd0;
             valid_frame_count <= 3'd0;
@@ -2718,6 +2746,7 @@ module feng_channelizer_4096_streaming_27j #(
 
             if (!config_valid) begin
                 fill_word_valid <= 1'b0;
+                prefetch_word_valid <= 1'b0;
                 fill_subidx <= {PACK_IDX_W{1'b0}};
                 fill_bin_idx <= 12'd0;
                 valid_frame_count <= 3'd0;
@@ -2745,11 +2774,18 @@ module feng_channelizer_4096_streaming_27j #(
                 frame_fifo_rd_ptr <= {FRAME_FIFO_AW{1'b0}};
                 frame_fifo_count <= FRAME_FIFO_ZERO_COUNT;
             end else begin
-                if (xfft_reset_active) begin
+                if (xfft_reset_active || !enable) begin
                     xfft_config_tvalid <= 1'b0;
                     xfft_configured <= 1'b0;
                 end else begin
-                    if (!xfft_configured && !xfft_config_tvalid) begin
+                    // Configure only after enable releases the realtime XFFT
+                    // lanes from reset.  The input CDC FIFO absorbs the few
+                    // configuration clocks before s_axis_tready rises.
+                    if (!xfft_configured && !xfft_config_tvalid
+`ifdef T510_STAGE32
+                        && enable
+`endif
+                    ) begin
                         xfft_config_tvalid <= 1'b1;
                     end
                     if (xfft_config_tvalid && xfft_config_tready) begin
@@ -2760,6 +2796,7 @@ module feng_channelizer_4096_streaming_27j #(
 
                 if (clear || !enable) begin
                     fill_word_valid <= 1'b0;
+                    prefetch_word_valid <= 1'b0;
                     fill_subidx <= {PACK_IDX_W{1'b0}};
                     fill_bin_idx <= 12'd0;
                     valid_frame_count <= 3'd0;
@@ -2824,19 +2861,13 @@ module feng_channelizer_4096_streaming_27j #(
                         output_valid <= 1'b0;
                     end
 
-                    if (input_word_fire) begin
-                        fill_word <= s_axis_tdata;
-                        fill_word_valid <= 1'b1;
-                        fill_subidx <= {PACK_IDX_W{1'b0}};
-                        if (fill_bin_idx == 12'd0) begin
-                            fill_frame_sample0 <= s_axis_sample0;
-                        end
-                    end else if (fill_word_valid) begin
+                    if (fill_word_valid) begin
                         if (fill_last_frame_cell) begin
                             frame_sample0_buf[fill_buf] <= fill_frame_sample0;
                             fill_bin_idx <= 12'd0;
                             fill_subidx <= {PACK_IDX_W{1'b0}};
                             fill_word_valid <= 1'b0;
+                            prefetch_word_valid <= 1'b0;
                             if (valid_frame_count < 3'd4) begin
                                 case (valid_frame_count)
                                     3'd0: win0_buf <= fill_buf;
@@ -2861,12 +2892,41 @@ module feng_channelizer_4096_streaming_27j #(
                             fill_bin_idx <= fill_bin_idx + 12'd1;
                             if (fill_last_cell) begin
                                 fill_subidx <= {PACK_IDX_W{1'b0}};
-                                fill_word_valid <= 1'b0;
+                                if (prefetch_word_valid) begin
+                                    fill_word <= prefetch_word;
+                                    fill_word_valid <= 1'b1;
+                                    prefetch_word_valid <= 1'b0;
+                                    if ((fill_bin_idx + 12'd1) == 12'd0) begin
+                                        fill_frame_sample0 <= prefetch_sample0;
+                                    end
+                                end else if (input_word_fire) begin
+                                    // Simultaneous consume/replace is the
+                                    // empty-prefetch fall-through case.
+                                    fill_word <= s_axis_tdata;
+                                    fill_word_valid <= 1'b1;
+                                    if ((fill_bin_idx + 12'd1) == 12'd0) begin
+                                        fill_frame_sample0 <= s_axis_sample0;
+                                    end
+                                end else begin
+                                    fill_word_valid <= 1'b0;
+                                end
                             end else begin
                                 fill_subidx <= fill_subidx + {{(PACK_IDX_W-1){1'b0}}, 1'b1};
+                                if (input_word_fire) begin
+                                    prefetch_word <= s_axis_tdata;
+                                    prefetch_sample0 <= s_axis_sample0;
+                                    prefetch_word_valid <= 1'b1;
+                                end
                             end
                         end
-	                    end
+                    end else if (input_word_fire) begin
+                        fill_word <= s_axis_tdata;
+                        fill_word_valid <= 1'b1;
+                        fill_subidx <= {PACK_IDX_W{1'b0}};
+                        if (fill_bin_idx == 12'd0) begin
+                            fill_frame_sample0 <= s_axis_sample0;
+                        end
+                    end
 
 	                    unique case ({xfft_q_push, xfft_q_pop})
 	                        2'b10: begin

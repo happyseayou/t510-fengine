@@ -13,6 +13,9 @@ module tb_station_sync_scheduler;
     logic [31:0] signal_chain_tag = 32'h11, schedule_tag = 32'h22, mts_result_id = 32'h33;
     logic pps_in = 0;
     logic [63:0] pps_count = 0;
+    logic pps_recent = 1'b1;
+    logic ref_locked = 1'b1;
+    logic rfdc_ready = 1'b1;
     logic [1:0] bandwidth_mode = 2'd2;
     logic aa100_active = 1'b0;
     logic adc_valid = 0;
@@ -39,8 +42,8 @@ module tb_station_sync_scheduler;
         .schedule_epoch_tai_seconds(epoch_tai), .schedule_first_sample0(first_sample0),
         .schedule_observation_tag(observation_tag), .schedule_signal_chain_tag(signal_chain_tag),
         .schedule_tag(schedule_tag), .schedule_mts_result_id(mts_result_id),
-        .pps_in(pps_in), .pps_count(pps_count), .pps_recent(1'b1),
-        .ref_locked(1'b1), .rfdc_ready(1'b1),
+        .pps_in(pps_in), .pps_count(pps_count), .pps_recent(pps_recent),
+        .ref_locked(ref_locked), .rfdc_ready(rfdc_ready),
         .science_bandwidth_mode(bandwidth_mode), .science_aa100_active(aa100_active),
         .adc_valid(adc_valid), .adc_raw_sample0(adc_raw_sample0),
         .adc_observation_sample0(observation_sample0),
@@ -120,7 +123,28 @@ module tb_station_sync_scheduler;
         `TB_CHECK_EQ(actual_time, 64'd16, "first TIME sample0 telemetry")
         `TB_CHECK_EQ(actual_spec, 64'd16, "first SPEC sample0 telemetry")
 
+        // Board integration maps all_adc_valid to rfdc_ready_in.  Prove that
+        // an observable ADC/RFDC validity loss during an active scheduled
+        // stream stops science on the next clock and latches the production
+        // RFDC_NOT_READY error.  Restoring ready alone must not auto-restart.
+        @(negedge clk); rfdc_ready = 1'b0;
+        @(posedge clk); #1;
+        `TB_CHECK_EQ(state, 4'd6, "RFDC ready loss enters ERROR")
+        `TB_CHECK_EQ(error_code, 32'd6, "RFDC ready loss latches RFDC_NOT_READY")
+        `TB_CHECK_EQ(armed, 1'b0, "RFDC ready loss clears armed")
+        `TB_CHECK_EQ(streaming, 1'b0, "RFDC ready loss stops streaming")
+        `TB_CHECK_EQ(status[9], 1'b0, "status reports RFDC not ready")
+        `TB_CHECK_EQ(status[6], 1'b1, "status reports a latched scheduler error")
+        @(negedge clk); rfdc_ready = 1'b1;
+        repeat (2) @(posedge clk);
+        #1;
+        `TB_CHECK_EQ(state, 4'd6, "RFDC recovery remains fail-closed")
+        `TB_CHECK_EQ(error_code, 32'd6, "RFDC recovery preserves fault evidence")
+        `TB_CHECK_EQ(streaming, 1'b0, "RFDC recovery does not auto-restart")
+
         pulse(2);
+        `TB_CHECK_EQ(state, 4'd0, "explicit ABORT clears the RFDC fault state")
+        `TB_CHECK_EQ(error_code, 32'd0, "explicit ABORT clears RFDC fault code")
         generation = 2; first_sample0 = 32768;
         bandwidth_mode = 2'd1;
         aa100_active = 1'b1;

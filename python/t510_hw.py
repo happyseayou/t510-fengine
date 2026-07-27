@@ -8,8 +8,10 @@ stdout; incidental PYNQ output is redirected to stderr.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -39,6 +41,12 @@ EXIT_BITSTREAM_PROOF = 5
 EXIT_INTERNAL = 6
 
 FPGA_MANAGER_STATE_PATH = Path("/sys/class/fpga_manager/fpga0/state")
+STAGE32_MTS_STATE_PATH = Path("/run/t510-stage32-mts.json")
+STAGE32_REFERENCE_WATCHDOG_STATE_PATH = Path(
+    "/run/t510-stage32-ref-watchdog.json"
+)
+STAGE32_CONFIGURE_LOCK_PATH = Path("/run/t510-stage32-configure.lock")
+STAGE32_REFERENCE_WATCHDOG_MAX_AGE_MS = 1_500
 
 
 class HelperError(RuntimeError):
@@ -48,6 +56,26 @@ class HelperError(RuntimeError):
         self.message = message
         self.exit_code = int(exit_code)
         self.details = details
+
+
+@contextlib.contextmanager
+def _configure_hardware_guard(enabled: bool):
+    """Keep the resident watchdog away from PL/SPI while CONFIGURE owns them."""
+
+    if not enabled:
+        yield
+        return
+    descriptor = os.open(
+        STAGE32_CONFIGURE_LOCK_PATH,
+        os.O_CREAT | os.O_RDWR | os.O_CLOEXEC,
+        0o644,
+    )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def _load_stage29() -> None:
@@ -188,6 +216,87 @@ def _read_pynq_global_pl_state() -> dict[str, Any] | None:
     return value
 
 
+def _pynq_global_state_path() -> Path:
+    try:
+        from pynq.pl_server import global_state as pynq_global_state
+    except ImportError as exc:
+        raise HelperError(
+            "PYNQ_STATE_UNAVAILABLE",
+            "cannot import the PYNQ global PL state writer",
+            exit_code=EXIT_HARDWARE_UNAVAILABLE,
+            details={"reason": str(exc)},
+        ) from exc
+    return Path(pynq_global_state.STATE_DIR) / "global_pl_state.json"
+
+
+def _record_active_bitstream_state(path: Path) -> None:
+    """Record a bitstream only after the hardware configure transaction passes.
+
+    The T510 image uses PYNQ's XRT device backend.  That backend downloads the
+    bitstream but, unlike the embedded-device backend, does not update
+    ``global_pl_state.json``.  Preserve PYNQ's other state fields while
+    recording an immutable resolved path and the bytes that were just
+    downloaded.  Later one-shot helpers still independently hash the catalog
+    file before allowing MMIO.
+    """
+    state_path = _pynq_global_state_path()
+    try:
+        value = json.loads(state_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        value = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HelperError(
+            "PYNQ_STATE_UNAVAILABLE",
+            "cannot update the PYNQ global PL state after configure",
+            exit_code=EXIT_HARDWARE_UNAVAILABLE,
+            details={"path": str(state_path), "reason": str(exc)},
+        ) from exc
+    if not isinstance(value, dict):
+        raise HelperError(
+            "PYNQ_STATE_UNAVAILABLE",
+            "the PYNQ global PL state is not a JSON object",
+            exit_code=EXIT_HARDWARE_UNAVAILABLE,
+            details={"path": str(state_path)},
+        )
+
+    try:
+        resolved = path.resolve(strict=True)
+        active_sha1 = _sha1(resolved)
+    except OSError as exc:
+        raise HelperError(
+            "BITSTREAM_PROOF_FAILED",
+            "cannot hash the downloaded bitstream while recording PYNQ state",
+            exit_code=EXIT_BITSTREAM_PROOF,
+            details={"path": str(path), "reason": str(exc)},
+        ) from exc
+
+    value["bitfile_name"] = str(resolved)
+    value["bitfile_hash"] = active_sha1
+    value["timestamp"] = time.strftime("%Y/%m/%d %H:%M:%S %z")
+    value.setdefault("active_name", "T510")
+    value.setdefault("shutdown_ips", {})
+    value.setdefault("psddr", {})
+
+    temporary = state_path.with_name(f".{state_path.name}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(value, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary.replace(state_path)
+    except OSError as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise HelperError(
+            "PYNQ_STATE_UNAVAILABLE",
+            "cannot commit the PYNQ global PL state after configure",
+            exit_code=EXIT_HARDWARE_UNAVAILABLE,
+            details={"path": str(state_path), "reason": str(exc)},
+        ) from exc
+
+
 def _require_active_bitstream(bitstream: dict[str, Any], path: Path) -> None:
     state = _read_fpga_manager_state()
     if state != "operating":
@@ -221,7 +330,11 @@ def _require_active_bitstream(bitstream: dict[str, Any], path: Path) -> None:
         active_path = None
     stored_hash = str(active.get("bitfile_hash", "")).strip().lower()
     actual_hash = _sha1(expected_path)
-    if active_path != expected_path or stored_hash != actual_hash:
+    # PYNQ may retain the path used by an earlier download when the same
+    # immutable bitstream is downloaded through a release-directory alias.
+    # The active content hash is the hardware identity; the path is diagnostic
+    # provenance and must not force a redundant configure when the bytes match.
+    if stored_hash != actual_hash:
         raise HelperError(
             "ACTIVE_BITSTREAM_MISMATCH",
             "the active PYNQ bitstream does not match the Agent catalog; configure is required",
@@ -304,7 +417,7 @@ def _profile_name(status: dict[str, Any]) -> dict[str, Any]:
     output_name = str(status.get("science_output_mode_name", "")).strip().lower()
     return {
         "bandwidth_mhz": int(
-            status.get("science_bandwidth_mhz", {1: 100, 2: 200}.get(bandwidth_code, 0))
+            status.get("science_bandwidth_mhz", {1: 160, 2: 320}.get(bandwidth_code, 0))
         )
         or None,
         "mode": {
@@ -317,9 +430,163 @@ def _profile_name(status: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _mts_summary(core: Any, *, core_version: str) -> dict[str, Any]:
+    sync = getattr(core, "rfdc_sync_status", {})
+    mts = sync.get("mts", {}) if isinstance(sync, dict) else {}
+
+    def one(kind: str) -> dict[str, Any]:
+        config = mts.get(f"{kind}_config", {}) if isinstance(mts, dict) else {}
+        if not isinstance(config, dict):
+            config = {}
+        tiles = int(config.get("tiles", 0))
+        latency = [int(value) for value in config.get("latency", [])]
+        offset = [int(value) for value in config.get("offset", [])]
+        active_latency = [
+            latency[tile]
+            for tile in range(min(4, len(latency)))
+            if tiles & (1 << tile)
+        ]
+        return {
+            "target_latency": (
+                int(config["target_latency"]) if "target_latency" in config else None
+            ),
+            "measured_latency": latency or None,
+            "active_measured_latency": active_latency or None,
+            "offset": offset or None,
+            "tiles": tiles or None,
+            "ref_tile": int(config["ref_tile"]) if "ref_tile" in config else None,
+        }
+
+    result = {
+        "captured_at_unix_ms": time.time_ns() // 1_000_000,
+        "core_version": core_version,
+        "available": bool(mts),
+        "adc": one("adc"),
+        "dac": one("dac"),
+    }
+    return result
+
+
+def _persist_mts_summary(summary: dict[str, Any]) -> None:
+    temporary = STAGE32_MTS_STATE_PATH.with_suffix(".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(summary, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(STAGE32_MTS_STATE_PATH)
+    except OSError:
+        # The configure response still carries the live result.  A read-only
+        # /run only makes later one-shot status calls report unavailable.
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _load_mts_summary(*, core_version: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(STAGE32_MTS_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or value.get("core_version") != core_version:
+        return None
+    return value
+
+
+def _reference_watchdog_status() -> dict[str, Any]:
+    captured_at = time.time_ns() // 1_000_000
+    try:
+        value = json.loads(
+            STAGE32_REFERENCE_WATCHDOG_STATE_PATH.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "available": False,
+            "healthy": False,
+            "stale": True,
+            "error": f"{type(exc).__name__}: {exc}",
+            "path": str(STAGE32_REFERENCE_WATCHDOG_STATE_PATH),
+        }
+    if not isinstance(value, dict):
+        return {
+            "available": False,
+            "healthy": False,
+            "stale": True,
+            "error": "watchdog state is not a JSON object",
+            "path": str(STAGE32_REFERENCE_WATCHDOG_STATE_PATH),
+        }
+    updated_at = int(value.get("updated_at_unix_ms", 0))
+    age_ms = max(captured_at - updated_at, 0) if updated_at > 0 else None
+    stale = age_ms is None or age_ms > STAGE32_REFERENCE_WATCHDOG_MAX_AGE_MS
+    return {
+        **value,
+        "available": True,
+        "age_ms": age_ms,
+        "stale": stale,
+        "healthy": bool(value.get("healthy", False)) and not stale,
+        "path": str(STAGE32_REFERENCE_WATCHDOG_STATE_PATH),
+    }
+
+
+def _require_reference_watchdog_ready(bitstream: dict[str, Any]) -> dict[str, Any]:
+    watchdog = _reference_watchdog_status()
+    expected_sha1 = _sha1(Path(str(bitstream["path"])).resolve())
+    errors: list[str] = []
+    if not bool(watchdog.get("available", False)):
+        errors.append("STATE_UNAVAILABLE")
+    if bool(watchdog.get("stale", True)):
+        errors.append("STATE_STALE")
+    if not bool(watchdog.get("healthy", False)):
+        errors.append("NOT_HEALTHY")
+    if bool(watchdog.get("fault_latched", False)):
+        errors.append("FAULT_LATCHED")
+    lock_status = (
+        dict(watchdog["lock_status"])
+        if isinstance(watchdog.get("lock_status"), dict)
+        else {}
+    )
+    if int(lock_status.get("pll1_lock", 0)) != 1:
+        errors.append("PLL1_NOT_LOCKED")
+    if int(lock_status.get("pll2_lock", 0)) != 1:
+        errors.append("PLL2_NOT_LOCKED")
+    if str(watchdog.get("active_bitstream_sha1", "")).lower() != expected_sha1:
+        errors.append("BITSTREAM_IDENTITY_MISMATCH")
+    if errors:
+        raise HelperError(
+            "REFERENCE_WATCHDOG_NOT_READY",
+            "the resident LMK reference watchdog is not ready; START/ARM is blocked",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={
+                "errors": errors,
+                "watchdog": watchdog,
+                "required_action": (
+                    "restore external 10 MHz and run a fresh CONFIGURE/MTS"
+                ),
+            },
+        )
+    return watchdog
+
+
 def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
     core = controller.require_core()
     status = core.read_status()
+    core_version = f"0x{int(status.get('core_version', 0)):08x}"
+    live_mts = _mts_summary(core, core_version=core_version)
+    mts = (
+        live_mts
+        if live_mts.get("available")
+        else (_load_mts_summary(core_version=core_version) or live_mts)
+    )
+    try:
+        clock = core.read_lmk_status(include_registers=False)
+    except Exception as exc:
+        clock = {
+            "profile_id": "unavailable",
+            "sysref_mode": "unavailable",
+            "configured": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     scheduled_sync = (
         core.read_scheduled_sync_status()
         if hasattr(core, "read_scheduled_sync_status")
@@ -345,13 +612,35 @@ def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
     )
     return {
         "captured_at_unix_ms": time.time_ns() // 1_000_000,
-        "core_version": f"0x{int(status.get('core_version', 0)):08x}",
+        "core_version": core_version,
         "board_id": int(status.get("board_id", 0)),
         "streaming": streaming,
         "profile": {
             **_profile_name(status),
             "center_mhz": center_mhz,
             "aa100_active": bool(status.get("science_antialias_100m_active", 0)),
+            "display_name": (
+                "160 MS/s（约128 MHz可用科学带宽）"
+                if int(status.get("science_bandwidth_mhz", 160)) == 160
+                else "320 MS/s（约256 MHz可用科学带宽）"
+            ),
+        },
+        "clock": {
+            "profile_id": clock.get("profile_id"),
+            "sysref_mode": clock.get("sysref_mode"),
+            "selected_ref": clock.get("selected_ref"),
+            "lmk_clkin": clock.get("lmk_clkin"),
+            "pll1_lock": int(clock.get("pll1_lock", 0)),
+            "pll2_lock": int(clock.get("pll2_lock", 0)),
+            "configured": bool(clock.get("configured", False)),
+            "errors": clock.get("errors", []),
+        },
+        "mts": mts,
+        "halfband": {
+            "active": bool(status.get("science_antialias_100m_active", 0)),
+            "primed": bool(status.get("science_antialias_100m_primed", 0)),
+            "taps": int(status.get("science_antialias_taps", 0)),
+            "coefficient_id": f"0x{int(status.get('science_antialias_coeff_version', 0)):08x}",
         },
         "timing": {
             "pps_count": int(status.get("pps_count", 0)),
@@ -404,12 +693,49 @@ def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
                 scheduled_sync and scheduled_sync.get("first_spec_seen", False)
             ),
         },
+        "channelizer": {
+            "nchan": int(status.get("pfb_nchan", 0)),
+            "taps": int(status.get("pfb_taps", 0)),
+            "packet_chan_count": int(status.get("pfb_chan_count", 0)),
+            "packet_time_count": int(status.get("pfb_time_count", 0)),
+            "frame_count": int(status.get("pfb_frame_count", 0)),
+            "overflow_count": int(status.get("pfb_overflow_count", 0)),
+            "data_halt_count": int(status.get("pfb_data_halt_count", 0)),
+            "xfft_event_count": int(status.get("pfb_xfft_event_count", 0)),
+            "tile_overflow_count": int(status.get("pfb_tile_overflow_count", 0)),
+            "xfft_tlast_unexpected_count": int(
+                status.get("pfb_xfft_tlast_unexpected_count", 0)
+            ),
+            "xfft_tlast_missing_count": int(
+                status.get("pfb_xfft_tlast_missing_count", 0)
+            ),
+            "xfft_fft_overflow_count": int(
+                status.get("pfb_xfft_fft_overflow_count", 0)
+            ),
+            "xfft_data_out_halt_count": int(
+                status.get("pfb_xfft_data_out_halt_count", 0)
+            ),
+            "xfft_status_halt_count": int(
+                status.get("pfb_xfft_status_halt_count", 0)
+            ),
+            "capture_backpressure_count": int(
+                status.get("pfb_capture_backpressure_count", 0)
+            ),
+            "frame_sample0_overflow_count": int(
+                status.get("pfb_frame_sample0_overflow_count", 0)
+            ),
+            "peak_chan": int(status.get("pfb_peak_chan", 0)),
+            "peak_power": int(status.get("pfb_peak_power", 0)),
+            "coefficient_id": f"0x{int(status.get('pfb_coeff_active_id', 0)):08x}",
+            "coefficient_error_count": int(status.get("pfb_coeff_error_count", 0)),
+        },
         "sample0": {
             "time": int(status.get("time_sample0", 0)),
             "rfdc": int(status.get("rfdc_sample_count", 0)),
         },
         "error_flags": int(status.get("error_flags", 0)),
         "scheduled_sync": scheduled_sync,
+        "reference_watchdog": _reference_watchdog_status(),
         "dac": controller.read_dac_channels(center_mhz=center_mhz),
     }
 
@@ -450,6 +776,8 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
         mode=profile["mode"],
         center_mhz=float(profile["center_mhz"]),
         board_id=int(body["board_id"]),
+        mts_adc_target_latency=int(bitstream.get("mts_adc_target_latency", -1)),
+        mts_dac_target_latency=int(bitstream.get("mts_dac_target_latency", -1)),
         source_ip=source["ip"],
         source_mac=source["mac"],
         time_destinations=time_destinations,
@@ -458,6 +786,13 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
     controller = Stage29Controller(path)
     started = time.monotonic()
     applied = controller.prepare(config, fresh_download=True, program_dac=False)
+    _record_active_bitstream_state(path)
+    applied_core = controller.require_core()
+    applied_core_status = applied_core.read_status()
+    applied_core_version = f"0x{int(applied_core_status.get('core_version', 0)):08x}"
+    _persist_mts_summary(
+        _mts_summary(applied_core, core_version=applied_core_version)
+    )
     return {
         "bitstream": {
             "id": bitstream["id"],
@@ -482,8 +817,14 @@ def _start(request: dict[str, Any]) -> dict[str, Any]:
     body = _body(request)
     controller = _controller(request)
     _expected_board(controller, body)
+    watchdog = _require_reference_watchdog_ready(_bitstream(request))
     status = controller.start_immediate()
-    return {"started": True, "status": status, "snapshot": _status_snapshot(controller)}
+    return {
+        "started": True,
+        "reference_watchdog": watchdog,
+        "status": status,
+        "snapshot": _status_snapshot(controller),
+    }
 
 
 def _sync_prepare(request: dict[str, Any]) -> dict[str, Any]:
@@ -510,8 +851,14 @@ def _sync_arm(request: dict[str, Any]) -> dict[str, Any]:
     body = _body(request)
     controller = _controller(request)
     _expected_board(controller, body)
+    watchdog = _require_reference_watchdog_ready(_bitstream(request))
     status = controller.require_core().arm_scheduled_sync()
-    return {"armed": True, "sync": status, "snapshot": _status_snapshot(controller)}
+    return {
+        "armed": True,
+        "reference_watchdog": watchdog,
+        "sync": status,
+        "snapshot": _status_snapshot(controller),
+    }
 
 
 def _sync_abort(request: dict[str, Any]) -> dict[str, Any]:
@@ -595,7 +942,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         request = _read_request()
         with contextlib.redirect_stdout(sys.stderr):
-            result = COMMANDS[args[0]](request)
+            with _configure_hardware_guard(args[0] == "configure"):
+                result = COMMANDS[args[0]](request)
     except HelperError as exc:
         payload: dict[str, Any] = {
             "ok": False,

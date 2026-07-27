@@ -37,6 +37,10 @@ pub struct BitstreamSpec {
     pub path: PathBuf,
     pub sha256: String,
     pub core_version: String,
+    #[serde(default)]
+    pub mts_adc_target_latency: Option<i32>,
+    #[serde(default)]
+    pub mts_dac_target_latency: Option<i32>,
     pub profiles: Vec<ProfileSpec>,
 }
 
@@ -52,6 +56,8 @@ pub struct PublicBitstream {
     pub id: String,
     pub sha256: String,
     pub core_version: String,
+    pub mts_adc_target_latency: Option<i32>,
+    pub mts_dac_target_latency: Option<i32>,
     pub profiles: Vec<ProfileSpec>,
 }
 
@@ -61,6 +67,8 @@ pub struct HelperBitstream {
     pub path: PathBuf,
     pub sha256: String,
     pub core_version: String,
+    pub mts_adc_target_latency: Option<i32>,
+    pub mts_dac_target_latency: Option<i32>,
 }
 
 #[derive(Clone, Debug)]
@@ -151,6 +159,18 @@ impl RuntimeConfig {
                     item.id
                 ));
             }
+            let core_value = u32::from_str_radix(core, 16).expect("validated core version");
+            if core_value == 0x0001_0032
+                && (item.mts_adc_target_latency.is_none()
+                    || item.mts_dac_target_latency.is_none()
+                    || item.mts_adc_target_latency.is_some_and(|value| value < 0)
+                    || item.mts_dac_target_latency.is_some_and(|value| value < 0))
+            {
+                return Err(format!(
+                    "Stage 32 bitstream {} requires frozen non-negative ADC/DAC MTS target latencies",
+                    item.id
+                ));
+            }
             if item.profiles.is_empty() {
                 return Err(format!("bitstream {} profiles must not be empty", item.id));
             }
@@ -167,6 +187,8 @@ impl RuntimeConfig {
                 id: item.id.clone(),
                 sha256: item.sha256.to_ascii_lowercase(),
                 core_version: item.core_version.clone(),
+                mts_adc_target_latency: item.mts_adc_target_latency,
+                mts_dac_target_latency: item.mts_dac_target_latency,
                 profiles: item.profiles.clone(),
             };
             let helper = HelperBitstream {
@@ -174,6 +196,8 @@ impl RuntimeConfig {
                 path: item.path.clone(),
                 sha256: item.sha256.to_ascii_lowercase(),
                 core_version: item.core_version.clone(),
+                mts_adc_target_latency: item.mts_adc_target_latency,
+                mts_dac_target_latency: item.mts_dac_target_latency,
             };
             catalog.insert(item.id.clone(), ResolvedBitstream { helper, public });
         }

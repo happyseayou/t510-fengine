@@ -112,33 +112,33 @@ proc create_t510_rfdc_bd {} {
 
     set clk_wiz [create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 clk_wiz_0]
     set_property -dict [list \
-        CONFIG.PRIM_IN_FREQ {245.760} \
+        CONFIG.PRIM_IN_FREQ {160.000} \
         CONFIG.PRIM_SOURCE {No_buffer} \
-        CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {122.880} \
+        CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {80.000} \
         CONFIG.CLKOUT2_USED {true} \
-        CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {61.440} \
+        CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {80.000} \
         CONFIG.RESET_TYPE {ACTIVE_LOW} \
     ] $clk_wiz
 
     set mts [create_bd_cell -type module -reference pl_mts_sync_clk pl_mts_sync_clk_0]
-    set_property CONFIG.FREQ_HZ 245760000 [get_bd_pins pl_mts_sync_clk_0/pl_clk]
+    set_property CONFIG.FREQ_HZ 160000000 [get_bd_pins pl_mts_sync_clk_0/pl_clk]
 
     set rfdc [create_bd_cell -type ip -vlnv xilinx.com:ip:usp_rf_data_converter:2.6 usp_rf_data_converter_0]
     set_property -dict [list \
         CONFIG.ADC0_Clock_Source {1} \
         CONFIG.ADC0_Multi_Tile_Sync {true} \
-        CONFIG.ADC0_Sampling_Rate {4.9152} \
+        CONFIG.ADC0_Sampling_Rate {1.6000} \
         CONFIG.ADC1_Clock_Dist {2} \
         CONFIG.ADC1_Multi_Tile_Sync {true} \
         CONFIG.ADC1_PLL_Enable {true} \
-        CONFIG.ADC1_Refclk_Freq {245.760} \
-        CONFIG.ADC1_Sampling_Rate {4.9152} \
+        CONFIG.ADC1_Refclk_Freq {160.000} \
+        CONFIG.ADC1_Sampling_Rate {1.6000} \
         CONFIG.ADC2_Clock_Source {1} \
         CONFIG.ADC2_Multi_Tile_Sync {true} \
-        CONFIG.ADC2_Sampling_Rate {4.9152} \
+        CONFIG.ADC2_Sampling_Rate {1.6000} \
         CONFIG.ADC3_Clock_Source {1} \
         CONFIG.ADC3_Multi_Tile_Sync {true} \
-        CONFIG.ADC3_Sampling_Rate {4.9152} \
+        CONFIG.ADC3_Sampling_Rate {1.6000} \
         CONFIG.ADC_Data_Type00 {1} \
         CONFIG.ADC_Data_Type02 {1} \
         CONFIG.ADC_Data_Type10 {1} \
@@ -155,14 +155,14 @@ proc create_t510_rfdc_bd {} {
         CONFIG.ADC_Data_Width22 {4} \
         CONFIG.ADC_Data_Width30 {4} \
         CONFIG.ADC_Data_Width32 {4} \
-        CONFIG.ADC_Decimation_Mode00 {20} \
-        CONFIG.ADC_Decimation_Mode02 {20} \
-        CONFIG.ADC_Decimation_Mode10 {20} \
-        CONFIG.ADC_Decimation_Mode12 {20} \
-        CONFIG.ADC_Decimation_Mode20 {20} \
-        CONFIG.ADC_Decimation_Mode22 {20} \
-        CONFIG.ADC_Decimation_Mode30 {20} \
-        CONFIG.ADC_Decimation_Mode32 {20} \
+        CONFIG.ADC_Decimation_Mode00 {5} \
+        CONFIG.ADC_Decimation_Mode02 {5} \
+        CONFIG.ADC_Decimation_Mode10 {5} \
+        CONFIG.ADC_Decimation_Mode12 {5} \
+        CONFIG.ADC_Decimation_Mode20 {5} \
+        CONFIG.ADC_Decimation_Mode22 {5} \
+        CONFIG.ADC_Decimation_Mode30 {5} \
+        CONFIG.ADC_Decimation_Mode32 {5} \
         CONFIG.ADC_Mixer_Type00 {2} \
         CONFIG.ADC_Mixer_Type02 {2} \
         CONFIG.ADC_Mixer_Type10 {2} \
@@ -188,16 +188,16 @@ proc create_t510_rfdc_bd {} {
         CONFIG.ADC_Slice32_Enable {true} \
         CONFIG.DAC0_Clock_Source {6} \
         CONFIG.DAC0_Multi_Tile_Sync {true} \
-        CONFIG.DAC0_Sampling_Rate {4.9152} \
+        CONFIG.DAC0_Sampling_Rate {1.6000} \
         CONFIG.DAC1_Multi_Tile_Sync {true} \
-        CONFIG.DAC1_Sampling_Rate {4.9152} \
+        CONFIG.DAC1_Sampling_Rate {1.6000} \
         CONFIG.DAC2_Clock_Dist {2} \
         CONFIG.DAC2_Multi_Tile_Sync {true} \
         CONFIG.DAC2_PLL_Enable {true} \
-        CONFIG.DAC2_Refclk_Freq {245.760} \
-        CONFIG.DAC2_Sampling_Rate {4.9152} \
+        CONFIG.DAC2_Refclk_Freq {160.000} \
+        CONFIG.DAC2_Sampling_Rate {1.6000} \
         CONFIG.DAC3_Multi_Tile_Sync {true} \
-        CONFIG.DAC3_Sampling_Rate {4.9152} \
+        CONFIG.DAC3_Sampling_Rate {1.6000} \
         CONFIG.DAC_Data_Type00 {0} \
         CONFIG.DAC_Data_Type30 {0} \
         CONFIG.DAC_Data_Width00 {8} \
@@ -208,14 +208,14 @@ proc create_t510_rfdc_bd {} {
         CONFIG.DAC_Data_Width22 {8} \
         CONFIG.DAC_Data_Width30 {8} \
         CONFIG.DAC_Data_Width32 {8} \
-        CONFIG.DAC_Interpolation_Mode00 {20} \
-        CONFIG.DAC_Interpolation_Mode02 {20} \
-        CONFIG.DAC_Interpolation_Mode10 {20} \
-        CONFIG.DAC_Interpolation_Mode12 {20} \
-        CONFIG.DAC_Interpolation_Mode20 {20} \
-        CONFIG.DAC_Interpolation_Mode22 {20} \
-        CONFIG.DAC_Interpolation_Mode30 {20} \
-        CONFIG.DAC_Interpolation_Mode32 {20} \
+        CONFIG.DAC_Interpolation_Mode00 {5} \
+        CONFIG.DAC_Interpolation_Mode02 {5} \
+        CONFIG.DAC_Interpolation_Mode10 {5} \
+        CONFIG.DAC_Interpolation_Mode12 {5} \
+        CONFIG.DAC_Interpolation_Mode20 {5} \
+        CONFIG.DAC_Interpolation_Mode22 {5} \
+        CONFIG.DAC_Interpolation_Mode30 {5} \
+        CONFIG.DAC_Interpolation_Mode32 {5} \
         CONFIG.DAC_Mixer_Type00 {2} \
         CONFIG.DAC_Mixer_Type02 {2} \
         CONFIG.DAC_Mixer_Type10 {2} \
@@ -266,17 +266,18 @@ proc create_t510_rfdc_bd {} {
     _externalize_pin [get_bd_pins zynq_ultra_ps_e_0/saxihpc0_fpd_aclk] time_ddr_s_axi_aclk
     set ctrl_freq_hz [_pin_freq_or_default [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] 100000000]
 
-    create_bd_port -dir I -type clk -freq_hz 245760000 pl_clk_p
-    create_bd_port -dir I -type clk -freq_hz 245760000 pl_clk_n
+    create_bd_port -dir I -type clk -freq_hz 160000000 pl_clk_p
+    create_bd_port -dir I -type clk -freq_hz 160000000 pl_clk_n
     create_bd_port -dir I pl_sys_ref_p
     create_bd_port -dir I pl_sys_ref_n
     connect_bd_net [get_bd_ports pl_clk_p] [get_bd_pins pl_mts_sync_clk_0/pl_clk_p]
     connect_bd_net [get_bd_ports pl_clk_n] [get_bd_pins pl_mts_sync_clk_0/pl_clk_n]
     connect_bd_net [get_bd_ports pl_sys_ref_p] [get_bd_pins pl_mts_sync_clk_0/pl_sys_ref_p]
     connect_bd_net [get_bd_ports pl_sys_ref_n] [get_bd_pins pl_mts_sync_clk_0/pl_sys_ref_n]
-    # RFDC ADC AXIS and the F-engine data path run at 122.880 MHz so the
-    # 1024b-to-256b F-engine feed can sustain the 100 MHz production SPEC rate.
-    # DAC AXIS remains at 61.440 MHz for the existing loopback source contract.
+    # Stage 32: RFDC ADC and DAC AXIS both run at 80 MHz.  The existing data
+    # widths represent four complex samples per beat, so the RFDC/PL complex
+    # rate is 320 MS/s while the 1024-bit ADC aggregate and 128-bit DAC ports
+    # remain unchanged.
     # PS pl_clk0 stays on AXI/control and RFDC s_axi only.
     connect_bd_net [get_bd_pins pl_mts_sync_clk_0/pl_clk] [get_bd_pins clk_wiz_0/clk_in1]
     connect_bd_net [get_bd_pins pl_mts_sync_clk_0/user_sysref_adc] [get_bd_pins usp_rf_data_converter_0/user_sysref_adc]
@@ -300,8 +301,8 @@ proc create_t510_rfdc_bd {} {
         [get_bd_pins usp_rf_data_converter_0/s1_axis_aresetn] \
         [get_bd_pins usp_rf_data_converter_0/s2_axis_aresetn] \
         [get_bd_pins usp_rf_data_converter_0/s3_axis_aresetn]
-    set adc_axis_freq_hz [_pin_freq_or_default [get_bd_pins clk_wiz_0/clk_out1] 122880000]
-    set dac_axis_freq_hz [_pin_freq_or_default [get_bd_pins clk_wiz_0/clk_out2] 61440000]
+    set adc_axis_freq_hz [_pin_freq_or_default [get_bd_pins clk_wiz_0/clk_out1] 80000000]
+    set dac_axis_freq_hz [_pin_freq_or_default [get_bd_pins clk_wiz_0/clk_out2] 80000000]
     create_bd_port -dir O -type clk adc_m_axis_clk
     create_bd_port -dir O -type clk dac_s_axis_clk
     create_bd_port -dir O -type clk ctrl_clk
@@ -333,8 +334,15 @@ proc create_t510_rfdc_bd {} {
         s00_axis s02_axis s10_axis s12_axis s20_axis s22_axis s30_axis s32_axis
     } {
         _externalize_intf [get_bd_intf_pins usp_rf_data_converter_0/$intf] $intf
-        if {[regexp {^[ms][0-9][0-9]_axis$} $intf]} {
-            set_property CONFIG.FREQ_HZ $axis_freq_hz [get_bd_intf_ports $intf]
+        if {$intf eq "adc1_clk" || $intf eq "dac2_clk"} {
+            # The enabled ADC/DAC clock-distribution roots both receive the
+            # Stage 32 160 MHz LMK reference.  Keep the external interface
+            # metadata aligned with the RFDC PLL configuration.
+            set_property CONFIG.FREQ_HZ 160000000 [get_bd_intf_ports $intf]
+        } elseif {[regexp {^m[0-9][0-9]_axis$} $intf]} {
+            set_property CONFIG.FREQ_HZ $adc_axis_freq_hz [get_bd_intf_ports $intf]
+        } elseif {[regexp {^s[0-9][0-9]_axis$} $intf]} {
+            set_property CONFIG.FREQ_HZ $dac_axis_freq_hz [get_bd_intf_ports $intf]
         }
     }
     assign_bd_address

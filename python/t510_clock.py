@@ -154,6 +154,33 @@ LMK04828_INIT_245P76 = (
     0x018500, 0x018800, 0x018900, 0x018A00, 0x018B00, 0x1FFD00, 0x1FFE00, 0x1FFF53,
 )
 
+# TICS Pro export:
+# reports/arch/lmk04828_stage32_min_delta_160_10m_cont_manual_clkin2.tcs
+# SHA256 a9fac413bf18ff7bda1844284f72e59fde3e72dcfceed6144b59dcbda82f216e
+#
+# This table is intentionally kept in the exact TICS write order.  Do not
+# sort/deduplicate it: R0 is written twice and the high-page final writes are
+# part of the programming sequence.
+LMK04828_INIT_STAGE32_160 = (
+    0x000090, 0x000010, 0x000200, 0x000306, 0x0004D0, 0x00055B, 0x000600, 0x000C51,
+    0x000D04, 0x01000F, 0x010155, 0x010255, 0x010300, 0x010420, 0x010500, 0x0106F0,
+    0x010755, 0x01080F, 0x010955, 0x010A55, 0x010B00, 0x010C20, 0x010D00, 0x010EF0,
+    0x010F15, 0x01100F, 0x011155, 0x011255, 0x011300, 0x011420, 0x011500, 0x0116F0,
+    0x011755, 0x01180F, 0x011955, 0x011A55, 0x011B00, 0x011C00, 0x011D00, 0x011EF0,
+    0x011F15, 0x01200F, 0x012155, 0x012255, 0x012300, 0x012420, 0x012500, 0x0126F0,
+    0x012705, 0x01280F, 0x012955, 0x012A55, 0x012B00, 0x012C00, 0x012D00, 0x012EF0,
+    0x012F55, 0x013018, 0x013155, 0x013255, 0x013300, 0x013400, 0x013500, 0x0136F0,
+    0x013755, 0x013800, 0x013903, 0x013A00, 0x013BF0, 0x013C00, 0x013D08, 0x013E03,
+    0x013F0D, 0x014003, 0x014100, 0x014200, 0x014350, 0x0144FF, 0x01457F, 0x014620,
+    0x01472F, 0x014803, 0x014943, 0x014A0B, 0x014B16, 0x014C00, 0x014D00, 0x014EC0,
+    0x014F7F, 0x015003, 0x015102, 0x015200, 0x015300, 0x01547D, 0x015503, 0x015600,
+    0x015700, 0x015801, 0x015900, 0x015A01, 0x015BD4, 0x015C20, 0x015D00, 0x015E00,
+    0x015F13, 0x016006, 0x016100, 0x0162A4, 0x016300, 0x016400, 0x016501, 0x0171AA,
+    0x017202, 0x017C15, 0x017D33, 0x016600, 0x016717, 0x016870, 0x016959, 0x016A20,
+    0x016B00, 0x016C00, 0x016D00, 0x016E3B, 0x017300, 0x018200, 0x018300, 0x018400,
+    0x018500, 0x018800, 0x018900, 0x018A00, 0x018B00, 0x1FFD00, 0x1FFE00, 0x1FFF53,
+)
+
 LMK_SYSREF_REQ_MODE = (
     0x0143D1,
     0x014400,
@@ -176,10 +203,14 @@ class T510ClockController:
     LMK_REF_SELECT0 = 33
     LMK_REF_SELECT1 = 34
     LMK_SYNC = 78
-    PROFILE_ID = "tcxo_10mhz_245p76_sysref_req"
+    PROFILE_ID_245P76 = "tcxo_10mhz_245p76_sysref_req"
+    PROFILE_ID_STAGE32_160 = "stage32_160_10m_cont_manual_clkin2"
+    SYSREF_REQUEST = "request"
+    SYSREF_CONTINUOUS = "continuous"
     KEY_REGISTERS = (
         0x000, 0x004, 0x005, 0x006, 0x00C, 0x00D,
         0x100, 0x101, 0x102, 0x103, 0x104, 0x105, 0x106, 0x107,
+        0x118,
         0x138, 0x139, 0x13A, 0x13B, 0x13C, 0x13D, 0x13E, 0x13F,
         0x140, 0x143, 0x144, 0x145, 0x146, 0x147, 0x148, 0x149,
         0x14A, 0x14B, 0x14C, 0x14D, 0x14E, 0x14F, 0x150, 0x151,
@@ -223,22 +254,50 @@ class T510ClockController:
             "value": gpio.read(),
         }
 
-    def set_sysref(self, enable: bool) -> dict[str, int | bool | str]:
-        """Drive the LMK SYSREF request GPIO used by the RFDC MTS flow."""
+    def set_sysref(
+        self,
+        enable: bool,
+        *,
+        mode: str = SYSREF_REQUEST,
+    ) -> dict[str, int | bool | str]:
+        """Control request-mode SYSREF without disturbing continuous profiles."""
+        if mode == self.SYSREF_CONTINUOUS:
+            return {
+                "gpio": self.LMK_SYNC,
+                "requested_enable": bool(enable),
+                "enabled": True,
+                "value": 0,
+                "mode": self.SYSREF_CONTINUOUS,
+                "gpio_changed": False,
+                "reason": "LMK profile drives continuous SYSREF; RFDC receiver gating owns capture",
+            }
+        if mode != self.SYSREF_REQUEST:
+            raise ValueError(f"unsupported SYSREF mode: {mode!r}")
         value = 1 if enable else 0
         self._gpio(self.LMK_SYNC, value)
         return {
             "gpio": self.LMK_SYNC,
+            "requested_enable": bool(enable),
             "enabled": bool(enable),
             "value": value,
+            "mode": self.SYSREF_REQUEST,
+            "gpio_changed": True,
         }
 
-    def pulse_sysref(self, *, width_s: float = 0.05, settle_s: float = 0.05) -> dict[str, object]:
+    def pulse_sysref(
+        self,
+        *,
+        width_s: float = 0.05,
+        settle_s: float = 0.05,
+        mode: str = SYSREF_REQUEST,
+    ) -> dict[str, object]:
         """Issue one software-controlled SYSREF pulse through the LMK sync GPIO."""
+        if mode == self.SYSREF_CONTINUOUS:
+            raise RuntimeError("continuous SYSREF profile cannot be pulsed through the LMK SYNC GPIO")
         before = self.read_gpio_status()
-        on = self.set_sysref(True)
+        on = self.set_sysref(True, mode=mode)
         time.sleep(max(float(width_s), 0.0))
-        off = self.set_sysref(False)
+        off = self.set_sysref(False, mode=mode)
         time.sleep(max(float(settle_s), 0.0))
         after = self.read_gpio_status()
         return {
@@ -266,6 +325,23 @@ class T510ClockController:
         with LinuxSpiDev(self.LMK_SPI_DEVNODE, speed_hz=self.spi_speed_hz) as spi:
             return {f"0x{reg:03x}": self._read_reg(spi, reg) for reg in regs}
 
+    def read_lock_status(self) -> dict[str, int]:
+        """Read only the two LMK digital-lock-detect registers.
+
+        This intentionally avoids the GPIO and profile-signature work done by
+        :meth:`read_status`.  A resident reference watchdog can therefore poll
+        the physical PLL lock state with one short SPI session and without
+        modifying the active LMK profile.
+        """
+        registers = self.read_registers((0x182, 0x183))
+        return {
+            "captured_at_unix_ms": time.time_ns() // 1_000_000,
+            "pll1_lock": (int(registers["0x182"]) >> 1) & 0x1,
+            "pll2_lock": (int(registers["0x183"]) >> 1) & 0x1,
+            "reg_0x182": int(registers["0x182"]),
+            "reg_0x183": int(registers["0x183"]),
+        }
+
     def read_gpio_status(self) -> dict[str, dict[str, int | str]]:
         return {
             "reset": self._gpio_status(self.LMK_RESET),
@@ -277,7 +353,8 @@ class T510ClockController:
     def read_status(self, *, include_registers: bool = False) -> dict[str, object]:
         """Return LMK lock, profile, GPIO and optional register-dump evidence."""
         status: dict[str, object] = {
-            "profile_id": self.PROFILE_ID,
+            "profile_id": "unknown",
+            "sysref_mode": "unknown",
             "lmk_clkin": "CLKin0",
             "spi_bus_device": self.LMK_SPI_BUS_DEV,
             "spi": self.LMK_SPI_DEVNODE,
@@ -296,17 +373,22 @@ class T510ClockController:
             ref1 = int(gpio["ref_select1"]["value"])  # type: ignore[index]
             status["ref_select0"] = ref0
             status["ref_select1"] = ref1
+            status["selector_bits_sel1_sel0"] = f"{ref1}{ref0}"
             status["selected_ref"] = "tcxo_10mhz" if (ref0, ref1) == (0, 0) else "external_10mhz"
             status["lmk_clkin"] = {
                 (0, 0): "CLKin0",
-                (1, 0): "CLKin1",
-                (0, 1): "CLKin2",
-                (1, 1): "CLKin3",
-            }.get((ref0, ref1), "unknown")
+                (0, 1): "CLKin1",
+                (1, 0): "CLKin2",
+                (1, 1): "holdover",
+            }.get((ref1, ref0), "unknown")
         except Exception as exc:
             status["errors"].append(f"gpio_status: {exc}")  # type: ignore[index]
         try:
-            registers = self.read_registers(self.KEY_REGISTERS if include_registers else (0x006, 0x182, 0x183))
+            registers = self.read_registers(
+                self.KEY_REGISTERS
+                if include_registers
+                else (0x006, 0x118, 0x138, 0x139, 0x143, 0x182, 0x183)
+            )
             status["registers"] = registers
             pll1 = (int(registers.get("0x182", 0)) >> 1) & 0x1
             pll2 = (int(registers.get("0x183", 0)) >> 1) & 0x1
@@ -314,17 +396,34 @@ class T510ClockController:
             status["pll2_lock"] = pll2
             status["reg6"] = int(registers.get("0x006", 0))
             status["configured"] = bool(pll1 and pll2)
+            stage32_signature = (
+                int(registers.get("0x118", -1)) == 0x0F
+                and int(registers.get("0x138", -1)) == 0x00
+                and int(registers.get("0x139", -1)) == 0x03
+                and int(registers.get("0x143", -1)) == 0x50
+            )
+            if stage32_signature:
+                status["profile_id"] = self.PROFILE_ID_STAGE32_160
+                status["sysref_mode"] = self.SYSREF_CONTINUOUS
+                status["lmk_clkin"] = "CLKin2 (manual)"
+                status["selected_ref"] = "external_10mhz"
+            else:
+                status["profile_id"] = self.PROFILE_ID_245P76
+                status["sysref_mode"] = self.SYSREF_REQUEST
         except Exception as exc:
             status["errors"].append(f"lmk_register_read: {exc}")  # type: ignore[index]
         return status
 
-    def _configure_245p76_profile(
+    def _configure_profile(
         self,
         *,
         ref: str,
         lmk_clkin: str,
         ref_select0: int,
         ref_select1: int,
+        profile_id: str,
+        init_values: tuple[int, ...],
+        sysref_mode: str,
         poll_lock: bool = True,
         max_attempts: int = 24,
         register_delay_s: float = 0.005,
@@ -342,7 +441,8 @@ class T510ClockController:
         result: dict[str, int | bool | str] = {
             "ref": ref,
             "lmk_clkin": lmk_clkin,
-            "profile_id": f"{ref}_245p76_sysref_req",
+            "profile_id": profile_id,
+            "sysref_mode": sysref_mode,
             "spi": self.LMK_SPI_DEVNODE,
             "ref_select0": int(ref_select0) & 0x1,
             "ref_select1": int(ref_select1) & 0x1,
@@ -353,13 +453,16 @@ class T510ClockController:
             "attempts": 0,
         }
         with LinuxSpiDev(self.LMK_SPI_DEVNODE, speed_hz=self.spi_speed_hz) as spi:
-            for value in LMK04828_INIT_245P76:
+            for value in init_values:
                 self._write24(spi, value)
                 if register_delay_s:
                     time.sleep(register_delay_s)
-            for value in LMK_SYSREF_REQ_MODE:
-                time.sleep(0.01)
-                self._write24(spi, value)
+            if sysref_mode == self.SYSREF_REQUEST:
+                for value in LMK_SYSREF_REQ_MODE:
+                    time.sleep(0.01)
+                    self._write24(spi, value)
+            elif sysref_mode != self.SYSREF_CONTINUOUS:
+                raise ValueError(f"unsupported SYSREF mode: {sysref_mode!r}")
 
             for attempt in range(1, max_attempts + 1):
                 result["attempts"] = attempt
@@ -373,6 +476,30 @@ class T510ClockController:
                     break
         result["configured"] = bool(result["pll1_lock"] and result["pll2_lock"])
         return result
+
+    def _configure_245p76_profile(
+        self,
+        *,
+        ref: str,
+        lmk_clkin: str,
+        ref_select0: int,
+        ref_select1: int,
+        poll_lock: bool = True,
+        max_attempts: int = 24,
+        register_delay_s: float = 0.005,
+    ) -> dict[str, int | bool | str]:
+        return self._configure_profile(
+            ref=ref,
+            lmk_clkin=lmk_clkin,
+            ref_select0=ref_select0,
+            ref_select1=ref_select1,
+            profile_id=f"{ref}_245p76_sysref_req",
+            init_values=LMK04828_INIT_245P76,
+            sysref_mode=self.SYSREF_REQUEST,
+            poll_lock=poll_lock,
+            max_attempts=max_attempts,
+            register_delay_s=register_delay_s,
+        )
 
     def configure_tcxo_245p76(
         self,
@@ -410,7 +537,7 @@ class T510ClockController:
         selector_candidates = (
             (1, 0, "CLKin1"),
             (0, 1, "CLKin2"),
-            (1, 1, "CLKin3"),
+            (1, 1, "holdover"),
         )
         best: dict[str, int | bool | str] | None = None
         for ref_select0, ref_select1, lmk_clkin in selector_candidates:
@@ -433,3 +560,26 @@ class T510ClockController:
         selected["attempts_detail"] = attempts
         selected["configured"] = bool(selected.get("configured", False))
         return selected
+
+    def configure_external_10mhz_stage32_160(
+        self,
+        *,
+        poll_lock: bool = True,
+        max_attempts: int = 24,
+        register_delay_s: float = 0.005,
+    ) -> dict[str, int | bool | str]:
+        """Program the Stage 32 manual-CLKin2, 160 MHz, continuous-SYSREF profile."""
+        return self._configure_profile(
+            ref="external_10mhz",
+            lmk_clkin="CLKin2 (manual)",
+            # SEL1:SEL0=10 agrees with the physical CLKin2 path even though
+            # this TICS profile selects CLKin2 manually and ignores the pins.
+            ref_select0=0,
+            ref_select1=1,
+            profile_id=self.PROFILE_ID_STAGE32_160,
+            init_values=LMK04828_INIT_STAGE32_160,
+            sysref_mode=self.SYSREF_CONTINUOUS,
+            poll_lock=poll_lock,
+            max_attempts=max_attempts,
+            register_delay_s=register_delay_s,
+        )

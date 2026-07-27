@@ -50,8 +50,10 @@ def main() -> int:
         default_time_destinations,
     )
 
-    parser = argparse.ArgumentParser(description="Stage 29 frozen-profile board gate")
-    parser.add_argument("--bandwidth-mhz", type=int, choices=(100, 200), required=True)
+    parser = argparse.ArgumentParser(
+        description="Stage 32 frozen-profile board gate (legacy Stage29 facade)"
+    )
+    parser.add_argument("--bandwidth-mhz", type=int, choices=(160, 320), required=True)
     parser.add_argument("--mode", choices=("time_only", "spec_only", "time_spec"), required=True)
     parser.add_argument("--center-mhz", type=float, default=100.0)
     parser.add_argument("--board-id", type=int, default=0, help="16-bit board identity carried in every T510 packet")
@@ -65,6 +67,8 @@ def main() -> int:
     parser.add_argument("--time-source-port-base", type=int, default=4000)
     parser.add_argument("--spec-source-port-base", type=int, default=4008)
     parser.add_argument("--seconds", type=float, default=60.0)
+    parser.add_argument("--mts-adc-target-latency", type=int, default=-1)
+    parser.add_argument("--mts-dac-target-latency", type=int, default=-1)
     parser.add_argument("--bitfile", default=str(_root() / "overlay" / "t510_fengine.bit"))
     parser.add_argument("--output")
     args = parser.parse_args()
@@ -102,6 +106,8 @@ def main() -> int:
         mode=args.mode,
         center_mhz=args.center_mhz,
         board_id=args.board_id,
+        mts_adc_target_latency=args.mts_adc_target_latency,
+        mts_dac_target_latency=args.mts_dac_target_latency,
         source_ip=args.source_ip,
         source_mac=args.source_mac,
         time_destinations=time_destinations,
@@ -114,7 +120,7 @@ def main() -> int:
     result = {
         "classification": gate.get("classification"),
         "ok": bool(gate.get("ok")),
-        "stage": 29,
+        "stage": 32,
         "core_version": f"0x{EXPECTED_CORE_VERSION:08x}",
         "fresh_download": True,
         "profile": {
@@ -129,11 +135,13 @@ def main() -> int:
             "spec_destinations": [item.__dict__ for item in config.spec_destinations],
             "flow_count": config.flow_count,
             "expected_packet_rates": config.expected_packet_rates,
+            "mts_adc_target_latency": config.mts_adc_target_latency,
+            "mts_dac_target_latency": config.mts_dac_target_latency,
         },
         "apply": applied,
         "validation": gate,
     }
-    output = Path(args.output) if args.output else _root() / "reports" / "board" / f"stage29_{config.bandwidth_mhz}mhz_{config.mode.value}_board.json"
+    output = Path(args.output) if args.output else _root() / "reports" / "board" / f"stage32_{config.bandwidth_mhz}msps_{config.mode.value}_board.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(_jsonable(result), indent=2, sort_keys=True) + "\n")
     print(json.dumps(_jsonable(result), indent=2, sort_keys=True))

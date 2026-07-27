@@ -64,6 +64,11 @@ module tb_pfb_channelizer;
 `ifdef T510_STAGE27J_PFB
     integer pfb_input_cell_count = 0;
     integer pfb_elastic_pop_push_count = 0;
+`ifdef T510_STAGE32
+    integer stage32_input_cycle = 0;
+    integer stage32_last_accept_cycle = 0;
+    integer stage32_max_nonboundary_accept_gap = 0;
+`endif
 `endif
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
     logic [12:0] xfft_frame_cell_count = 13'd0;
@@ -267,6 +272,11 @@ module tb_pfb_channelizer;
         if (!rst_n || clear || !enable) begin
             pfb_input_cell_count <= 0;
             pfb_elastic_pop_push_count <= 0;
+`ifdef T510_STAGE32
+            stage32_input_cycle <= 0;
+            stage32_last_accept_cycle <= 0;
+            stage32_max_nonboundary_accept_gap <= 0;
+`endif
         end else if (dut.u_feng_channelizer_4096.xfft_input_fire) begin
             `TB_CHECK_EQ(
                 dut.u_feng_channelizer_4096.xfft_data_idx,
@@ -284,6 +294,25 @@ module tb_pfb_channelizer;
             end
             pfb_input_cell_count <= pfb_input_cell_count + 1;
         end
+`ifdef T510_STAGE32
+        if (rst_n && enable) begin
+            stage32_input_cycle <= stage32_input_cycle + 1;
+            if (s_axis_tvalid && s_axis_tready) begin
+                // A frame contains 1024 input words.  A boundary pause is
+                // permitted while ownership of the four PFB frame buffers
+                // rotates; every other accepted word must be at most four
+                // PFB clocks after the previous word.
+                if ((accepted_input_beats != 0) &&
+                    ((accepted_input_beats % INPUT_BEATS_PER_FFT_FRAME) != 0) &&
+                    ((stage32_input_cycle - stage32_last_accept_cycle) >
+                     stage32_max_nonboundary_accept_gap)) begin
+                    stage32_max_nonboundary_accept_gap <=
+                        stage32_input_cycle - stage32_last_accept_cycle;
+                end
+                stage32_last_accept_cycle <= stage32_input_cycle;
+            end
+        end
+`endif
         if (rst_n && enable &&
             dut.u_feng_channelizer_4096.output_fire &&
             dut.u_feng_channelizer_4096.xfft_output_fire) begin
@@ -404,8 +433,9 @@ module tb_pfb_channelizer;
 `ifdef T510_STAGE27J_PFB
         load_unity_pfb_coefficients();
 `endif
-        // Stage 31 holds XFFT aresetn low for 15 clocks after reset/epoch
-        // clear, then performs a fresh configuration handshake.
+        // The XFFT aresetn stays low for 15 clocks after reset/epoch clear.
+        // Stage 32 deliberately waits for SPEC enable before configuring its
+        // realtime lanes, matching the scheduled first-sample release path.
         repeat (24) @(posedge clk);
 
         `TB_CHECK(!status[0], "PFB enabled status bit stays low before streaming enable")
@@ -415,9 +445,18 @@ module tb_pfb_channelizer;
 `else
         `TB_CHECK(status[8], "FFT-only status bit")
 `endif
+`ifdef T510_STAGE32
+        `TB_CHECK(!status[9], "Stage 32 defers realtime XFFT config until SPEC enable")
+        `TB_CHECK(!status[5], "Stage 32 science-valid waits for enabled XFFT config")
+        `TB_CHECK(
+            !dut.u_feng_channelizer_4096.xfft_aresetn,
+            "Stage 32 holds realtime XFFT reset while SPEC is disabled"
+        )
+`else
         `TB_CHECK(status[9], "XFFT config completes while stream enable is low")
         `TB_CHECK_EQ(status[23:16], 8'hff, "XFFT lane config done mask")
         `TB_CHECK(status[5], "PFB science-valid gate reflects configured XFFT backend")
+`endif
 `ifdef T510_STAGE27H_PRODUCTION_ONLY
 `ifndef T510_SIM_FFT_MODEL
         `TB_CHECK_EQ(dut.u_feng_channelizer_4096.u_fengine_xfft_4096.gen_lane_xfft[0].lane_config_tdata[0], 1'b1, "lane0 XFFT forward config")
@@ -438,7 +477,18 @@ module tb_pfb_channelizer;
 
         @(negedge clk);
         enable = 1'b1;
+`ifdef T510_STAGE32
+        repeat (24) @(posedge clk);
+        `TB_CHECK(status[9], "Stage 32 XFFT config completes after SPEC enable")
+        `TB_CHECK_EQ(status[23:16], 8'hff, "Stage 32 XFFT lane config done mask")
+        `TB_CHECK(status[5], "Stage 32 science-valid rises after enabled XFFT config")
+        `TB_CHECK(
+            dut.u_feng_channelizer_4096.xfft_aresetn,
+            "Stage 32 releases realtime XFFT reset after SPEC enable"
+        )
+`else
         repeat (2) @(posedge clk);
+`endif
         `TB_CHECK(status[0], "PFB enabled status bit after streaming enable")
 
         @(negedge clk);
@@ -448,6 +498,12 @@ module tb_pfb_channelizer;
         wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME * 4);
         repeat (16) @(posedge clk);
         `TB_CHECK_EQ(pfb_input_cell_count, 0, "27j realtime XFFT feed waits for one-frame output FIFO reservation")
+`ifdef T510_STAGE32
+        `TB_CHECK(
+            stage32_max_nonboundary_accept_gap <= CELLS_PER_BEAT,
+            "Stage 32 PFB accepts one 1024-bit word per four clocks without the former fifth-cycle gap"
+        )
+`endif
         output_fifo_level = 32'd0;
         wait_for_accepted_inputs(INPUT_BEATS_PER_FFT_FRAME * (OUTPUT_TILES + 3));
 `elsif T510_STAGE27H_PRODUCTION_ONLY

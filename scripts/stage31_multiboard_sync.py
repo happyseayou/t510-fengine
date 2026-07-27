@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+from pathlib import Path
 import sys
 import time
 import urllib.error
@@ -154,6 +155,7 @@ def main() -> int:
         action="store_true",
         help="return after ARM acknowledgements without proving sustained TIME/SPEC flow",
     )
+    parser.add_argument("--output", help="optional JSON evidence path")
     args = parser.parse_args()
 
     board_ids = [board_id for _, board_id in args.board]
@@ -274,13 +276,19 @@ def main() -> int:
                 print(f"abort failed for board {board_id}: {abort_error}", file=sys.stderr)
         raise
 
-    print(json.dumps({
+    result = {
         "generation": args.generation,
         "target_pps_count_by_board": target_pps_by_board,
         "epoch_tai_seconds": args.epoch_tai,
         "first_sample0": first_sample0,
         "boards": armed,
-    }, indent=2, sort_keys=True))
+    }
+    rendered = json.dumps(result, indent=2, sort_keys=True)
+    if args.output:
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
     return 0
 
 

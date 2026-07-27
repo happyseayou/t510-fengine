@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -19,7 +20,7 @@ class FakeHardwareCore:
 
     def read_status(self):
         return {
-            "core_version": 0x00010030,
+            "core_version": 0x00010032,
             "board_id": self.board_id,
             "streaming": 0,
             "science_bandwidth_mode": 0,
@@ -43,11 +44,36 @@ class FakeHardwareCore:
             "rfdc_dropped_count": 4,
             "rfdc_downstream_ready": 1,
             "science_dropped_beat_count": 5,
+            "science_bandwidth_mhz": 160,
+            "science_antialias_taps": 55,
+            "science_antialias_100m_active": 1,
+            "science_antialias_100m_primed": 1,
+            "science_antialias_coeff_version": 0xAA160055,
             "tx_cmac_source_mux_locked": 0,
             "tx_cmac_mux_selected_source": 0,
             "tx_time_live_bridge_fifo_full": 0,
             "tx_time_live_bridge_fifo_empty": 1,
             "pfb_input_fifo_level": 0,
+            "pfb_nchan": 4096,
+            "pfb_taps": 4,
+            "pfb_chan_count": 256,
+            "pfb_time_count": 1,
+            "pfb_frame_count": 300,
+            "pfb_overflow_count": 0,
+            "pfb_data_halt_count": 0,
+            "pfb_xfft_event_count": 0,
+            "pfb_tile_overflow_count": 0,
+            "pfb_xfft_tlast_unexpected_count": 0,
+            "pfb_xfft_tlast_missing_count": 0,
+            "pfb_xfft_fft_overflow_count": 0,
+            "pfb_xfft_data_out_halt_count": 0,
+            "pfb_xfft_status_halt_count": 0,
+            "pfb_capture_backpressure_count": 0,
+            "pfb_frame_sample0_overflow_count": 0,
+            "pfb_peak_chan": 512,
+            "pfb_peak_power": 123456,
+            "pfb_coeff_active_id": 0x50464234,
+            "pfb_coeff_error_count": 0,
             "time_sample0": 1234,
             "rfdc_sample_count": 5678,
             "error_flags": 0,
@@ -60,6 +86,18 @@ class FakeHardwareCore:
                 {"kind": "dac", "frequency_mhz": 100.0},
                 {"kind": "dac", "frequency_mhz": 100.0},
             ],
+        }
+
+    def read_lmk_status(self, *, include_registers=False):
+        return {
+            "profile_id": "stage32_160_manual_clkin2_continuous",
+            "sysref_mode": "continuous",
+            "selected_ref": "external_10mhz",
+            "lmk_clkin": "CLKin2 (manual)",
+            "pll1_lock": 1,
+            "pll2_lock": 1,
+            "configured": True,
+            "errors": [],
         }
 
     def reset(self):
@@ -163,9 +201,9 @@ def configure_body() -> dict:
             }
         )
     return {
-        "bitstream_id": "fengine-0x00010030",
+        "bitstream_id": "fengine-0x00010032",
         "board_id": 37,
-        "profile": {"bandwidth_mhz": 100, "mode": "time_spec", "center_mhz": 100.0},
+        "profile": {"bandwidth_mhz": 160, "mode": "time_spec", "center_mhz": 100.0},
         "source": {"ip": "10.0.1.1", "mac": "02:00:00:00:00:01"},
         "endpoints": endpoints,
     }
@@ -178,10 +216,12 @@ class T510HelperTests(unittest.TestCase):
         self.bitstream = Path(self.temp.name) / "test.bit"
         self.bitstream.write_bytes(b"test-bitstream")
         self.proof = {
-            "id": "fengine-0x00010030",
+            "id": "fengine-0x00010032",
             "path": str(self.bitstream),
             "sha256": hashlib.sha256(b"test-bitstream").hexdigest(),
-            "core_version": "0x00010030",
+            "core_version": "0x00010032",
+            "mts_adc_target_latency": 240,
+            "mts_dac_target_latency": 224,
         }
         self.fpga_state = mock.patch.object(
             t510_hw,
@@ -198,33 +238,77 @@ class T510HelperTests(unittest.TestCase):
         )
         self.fpga_state.start()
         self.pynq_state.start()
+        self.mts_state = mock.patch.object(
+            t510_hw,
+            "STAGE32_MTS_STATE_PATH",
+            Path(self.temp.name) / "stage32-mts.json",
+        )
+        self.mts_state.start()
+        self.watchdog_path = Path(self.temp.name) / "stage32-ref-watchdog.json"
+        self.watchdog_state = mock.patch.object(
+            t510_hw,
+            "STAGE32_REFERENCE_WATCHDOG_STATE_PATH",
+            self.watchdog_path,
+        )
+        self.watchdog_state.start()
+        self._write_watchdog_state()
 
     def tearDown(self) -> None:
+        self.watchdog_state.stop()
         self.pynq_state.stop()
         self.fpga_state.stop()
+        self.mts_state.stop()
         self.temp.cleanup()
 
+    def _write_watchdog_state(self, **overrides) -> None:
+        state = {
+            "schema_version": 1,
+            "updated_at_unix_ms": time.time_ns() // 1_000_000,
+            "healthy": True,
+            "fault_latched": False,
+            "mode": "IDLE",
+            "active_bitstream_sha1": hashlib.sha1(b"test-bitstream").hexdigest(),
+            "lock_status": {"pll1_lock": 1, "pll2_lock": 1},
+        }
+        state.update(overrides)
+        self.watchdog_path.write_text(json.dumps(state), encoding="utf-8")
+
+    @mock.patch.object(t510_hw, "_record_active_bitstream_state")
     @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
-    def test_configure_uses_prepare_and_leaves_stream_stopped(self) -> None:
+    def test_configure_uses_prepare_and_leaves_stream_stopped(
+        self,
+        record_active_bitstream_state,
+    ) -> None:
         result = t510_hw._configure(
             {"bitstream": self.proof, "request": configure_body()}
         )
         controller = FakeController.instances[-1]
         self.assertEqual(controller.prepared.board_id, 37)
+        self.assertEqual(controller.prepared.mts_adc_target_latency, 240)
+        self.assertEqual(controller.prepared.mts_dac_target_latency, 224)
         self.assertFalse(result["streaming"])
         self.assertEqual(result["board_id"], 37)
         self.assertEqual(len(result["endpoints"]), 24)
         self.assertFalse(result["streaming"])
+        record_active_bitstream_state.assert_called_once_with(self.bitstream)
 
     @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
     def test_status_is_one_snapshot_of_cumulative_registers(self) -> None:
         result = t510_hw._status({"bitstream": self.proof, "request": {}})
-        self.assertEqual(result["core_version"], "0x00010030")
+        self.assertEqual(result["core_version"], "0x00010032")
         self.assertEqual(result["board_id"], 1)
         self.assertEqual(result["counters"]["time_packets"], 100)
         self.assertEqual(result["counters"]["spec_dropped"], 3)
         self.assertNotIn("packets_per_second", result)
         self.assertNotIn("history", result)
+        self.assertEqual(result["clock"]["sysref_mode"], "continuous")
+        self.assertEqual(result["halfband"]["coefficient_id"], "0xaa160055")
+        self.assertEqual(result["channelizer"]["nchan"], 4096)
+        self.assertEqual(result["channelizer"]["taps"], 4)
+        self.assertEqual(result["channelizer"]["packet_chan_count"], 256)
+        self.assertEqual(result["channelizer"]["peak_chan"], 512)
+        self.assertEqual(result["channelizer"]["coefficient_id"], "0x50464234")
+        self.assertTrue(result["reference_watchdog"]["healthy"])
 
     @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
     def test_dac_requires_matching_board_and_complete_readback(self) -> None:
@@ -275,6 +359,44 @@ class T510HelperTests(unittest.TestCase):
         reset = t510_hw._reset(request)
         self.assertTrue(reset["reset"])
         self.assertTrue(FakeController.instances[-1].core.reset_called)
+
+    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    def test_start_fails_closed_when_reference_watchdog_latched(self) -> None:
+        self._write_watchdog_state(
+            healthy=False,
+            fault_latched=True,
+            mode="FAULT_LATCHED",
+            lock_status={"pll1_lock": 0, "pll2_lock": 1},
+        )
+        with self.assertRaises(t510_hw.HelperError) as caught:
+            t510_hw._start(
+                {
+                    "bitstream": self.proof,
+                    "request": {"expected_board_id": 1},
+                }
+            )
+        self.assertEqual(caught.exception.code, "REFERENCE_WATCHDOG_NOT_READY")
+        self.assertIn("FAULT_LATCHED", caught.exception.details["errors"])
+        self.assertIn("PLL1_NOT_LOCKED", caught.exception.details["errors"])
+
+    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    def test_arm_fails_closed_when_reference_watchdog_state_is_stale(self) -> None:
+        self._write_watchdog_state(
+            updated_at_unix_ms=(
+                time.time_ns() // 1_000_000
+                - t510_hw.STAGE32_REFERENCE_WATCHDOG_MAX_AGE_MS
+                - 1
+            )
+        )
+        with self.assertRaises(t510_hw.HelperError) as caught:
+            t510_hw._sync_arm(
+                {
+                    "bitstream": self.proof,
+                    "request": {"expected_board_id": 1},
+                }
+            )
+        self.assertEqual(caught.exception.code, "REFERENCE_WATCHDOG_NOT_READY")
+        self.assertIn("STATE_STALE", caught.exception.details["errors"])
 
     @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
     def test_stage31_prepare_arm_abort_helpers_preserve_transaction_identity(self) -> None:
@@ -368,7 +490,25 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(FakeController.instances, [])
 
     @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
-    def test_configure_is_allowed_when_pl_is_not_configured(self) -> None:
+    def test_matching_active_hash_accepts_release_path_alias(self) -> None:
+        with mock.patch.object(
+            t510_hw,
+            "_read_pynq_global_pl_state",
+            return_value={
+                "bitfile_name": "/home/xilinx/bringup/alias.bit",
+                "bitfile_hash": hashlib.sha1(b"test-bitstream").hexdigest(),
+            },
+        ):
+            result = t510_hw._status({"bitstream": self.proof, "request": {}})
+        self.assertEqual(result["core_version"], "0x00010032")
+        self.assertTrue(FakeController.instances)
+
+    @mock.patch.object(t510_hw, "_record_active_bitstream_state")
+    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    def test_configure_is_allowed_when_pl_is_not_configured(
+        self,
+        record_active_bitstream_state,
+    ) -> None:
         with mock.patch.object(
             t510_hw,
             "_read_fpga_manager_state",
@@ -380,6 +520,37 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(result["board_id"], 37)
         self.assertTrue(FakeController.instances)
         read_state.assert_not_called()
+        record_active_bitstream_state.assert_called_once_with(self.bitstream)
+
+    def test_successful_configure_records_resolved_bitstream_hash_atomically(self) -> None:
+        state_path = Path(self.temp.name) / "global_pl_state.json"
+        state_path.write_text(
+            json.dumps(
+                {
+                    "bitfile_name": "/old/release.bit",
+                    "bitfile_hash": "0" * 40,
+                    "active_name": "T510",
+                    "shutdown_ips": {"keep": {"name": "keep", "base_addr": 4096}},
+                    "psddr": {"size": 1234},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch.object(
+            t510_hw,
+            "_pynq_global_state_path",
+            return_value=state_path,
+        ):
+            t510_hw._record_active_bitstream_state(self.bitstream)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["bitfile_name"], str(self.bitstream.resolve()))
+        self.assertEqual(
+            state["bitfile_hash"],
+            hashlib.sha1(b"test-bitstream").hexdigest(),
+        )
+        self.assertEqual(state["shutdown_ips"]["keep"]["base_addr"], 4096)
+        self.assertEqual(state["psddr"]["size"], 1234)
+        self.assertFalse(state_path.with_name(".global_pl_state.json.tmp").exists())
 
 
 if __name__ == "__main__":

@@ -156,7 +156,7 @@ module tb_science_rate_selector;
             end
             @(negedge clk);
             s_axis_tvalid = 1'b0;
-            repeat (4) @(posedge clk);
+            repeat (10) @(posedge clk);
         end
     endtask
 
@@ -173,35 +173,35 @@ module tb_science_rate_selector;
         `TB_CHECK_EQ(captured_sample0[0], 64'h1000, "200MHz selector sample0")
 
         reset_case(2'd1);
-        drive_beats(16);
+        drive_beats(21);
         `TB_CHECK_EQ(out_count, 3, "100MHz selector output count")
-        `TB_CHECK_EQ(captured_sample0[0], 64'h1014, "100MHz anti-alias selector first sample0 includes FIR group delay")
-        `TB_CHECK_EQ(captured_sample0[1], 64'h101c, "100MHz anti-alias selector second sample0")
-        `TB_CHECK_EQ(captured_sample0[2], 64'h1024, "100MHz anti-alias selector third sample0")
+        `TB_CHECK_EQ(captured_sample0[0], 64'h103c, "160MS/s half-band selector first sample0")
+        `TB_CHECK_EQ(captured_sample0[1], 64'h1044, "160MS/s half-band selector second sample0")
+        `TB_CHECK_EQ(captured_sample0[2], 64'h104c, "160MS/s half-band selector third sample0")
         `TB_CHECK_EQ(aa100_active, 1'b1, "100MHz anti-alias active")
         `TB_CHECK_EQ(aa100_primed, 1'b1, "100MHz anti-alias primed")
-        `TB_CHECK_EQ(aa100_coeff_version, 32'haa10_0041, "100MHz anti-alias coefficient version")
+        `TB_CHECK_EQ(aa100_coeff_version, 32'haa16_0055, "160MS/s half-band coefficient version")
 
         reset_case(2'd1);
         @(negedge clk);
         m_axis_tready = 1'b0;
         s_axis_tvalid = 1'b1;
-        repeat (24) @(posedge clk);
+        repeat (32) @(posedge clk);
         #1;
         `TB_CHECK_EQ(s_axis_tready, 1'b0, "100MHz selector backpressures instead of dropping selected output beats")
-        `TB_CHECK(in_beat >= 12, "100MHz selector accepts enough input to prime FIR before backpressure")
+        `TB_CHECK(in_beat >= 16, "160MS/s selector accepts enough input to prime FIR before backpressure")
         `TB_CHECK(dropped_beat_count != 32'd0, "100MHz selector records attempted input during backpressure")
         stalled_in_beat = in_beat;
         repeat (3) @(posedge clk);
         `TB_CHECK_EQ(in_beat, stalled_in_beat, "100MHz selector holds input phase while stalled")
         @(negedge clk);
         m_axis_tready = 1'b1;
-        repeat (4) @(posedge clk);
+        repeat (12) @(posedge clk);
         @(negedge clk);
         s_axis_tvalid = 1'b0;
-        repeat (4) @(posedge clk);
-        `TB_CHECK_EQ(captured_sample0[0], 64'h1014, "100MHz stalled selector first sample0")
-        `TB_CHECK_EQ(captured_sample0[1], 64'h101c, "100MHz stalled selector preserves second sample0 after backpressure")
+        repeat (12) @(posedge clk);
+        `TB_CHECK_EQ(captured_sample0[0], 64'h103c, "160MS/s stalled selector first sample0")
+        `TB_CHECK_EQ(captured_sample0[1], 64'h1044, "160MS/s stalled selector preserves second sample0 after backpressure")
 
         reset_case(2'd0);
         m_axis_tready = 1'b1;

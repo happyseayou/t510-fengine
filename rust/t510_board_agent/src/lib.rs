@@ -248,7 +248,13 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
                 "scheduled_sync_prepare_arm_abort": true,
                 "full_dual_clock_pipeline_flush": true,
                 "streaming_data_path_health": true,
-                "automatic_stop": false,
+                "automatic_stop": true,
+                "external_reference_watchdog": {
+                    "enabled": true,
+                    "source": "LMK04828_SPI_PLL1_PLL2",
+                    "state_path": "/run/t510-stage32-ref-watchdog.json",
+                    "start_arm_fail_closed": true
+                },
                 "delay_schedule": false,
                 "maintenance_lease": false
             },
@@ -696,7 +702,7 @@ mod tests {
             bitstream_id: "test".into(),
             board_id: 1,
             profile: Profile {
-                bandwidth_mhz: 100,
+                bandwidth_mhz: 160,
                 mode,
                 center_mhz: 100.0,
             },
@@ -735,9 +741,11 @@ mod tests {
                     id: "test".into(),
                     path: bitstream,
                     sha256: sha,
-                    core_version: "0x00010030".into(),
+                    core_version: "0x00010032".into(),
+                    mts_adc_target_latency: Some(240),
+                    mts_dac_target_latency: Some(224),
                     profiles: vec![ProfileSpec {
-                        bandwidth_mhz: 100,
+                        bandwidth_mhz: 160,
                         modes: vec![
                             ProfileMode::TimeOnly,
                             ProfileMode::SpecOnly,
@@ -755,11 +763,11 @@ mod tests {
     #[test]
     fn validates_all_five_profiles_and_endpoint_shape() {
         for (bandwidth, mode) in [
-            (100, ProfileMode::TimeOnly),
-            (100, ProfileMode::SpecOnly),
-            (100, ProfileMode::TimeSpec),
-            (200, ProfileMode::TimeOnly),
-            (200, ProfileMode::SpecOnly),
+            (160, ProfileMode::TimeOnly),
+            (160, ProfileMode::SpecOnly),
+            (160, ProfileMode::TimeSpec),
+            (320, ProfileMode::TimeOnly),
+            (320, ProfileMode::SpecOnly),
         ] {
             let mut request = configure_request(mode);
             request.profile.bandwidth_mhz = bandwidth;
@@ -785,8 +793,17 @@ mod tests {
             "#!/bin/sh\nread input\nprintf '{\"ok\":true,\"result\":{}}\\n'\n",
             2,
         );
-        assert!(state.runtime.bitstream("test").is_some());
+        let resolved = state.runtime.bitstream("test").unwrap();
+        assert_eq!(resolved.helper.mts_adc_target_latency, Some(240));
+        assert_eq!(resolved.helper.mts_dac_target_latency, Some(224));
         assert!(state.runtime.bitstream("../../tmp/other.bit").is_none());
+        let mut missing_target = state.runtime.config.clone();
+        missing_target.bitstreams[0].mts_adc_target_latency = None;
+        assert!(
+            RuntimeConfig::validate(Path::new("/x").into(), missing_target, false)
+                .unwrap_err()
+                .contains("requires frozen non-negative ADC/DAC MTS target latencies")
+        );
         let mut config = state.runtime.config.clone();
         config.bitstreams[0].path = Path::new("relative.bit").to_path_buf();
         assert!(

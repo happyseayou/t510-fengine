@@ -60,6 +60,12 @@ def main() -> int:
         sub.add_parser(name)
     configure = sub.add_parser("configure")
     configure.add_argument("path")
+    configure.add_argument("--bandwidth-mhz", type=int, choices=(160, 320))
+    configure.add_argument(
+        "--mode",
+        choices=("time_only", "spec_only", "time_spec"),
+        help="override profile mode and derive endpoint enables from stream type",
+    )
     start = sub.add_parser("start")
     start.add_argument("--board-id", type=int, required=True)
     reset = sub.add_parser("reset")
@@ -79,11 +85,31 @@ def main() -> int:
     if args.command in simple_get:
         result = request(args.base_url, "GET", simple_get[args.command], timeout=15.0)
     elif args.command == "configure":
+        body = load_json(args.path)
+        profile = body.get("profile")
+        if not isinstance(profile, dict):
+            raise ValueError("configure body must contain a profile object")
+        if args.bandwidth_mhz is not None:
+            profile["bandwidth_mhz"] = args.bandwidth_mhz
+        if args.mode is not None:
+            profile["mode"] = args.mode
+            enabled_streams = {
+                "time_only": {"TIME"},
+                "spec_only": {"SPEC"},
+                "time_spec": {"TIME", "SPEC"},
+            }[args.mode]
+            endpoints = body.get("endpoints")
+            if not isinstance(endpoints, list):
+                raise ValueError("configure body must contain an endpoints array")
+            for endpoint in endpoints:
+                if not isinstance(endpoint, dict):
+                    raise ValueError("each endpoint must be an object")
+                endpoint["enabled"] = str(endpoint.get("stream", "")).upper() in enabled_streams
         result = request(
             args.base_url,
             "POST",
             "/api/v1/configure",
-            body=load_json(args.path),
+            body=body,
         )
     elif args.command in ("start", "reset"):
         result = request(

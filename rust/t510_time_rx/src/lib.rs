@@ -9,7 +9,8 @@ pub const SPEC_UDP_PAYLOAD_BYTES: usize = HEADER_BYTES + SPEC_PAYLOAD_BYTES;
 pub const TIME_NINPUT: usize = 8;
 pub const TIME_SUBSAMPLES_PER_BEAT: usize = 4;
 pub const TIME_WORD64_PER_BEAT: usize = 16;
-pub const RAW_SAMPLE_RATE_HZ: f64 = 245_760_000.0;
+// sample0 is always expressed on the Stage 32 RFDC complex-output timebase.
+pub const RAW_SAMPLE_RATE_HZ: f64 = 320_000_000.0;
 pub const STREAM_SPEC: u16 = 0;
 pub const STREAM_TIME: u16 = 1;
 pub const PAYLOAD_FORMAT_INT16_IQ: u16 = 0;
@@ -27,34 +28,30 @@ pub const SPEC_PFB_ACTIVE_FLAG: u32 = 1 << 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BandwidthMode {
-    Mhz20,
-    Mhz100,
-    Mhz200,
+    Msps160,
+    Msps320,
 }
 
 impl BandwidthMode {
     pub fn from_mhz(value: u32) -> Option<Self> {
         match value {
-            20 => Some(Self::Mhz20),
-            100 => Some(Self::Mhz100),
-            200 => Some(Self::Mhz200),
+            160 => Some(Self::Msps160),
+            320 => Some(Self::Msps320),
             _ => None,
         }
     }
 
     pub fn mhz(self) -> u32 {
         match self {
-            Self::Mhz20 => 20,
-            Self::Mhz100 => 100,
-            Self::Mhz200 => 200,
+            Self::Msps160 => 160,
+            Self::Msps320 => 320,
         }
     }
 
     pub fn decimation(self) -> u64 {
         match self {
-            Self::Mhz20 => 8,
-            Self::Mhz100 => 2,
-            Self::Mhz200 => 1,
+            Self::Msps160 => 2,
+            Self::Msps320 => 1,
         }
     }
 
@@ -85,7 +82,7 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            bandwidth_mhz: 100,
+            bandwidth_mhz: 160,
             output_mode: "time_spec".to_string(),
             center_mhz: 100.0,
             expected_mhz: 60.010,
@@ -104,7 +101,7 @@ impl Default for DisplayConfig {
 
 impl DisplayConfig {
     pub fn bandwidth_mode(&self) -> BandwidthMode {
-        BandwidthMode::from_mhz(self.bandwidth_mhz).unwrap_or(BandwidthMode::Mhz100)
+        BandwidthMode::from_mhz(self.bandwidth_mhz).unwrap_or(BandwidthMode::Msps160)
     }
 
     pub fn needs_time(&self) -> bool {
@@ -641,9 +638,8 @@ pub fn infer_bandwidth_from_sample0_delta(header: &T510Header, delta: u64) -> Op
         return None;
     }
     match delta / denom {
-        1 => Some(BandwidthMode::Mhz200),
-        2 => Some(BandwidthMode::Mhz100),
-        8 => Some(BandwidthMode::Mhz20),
+        1 => Some(BandwidthMode::Msps320),
+        2 => Some(BandwidthMode::Msps160),
         _ => None,
     }
 }
@@ -1051,7 +1047,7 @@ mod tests {
     fn decodes_payload_byte_offsets() {
         let payload = synthetic_payload(64, 12, 1000);
         let header = parse_t510_header(&payload).unwrap();
-        let ch3 = decode_channel_samples(&payload, &header, BandwidthMode::Mhz100, 3).unwrap();
+        let ch3 = decode_channel_samples(&payload, &header, BandwidthMode::Msps160, 3).unwrap();
         assert_eq!(ch3.len(), 256);
         assert_eq!(ch3[0], DecodedSample { sample_index: 1000, i: 3, q: -3 });
         assert_eq!(ch3[1], DecodedSample { sample_index: 1002, i: 13, q: -13 });
@@ -1062,10 +1058,9 @@ mod tests {
     fn detects_bandwidth_from_sample_delta() {
         let payload = synthetic_payload(64, 12, 1000);
         let header = parse_t510_header(&payload).unwrap();
-        assert_eq!(expected_sample0_delta(&header, BandwidthMode::Mhz200), 256);
-        assert_eq!(infer_bandwidth_from_sample0_delta(&header, 256), Some(BandwidthMode::Mhz200));
-        assert_eq!(infer_bandwidth_from_sample0_delta(&header, 512), Some(BandwidthMode::Mhz100));
-        assert_eq!(infer_bandwidth_from_sample0_delta(&header, 2048), Some(BandwidthMode::Mhz20));
+        assert_eq!(expected_sample0_delta(&header, BandwidthMode::Msps320), 256);
+        assert_eq!(infer_bandwidth_from_sample0_delta(&header, 256), Some(BandwidthMode::Msps320));
+        assert_eq!(infer_bandwidth_from_sample0_delta(&header, 512), Some(BandwidthMode::Msps160));
         assert_eq!(infer_bandwidth_from_sample0_delta(&header, 123), None);
     }
 
@@ -1073,16 +1068,16 @@ mod tests {
     fn detected_bandwidth_drives_preview_time_axis_when_available() {
         let payload = synthetic_payload(64, 12, 1000);
         let header = parse_t510_header(&payload).unwrap();
-        let ch0_200 = decode_channel_samples(&payload, &header, BandwidthMode::Mhz200, 0).unwrap();
-        let ch0_20 = decode_channel_samples(&payload, &header, BandwidthMode::Mhz20, 0).unwrap();
-        assert_eq!(ch0_200[1].sample_index - ch0_200[0].sample_index, 1);
-        assert_eq!(ch0_20[1].sample_index - ch0_20[0].sample_index, 8);
+        let ch0_320 = decode_channel_samples(&payload, &header, BandwidthMode::Msps320, 0).unwrap();
+        let ch0_160 = decode_channel_samples(&payload, &header, BandwidthMode::Msps160, 0).unwrap();
+        assert_eq!(ch0_320[1].sample_index - ch0_320[0].sample_index, 1);
+        assert_eq!(ch0_160[1].sample_index - ch0_160[0].sample_index, 2);
 
         let mut config = DisplayConfig::default();
-        config.bandwidth_mhz = 20;
-        let snapshot = build_waveform(&payload, &header, &config, Some(BandwidthMode::Mhz200), true).unwrap();
-        assert_eq!(snapshot.selected_bandwidth_mhz, 20);
-        assert_eq!(snapshot.detected_bandwidth_mhz, Some(200));
+        config.bandwidth_mhz = 160;
+        let snapshot = build_waveform(&payload, &header, &config, Some(BandwidthMode::Msps320), true).unwrap();
+        assert_eq!(snapshot.selected_bandwidth_mhz, 160);
+        assert_eq!(snapshot.detected_bandwidth_mhz, Some(320));
         assert_eq!(snapshot.decimation, 1);
         assert!(snapshot.gap_before);
     }

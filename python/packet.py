@@ -13,7 +13,7 @@ TIME_UDP_PAYLOAD_BYTES = HEADER_BYTES + TIME_PAYLOAD_BYTES
 TIME_NINPUT = 8
 TIME_SUBSAMPLES_PER_BEAT = 4
 TIME_WORD64_PER_BEAT = 16
-RAW_SAMPLE_RATE_HZ = 245_760_000.0
+RAW_SAMPLE_RATE_HZ = 320_000_000.0
 STRUCT_V1 = struct.Struct("<IHHHHHHQQQIIIHHHHIII")
 STRUCT_V2 = struct.Struct("<IHHHHHHQQQQIIHHHHIII")
 
@@ -39,9 +39,8 @@ ETH_TYPE_IPV4 = 0x0800
 IP_PROTO_UDP = 17
 
 TIME_BANDWIDTH_DECIMATION = {
-    200: 1,
-    100: 2,
-    20: 8,
+    320: 1,
+    160: 2,
 }
 
 
@@ -398,7 +397,7 @@ def normalize_time_bandwidth_mhz(bandwidth_mhz: int | float | str) -> int:
     except Exception as exc:
         raise ValueError(f"unsupported TIME bandwidth: {bandwidth_mhz!r}") from exc
     if value not in TIME_BANDWIDTH_DECIMATION:
-        raise ValueError("TIME bandwidth must be one of 20, 100, 200 MHz")
+        raise ValueError("Stage 32 TIME complex sample rate must be 160 or 320 MS/s")
     return value
 
 
@@ -439,7 +438,7 @@ def time_payload_complex_offset(*, beat: int, sub_sample: int, channel: int) -> 
 def decode_time_udp_payload_iq(
     udp_payload: bytes,
     *,
-    bandwidth_mhz: int | float | str = 200,
+    bandwidth_mhz: int | float | str = 320,
     channels: Iterable[int] | None = None,
 ) -> dict[str, object]:
     """Decode a T510 TIME UDP payload according to docs/time_udp_payload_v2.md.

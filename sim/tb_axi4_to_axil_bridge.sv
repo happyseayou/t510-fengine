@@ -531,7 +531,9 @@ module tb_axi4_to_axil_bridge;
         repeat (4) @(posedge clk);
 
         axi4_read_single(32'h8004_0000, rd);
-`ifdef T510_STAGE27J_PFB
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(rd, 32'h0001_0032, "version via AXI4 bridge Stage 32")
+`elsif T510_STAGE27J_PFB
         `TB_CHECK_EQ(rd, 32'h0001_002c, "version via AXI4 bridge Stage 27j PFB candidate")
 `elsif T510_STAGE27I_ANTI_ALIAS
         `TB_CHECK_EQ(rd, 32'h0001_002b, "version via AXI4 bridge anti-alias candidate")
@@ -551,7 +553,9 @@ module tb_axi4_to_axil_bridge;
         `TB_CHECK_EQ(rd, 32'h8004_00f0, "debug AR via AXI4 bridge")
 
         axi4_read_burst4(32'h8004_0000, b0, b1, b2, b3);
-`ifdef T510_STAGE27J_PFB
+`ifdef T510_STAGE32
+        `TB_CHECK_EQ(b0, 32'h0001_0032, "burst beat 0 version Stage 32")
+`elsif T510_STAGE27J_PFB
         `TB_CHECK_EQ(b0, 32'h0001_002c, "burst beat 0 version Stage 27j PFB candidate")
 `elsif T510_STAGE27I_ANTI_ALIAS
         `TB_CHECK_EQ(b0, 32'h0001_002b, "burst beat 0 version anti-alias candidate")
