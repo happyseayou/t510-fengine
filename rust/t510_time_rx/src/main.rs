@@ -4871,8 +4871,8 @@ mod tests {
         assert!(HTML.contains("RF frequency (MHz)"));
         assert!(HTML.contains("Stage29Math.rfForBin"));
         assert!(HTML.contains("Stage29Math.binForRf"));
-        assert!(STAGE29_MATH_JS.contains("-signedBin(index,bins)"));
-        assert!(STAGE29_MATH_JS.contains("Number(centerMhz)-Number(rfMhz)"));
+        assert!(STAGE29_MATH_JS.contains("+signedBin(index,bins)"));
+        assert!(STAGE29_MATH_JS.contains("Number(rfMhz)-Number(centerMhz)"));
 
         let center_mhz = 100.0_f64;
         let nchan = 4096.0_f64;
@@ -4887,8 +4887,9 @@ mod tests {
             assert!((left - (center_mhz - half_span_mhz)).abs() < 1.0e-9);
             assert!((width - bin_width_khz).abs() < 1.0e-9);
             let target_mhz = 60.0_f64;
-            let signed_bin = ((center_mhz - target_mhz) * 1.0e6 / (sample_rate_hz / nchan)).round();
-            let mapped_mhz = center_mhz - signed_bin * sample_rate_hz / nchan / 1.0e6;
+            let signed_bin =
+                ((target_mhz - center_mhz) * 1.0e6 / (sample_rate_hz / nchan)).round();
+            let mapped_mhz = center_mhz + signed_bin * sample_rate_hz / nchan / 1.0e6;
             assert!((mapped_mhz - target_mhz).abs() <= sample_rate_hz / nchan / 2.0 / 1.0e6);
             assert!((mapped_mhz - 140.0).abs() > 1.0);
         }

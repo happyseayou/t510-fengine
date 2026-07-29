@@ -10,17 +10,17 @@
     return Number(bandwidthMhz)===320?320000000:160000000;
   }
   function rfForBin(centerMhz,sampleRate,bins,index){
-    return Number(centerMhz)-signedBin(index,bins)*Number(sampleRate)/Number(bins)/1e6;
+    return Number(centerMhz)+signedBin(index,bins)*Number(sampleRate)/Number(bins)/1e6;
   }
   function binForRf(centerMhz,sampleRate,bins,rfMhz){
     const width=Number(sampleRate)/Number(bins);
-    const signed=Math.round((Number(centerMhz)-Number(rfMhz))*1e6/width);
+    const signed=Math.round((Number(rfMhz)-Number(centerMhz))*1e6/width);
     return((signed%bins)+bins)%bins;
   }
   function orderedBins(bins){
     const out=[];
     for(let display=0;display<bins;display++){
-      const signed=Math.floor(bins/2)-1-display;
+      const signed=display-Math.floor(bins/2);
       out.push(signed>=0?signed:bins+signed);
     }
     return out;

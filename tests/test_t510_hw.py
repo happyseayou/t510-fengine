@@ -279,11 +279,21 @@ class T510HelperTests(unittest.TestCase):
         self,
         record_active_bitstream_state,
     ) -> None:
+        body = configure_body()
+        body["profile"]["center_mhz"] = 170.0
         result = t510_hw._configure(
-            {"bitstream": self.proof, "request": configure_body()}
+            {"bitstream": self.proof, "request": body}
         )
         controller = FakeController.instances[-1]
         self.assertEqual(controller.prepared.board_id, 37)
+        self.assertEqual(controller.prepared.center_mhz, 170.0)
+        self.assertEqual(len(controller.prepared.dac_channels), 8)
+        self.assertTrue(
+            all(
+                channel.rf_frequency_mhz == 170.0
+                for channel in controller.prepared.dac_channels
+            )
+        )
         self.assertEqual(controller.prepared.mts_adc_target_latency, 240)
         self.assertEqual(controller.prepared.mts_dac_target_latency, 224)
         self.assertFalse(result["streaming"])

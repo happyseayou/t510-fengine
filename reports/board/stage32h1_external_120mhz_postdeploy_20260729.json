@@ -1,0 +1,64 @@
+{
+  "bin_width_hz": 39062.5,
+  "bins": 4096,
+  "captures": 5,
+  "center_mhz": 170.0,
+  "classification": "STAGE32H1_EXTERNAL_RF_AXIS_PASS",
+  "errors": [],
+  "expected_rf_mhz": 120.0,
+  "first_frame_id": 180396485,
+  "first_sample0": 96708027640,
+  "lanes": [
+    {
+      "bin_error": 0,
+      "expected_bin": 2816,
+      "expected_bin_power_db": 81.27615967337915,
+      "image_bin": 1280,
+      "image_power_db": 9.731278804104274,
+      "image_rejection_db": 71.54488086927488,
+      "image_rf_mhz": 220.0,
+      "lane": 0,
+      "peak_bin": 2816,
+      "peak_power_db": 81.27615967337915,
+      "peak_rf_mhz": 120.0
+    },
+    {
+      "bin_error": 0,
+      "expected_bin": 2816,
+      "expected_bin_power_db": 81.67850058639324,
+      "image_bin": 1280,
+      "image_power_db": 12.253092644688143,
+      "image_rejection_db": 69.4254079417051,
+      "image_rf_mhz": 220.0,
+      "lane": 1,
+      "peak_bin": 2816,
+      "peak_power_db": 81.67850058639324,
+      "peak_rf_mhz": 120.0
+    }
+  ],
+  "last_frame_id": 180464779,
+  "last_sample0": 96742991096,
+  "ok": true,
+  "receiver_counter_delta": {
+    "app_drops": 0,
+    "kernel_drops": 0,
+    "ring_drops": 0,
+    "spec_frame_gaps": 0,
+    "spec_seq_gaps": 0
+  },
+  "receiver_counters_after": {
+    "app_drops": 0,
+    "kernel_drops": 0,
+    "ring_drops": 0,
+    "spec_frame_gaps": 300,
+    "spec_seq_gaps": 300
+  },
+  "receiver_counters_before": {
+    "app_drops": 0,
+    "kernel_drops": 0,
+    "ring_drops": 0,
+    "spec_frame_gaps": 300,
+    "spec_seq_gaps": 300
+  },
+  "sample_rate_hz": 160000000
+}

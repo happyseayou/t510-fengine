@@ -745,6 +745,7 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
     bitstream = _bitstream(request)
     path = _verify_bitstream(bitstream, hash_file=True)
     _load_stage29()
+    assert DacChannelConfig is not None
     assert FlowDestination is not None
     assert Stage29Config is not None
     assert Stage29Controller is not None
@@ -771,10 +772,18 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
     )
     profile = body["profile"]
     source = body["source"]
+    center_mhz = float(profile["center_mhz"])
+    # CONFIGURE deliberately leaves the live DAC registers untouched
+    # (program_dac=False below).  Still give Stage29Config an in-band
+    # placeholder for validation: its historical 60.010 MHz default is
+    # outside a 160 MS/s profile centered at 170 MHz.
+    validation_dac_channels = tuple(
+        DacChannelConfig(rf_frequency_mhz=center_mhz) for _ in range(8)
+    )
     config = Stage29Config(
         bandwidth_mhz=int(profile["bandwidth_mhz"]),
         mode=profile["mode"],
-        center_mhz=float(profile["center_mhz"]),
+        center_mhz=center_mhz,
         board_id=int(body["board_id"]),
         mts_adc_target_latency=int(bitstream.get("mts_adc_target_latency", -1)),
         mts_dac_target_latency=int(bitstream.get("mts_dac_target_latency", -1)),
@@ -782,6 +791,7 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
         source_mac=source["mac"],
         time_destinations=time_destinations,
         spec_destinations=spec_destinations,
+        dac_channels=validation_dac_channels,
     )
     controller = Stage29Controller(path)
     started = time.monotonic()

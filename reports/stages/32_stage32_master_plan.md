@@ -2,6 +2,15 @@
 
 ## 当前结论
 
+2026-07-29 外部绝对RF输入发现Stage 32接收页面把复频率符号映射反向：
+center为170 MHz时，真实280 MHz输入被标为60 MHz，真实60 MHz输入被标为
+280 MHz。随后ADC0/ADC1的外部280 MHz实测分别取得约72.7/74.9 dB镜像抑制，
+证明ADC、PFB和UDP数据本身没有产生此前DAC自环中的强镜像；DAC直接接频谱仪则
+确认梳状杂散真实存在于DAC侧。Stage 32h因此从`PASS`重新置为`IN_PROGRESS`，
+新增依赖链`32h1 -> 32h2 -> 32h3`，分别闭合接收频率轴、DAC DDS复数方向和
+DAC频谱纯度。既有吞吐、切换、故障恢复和长稳证据继续有效，但在三个新增步骤
+全部取得证据前不再声明Stage 32单板release闭合。
+
 Stage 32 已正式进入实施阶段。`32a` 的 LMK 离线集成已经 `PASS`；`32b` 已完成
 10次Stage 32 LMK reload、双PLL锁定和寄存器回读，在“当前无法物理接触板卡”的
 约束下按远程功能门禁判定为 `PASS`。`32c` 已完成Stage 32 bitstream的BD、综合、
@@ -85,13 +94,17 @@ Stage 32总体保持`IN_PROGRESS / BLOCKED_BY_HARDWARE`，不能用单板重复�
 | 32e | `PASS` | 160 MS/s、80 dB half-band、TIME | `32e_160msps_halfband80_time.md` |
 | 32f | `PASS` | 160 MS/s SPEC_ONLY/TIME_SPEC | `32f_160msps_spec_dual.md` |
 | 32g | `PASS` | 320 MS/s SPEC_ONLY | `32g_320msps_spec_only.md` |
-| 32h | `PASS` | 单板产品矩阵和长稳 | `32h_single_board_release_soak.md` |
+| 32h | `IN_PROGRESS` | 单板产品矩阵、频率真值和长稳 | `32h_single_board_release_soak.md` |
+| 32h1 | `IN_PROGRESS` | 外部绝对RF频率轴 | `32h1_external_rf_frequency_axis.md` |
+| 32h2 | `NOT_STARTED` | DAC DDS复数方向与新bitstream | `32h2_dac_dds_iq_direction.md` |
+| 32h3 | `NOT_STARTED` | DAC频谱仪纯度门禁 | `32h3_dac_spectral_purity.md` |
 | 32i | `BLOCKED` | 双板共同输入物理闭合 | `32i_multiboard_physical_closure.md` |
 
 ## 依赖和放行规则
 
 ```text
-32a -> 32b -> 32c -> 32d -> 32e -> 32f -> 32g -> 32h -> 32i
+32a -> 32b -> 32c -> 32d -> 32e -> 32f -> 32g
+     -> 32h既有门禁 -> 32h1 -> 32h2 -> 32h3 -> 32i
 ```
 
 - 失败的时钟门禁不得通过修改数据面绕过。
