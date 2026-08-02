@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot PYNQ bridge for the stateless Stage 30/31 Rust Board Agent.
+"""One-shot PYNQ bridge for the stateless Stage 33 Rust Board Agent.
 
 The request is one JSON object on stdin. Exactly one JSON object is emitted on
 stdout; incidental PYNQ output is redirected to stderr.
@@ -19,19 +19,21 @@ import traceback
 from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from python.stage29 import (
+    from python.t510_control import (
         DacChannelConfig,
         FlowDestination,
-        Stage29Config,
-        Stage29Controller,
+        RfdcCenterConflict,
+        FEngineConfig,
+        FEngineController,
     )
 else:
-    # Importing stage29 imports PYNQ. Keep that import behind the PL-state guard:
+    # Importing t510_control imports PYNQ. Keep that import behind the PL-state guard:
     # on a cold boot even importing PYNQ can wait on platform initialization.
     DacChannelConfig = None
     FlowDestination = None
-    Stage29Config = None
-    Stage29Controller = None
+    RfdcCenterConflict = None
+    FEngineConfig = None
+    FEngineController = None
 
 
 EXIT_INVALID = 2
@@ -41,12 +43,10 @@ EXIT_BITSTREAM_PROOF = 5
 EXIT_INTERNAL = 6
 
 FPGA_MANAGER_STATE_PATH = Path("/sys/class/fpga_manager/fpga0/state")
-STAGE32_MTS_STATE_PATH = Path("/run/t510-stage32-mts.json")
-STAGE32_REFERENCE_WATCHDOG_STATE_PATH = Path(
-    "/run/t510-stage32-ref-watchdog.json"
-)
-STAGE32_CONFIGURE_LOCK_PATH = Path("/run/t510-stage32-configure.lock")
-STAGE32_REFERENCE_WATCHDOG_MAX_AGE_MS = 1_500
+MTS_STATE_PATH = Path("/run/t510-mts.json")
+REFERENCE_WATCHDOG_STATE_PATH = Path("/run/t510-ref-watchdog.json")
+CONFIGURE_LOCK_PATH = Path("/run/t510-configure.lock")
+REFERENCE_WATCHDOG_MAX_AGE_MS = 1_500
 
 
 class HelperError(RuntimeError):
@@ -66,7 +66,7 @@ def _configure_hardware_guard(enabled: bool):
         yield
         return
     descriptor = os.open(
-        STAGE32_CONFIGURE_LOCK_PATH,
+        CONFIGURE_LOCK_PATH,
         os.O_CREAT | os.O_RDWR | os.O_CLOEXEC,
         0o644,
     )
@@ -78,30 +78,33 @@ def _configure_hardware_guard(enabled: bool):
         os.close(descriptor)
 
 
-def _load_stage29() -> None:
-    global DacChannelConfig, FlowDestination, Stage29Config, Stage29Controller
+def _load_control() -> None:
+    global DacChannelConfig, FlowDestination, RfdcCenterConflict, FEngineConfig, FEngineController
 
     if all(
         value is not None
         for value in (
             DacChannelConfig,
             FlowDestination,
-            Stage29Config,
-            Stage29Controller,
+            RfdcCenterConflict,
+            FEngineConfig,
+            FEngineController,
         )
     ):
         return
 
-    from python import stage29
+    from python import t510_control
 
     if DacChannelConfig is None:
-        DacChannelConfig = stage29.DacChannelConfig
+        DacChannelConfig = t510_control.DacChannelConfig
     if FlowDestination is None:
-        FlowDestination = stage29.FlowDestination
-    if Stage29Config is None:
-        Stage29Config = stage29.Stage29Config
-    if Stage29Controller is None:
-        Stage29Controller = stage29.Stage29Controller
+        FlowDestination = t510_control.FlowDestination
+    if RfdcCenterConflict is None:
+        RfdcCenterConflict = t510_control.RfdcCenterConflict
+    if FEngineConfig is None:
+        FEngineConfig = t510_control.FEngineConfig
+    if FEngineController is None:
+        FEngineController = t510_control.FEngineController
 
 
 def _read_request() -> dict[str, Any]:
@@ -302,7 +305,7 @@ def _require_active_bitstream(bitstream: dict[str, Any], path: Path) -> None:
     if state != "operating":
         raise HelperError(
             "PL_NOT_CONFIGURED",
-            "the PL is not configured; call POST /api/v1/configure before any hardware API",
+            "the PL is not configured; call POST /api/v2/configure before any hardware API",
             exit_code=EXIT_STATE_CONFLICT,
             details={
                 "fpga_manager_state": state,
@@ -314,7 +317,7 @@ def _require_active_bitstream(bitstream: dict[str, Any], path: Path) -> None:
     if active is None:
         raise HelperError(
             "PL_NOT_CONFIGURED",
-            "PYNQ has no active bitstream for this boot; call POST /api/v1/configure",
+            "PYNQ has no active bitstream for this boot; call POST /api/v2/configure",
             exit_code=EXIT_STATE_CONFLICT,
             details={
                 "fpga_manager_state": state,
@@ -377,14 +380,14 @@ def _verify_bitstream(value: dict[str, Any], *, hash_file: bool) -> Path:
     return path
 
 
-def _controller(request: dict[str, Any], *, download: bool = False) -> Stage29Controller:
+def _controller(request: dict[str, Any], *, download: bool = False) -> FEngineController:
     bitstream = _bitstream(request)
     path = _verify_bitstream(bitstream, hash_file=download)
     if not download:
         _require_active_bitstream(bitstream, path)
-    _load_stage29()
-    assert Stage29Controller is not None
-    controller = Stage29Controller(path)
+    _load_control()
+    assert FEngineController is not None
+    controller = FEngineController(path)
     controller.connect(download=download)
     expected = int(str(bitstream["core_version"]), 0)
     status = controller.require_core().read_status()
@@ -398,7 +401,7 @@ def _controller(request: dict[str, Any], *, download: bool = False) -> Stage29Co
     return controller
 
 
-def _expected_board(controller: Stage29Controller, body: dict[str, Any]) -> int:
+def _expected_board(controller: FEngineController, body: dict[str, Any]) -> int:
     expected = int(body["expected_board_id"])
     actual = int(controller.require_core().read_status().get("board_id", -1))
     if actual != expected:
@@ -412,12 +415,12 @@ def _expected_board(controller: Stage29Controller, body: dict[str, Any]) -> int:
 
 
 def _profile_name(status: dict[str, Any]) -> dict[str, Any]:
-    bandwidth_code = int(status.get("science_bandwidth_mode", 0))
+    sample_rate_code = int(status.get("science_sample_rate_mode", 0))
     output_code = int(status.get("science_output_mode", 0))
     output_name = str(status.get("science_output_mode_name", "")).strip().lower()
     return {
-        "bandwidth_mhz": int(
-            status.get("science_bandwidth_mhz", {1: 160, 2: 320}.get(bandwidth_code, 0))
+        "sample_rate_msps": int(
+            status.get("science_sample_rate_msps", {1: 160, 2: 320}.get(sample_rate_code, 0))
         )
         or None,
         "mode": {
@@ -425,7 +428,7 @@ def _profile_name(status: dict[str, Any]) -> dict[str, Any]:
             "spec_only": "spec_only",
             "time_spec": "time_spec",
         }.get(output_name, {1: "time_only", 2: "spec_only", 3: "time_spec"}.get(output_code, "unknown")),
-        "bandwidth_code": bandwidth_code,
+        "sample_rate_code": sample_rate_code,
         "output_mode_code": output_code,
     }
 
@@ -468,13 +471,13 @@ def _mts_summary(core: Any, *, core_version: str) -> dict[str, Any]:
 
 
 def _persist_mts_summary(summary: dict[str, Any]) -> None:
-    temporary = STAGE32_MTS_STATE_PATH.with_suffix(".tmp")
+    temporary = MTS_STATE_PATH.with_suffix(".tmp")
     try:
         temporary.write_text(
             json.dumps(summary, sort_keys=True, separators=(",", ":")) + "\n",
             encoding="utf-8",
         )
-        temporary.replace(STAGE32_MTS_STATE_PATH)
+        temporary.replace(MTS_STATE_PATH)
     except OSError:
         # The configure response still carries the live result.  A read-only
         # /run only makes later one-shot status calls report unavailable.
@@ -486,7 +489,7 @@ def _persist_mts_summary(summary: dict[str, Any]) -> None:
 
 def _load_mts_summary(*, core_version: str) -> dict[str, Any] | None:
     try:
-        value = json.loads(STAGE32_MTS_STATE_PATH.read_text(encoding="utf-8"))
+        value = json.loads(MTS_STATE_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(value, dict) or value.get("core_version") != core_version:
@@ -498,7 +501,7 @@ def _reference_watchdog_status() -> dict[str, Any]:
     captured_at = time.time_ns() // 1_000_000
     try:
         value = json.loads(
-            STAGE32_REFERENCE_WATCHDOG_STATE_PATH.read_text(encoding="utf-8")
+            REFERENCE_WATCHDOG_STATE_PATH.read_text(encoding="utf-8")
         )
     except (OSError, json.JSONDecodeError) as exc:
         return {
@@ -506,7 +509,7 @@ def _reference_watchdog_status() -> dict[str, Any]:
             "healthy": False,
             "stale": True,
             "error": f"{type(exc).__name__}: {exc}",
-            "path": str(STAGE32_REFERENCE_WATCHDOG_STATE_PATH),
+            "path": str(REFERENCE_WATCHDOG_STATE_PATH),
         }
     if not isinstance(value, dict):
         return {
@@ -514,18 +517,18 @@ def _reference_watchdog_status() -> dict[str, Any]:
             "healthy": False,
             "stale": True,
             "error": "watchdog state is not a JSON object",
-            "path": str(STAGE32_REFERENCE_WATCHDOG_STATE_PATH),
+            "path": str(REFERENCE_WATCHDOG_STATE_PATH),
         }
     updated_at = int(value.get("updated_at_unix_ms", 0))
     age_ms = max(captured_at - updated_at, 0) if updated_at > 0 else None
-    stale = age_ms is None or age_ms > STAGE32_REFERENCE_WATCHDOG_MAX_AGE_MS
+    stale = age_ms is None or age_ms > REFERENCE_WATCHDOG_MAX_AGE_MS
     return {
         **value,
         "available": True,
         "age_ms": age_ms,
         "stale": stale,
         "healthy": bool(value.get("healthy", False)) and not stale,
-        "path": str(STAGE32_REFERENCE_WATCHDOG_STATE_PATH),
+        "path": str(REFERENCE_WATCHDOG_STATE_PATH),
     }
 
 
@@ -568,7 +571,7 @@ def _require_reference_watchdog_ready(bitstream: dict[str, Any]) -> dict[str, An
     return watchdog
 
 
-def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
+def _status_snapshot(controller: FEngineController) -> dict[str, Any]:
     core = controller.require_core()
     status = core.read_status()
     core_version = f"0x{int(status.get('core_version', 0)):08x}"
@@ -593,6 +596,17 @@ def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
         else None
     )
     mixers = core.read_rfdc_mixer_frequencies()
+    try:
+        rfdc_contract = (
+            core.read_rfdc_contract(require=False)
+            if hasattr(core, "read_rfdc_contract")
+            else {"ok": False, "errors": ["Stage 33 RFDC contract readback unavailable"]}
+        )
+    except Exception as exc:
+        rfdc_contract = {
+            "ok": False,
+            "errors": [f"{type(exc).__name__}: {exc}"],
+        }
     dac_centers = [
         float(item["frequency_mhz"])
         for item in mixers.get("mixers", [])
@@ -615,13 +629,14 @@ def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
         "core_version": core_version,
         "board_id": int(status.get("board_id", 0)),
         "streaming": streaming,
+        "error_flags": int(status.get("error_flags", 0)),
         "profile": {
             **_profile_name(status),
             "center_mhz": center_mhz,
             "aa100_active": bool(status.get("science_antialias_100m_active", 0)),
             "display_name": (
                 "160 MS/s（约128 MHz可用科学带宽）"
-                if int(status.get("science_bandwidth_mhz", 160)) == 160
+                if int(status.get("science_sample_rate_msps", 160)) == 160
                 else "320 MS/s（约256 MHz可用科学带宽）"
             ),
         },
@@ -634,6 +649,26 @@ def _status_snapshot(controller: Stage29Controller) -> dict[str, Any]:
             "pll2_lock": int(clock.get("pll2_lock", 0)),
             "configured": bool(clock.get("configured", False)),
             "errors": clock.get("errors", []),
+        },
+        "rfdc": {
+            "adc_analog_sample_rate_hz": int(
+                status.get("rfdc_adc_analog_sample_rate_hz", 3_840_000_000)
+            ),
+            "dac_analog_sample_rate_hz": int(
+                status.get("rfdc_dac_analog_sample_rate_hz", 3_840_000_000)
+            ),
+            "complex_sample_rate_hz": int(
+                status.get("rfdc_complex_sample_rate_hz", 320_000_000)
+            ),
+            "adc_decimation": int(status.get("rfdc_adc_decimation", 12)),
+            "dac_interpolation": int(status.get("rfdc_dac_interpolation", 12)),
+            "adc_axis_rate_hz": int(status.get("rfdc_adc_axis_rate_hz", 80_000_000)),
+            "dac_axis_rate_hz": int(status.get("rfdc_dac_axis_rate_hz", 80_000_000)),
+            "active_mask": int(status.get("rfdc_active_mask", 0)),
+            "current_valid_mask": int(status.get("rfdc_current_valid_mask", 0)),
+            "seen_valid_mask": int(status.get("rfdc_seen_valid_mask", 0)),
+            "status_flags": int(status.get("rfdc_status_flags", 0)),
+            "readback": rfdc_contract,
         },
         "mts": mts,
         "halfband": {
@@ -744,11 +779,11 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
     body = _body(request)
     bitstream = _bitstream(request)
     path = _verify_bitstream(bitstream, hash_file=True)
-    _load_stage29()
+    _load_control()
     assert DacChannelConfig is not None
     assert FlowDestination is not None
-    assert Stage29Config is not None
-    assert Stage29Controller is not None
+    assert FEngineConfig is not None
+    assert FEngineController is not None
     endpoints = sorted(body["endpoints"], key=lambda item: int(item["endpoint_id"]))
     time_destinations = tuple(
         FlowDestination(
@@ -774,14 +809,13 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
     source = body["source"]
     center_mhz = float(profile["center_mhz"])
     # CONFIGURE deliberately leaves the live DAC registers untouched
-    # (program_dac=False below).  Still give Stage29Config an in-band
-    # placeholder for validation: its historical 60.010 MHz default is
-    # outside a 160 MS/s profile centered at 170 MHz.
+    # (program_dac=False below).  Still give FEngineConfig an in-band
+    # placeholder for validation. The DAC bank itself remains untouched.
     validation_dac_channels = tuple(
         DacChannelConfig(rf_frequency_mhz=center_mhz) for _ in range(8)
     )
-    config = Stage29Config(
-        bandwidth_mhz=int(profile["bandwidth_mhz"]),
+    config = FEngineConfig(
+        sample_rate_msps=int(profile["sample_rate_msps"]),
         mode=profile["mode"],
         center_mhz=center_mhz,
         board_id=int(body["board_id"]),
@@ -793,7 +827,7 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
         spec_destinations=spec_destinations,
         dac_channels=validation_dac_channels,
     )
-    controller = Stage29Controller(path)
+    controller = FEngineController(path)
     started = time.monotonic()
     applied = controller.prepare(config, fresh_download=True, program_dac=False)
     _record_active_bitstream_state(path)
@@ -916,7 +950,20 @@ def _set_dac(request: dict[str, Any]) -> dict[str, Any]:
         )
         for item in sorted(body["channels"], key=lambda item: int(item["channel"]))
     )
-    result = controller.apply_dac_live(channels, center_mhz=float(body["center_mhz"]))
+    try:
+        result = controller.apply_dac_live(channels, center_mhz=float(body["center_mhz"]))
+    except Exception as exc:
+        if RfdcCenterConflict is not None and isinstance(exc, RfdcCenterConflict):
+            raise HelperError(
+                "RFDC_CENTER_CONFLICT",
+                str(exc),
+                exit_code=EXIT_STATE_CONFLICT,
+                details={
+                    "requested_center_mhz": exc.requested_mhz,
+                    "actual_center_mhz": exc.actual_mhz,
+                },
+            ) from exc
+        raise
     return {"updated": True, **result}
 
 

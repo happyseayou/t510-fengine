@@ -222,12 +222,6 @@ module t510_fengine_board_top (
     wire [255:0] adc_preview_tdata3;
     wire [63:0]  adc_preview_sample0;
     wire         adc_preview_tvalid;
-    wire [255:0] adc_raw_preview_tdata0;
-    wire [255:0] adc_raw_preview_tdata1;
-    wire [255:0] adc_raw_preview_tdata2;
-    wire [255:0] adc_raw_preview_tdata3;
-    wire [63:0]  adc_raw_preview_sample0;
-    wire         adc_raw_preview_tvalid;
     wire         all_adc_valid;
     wire [63:0]  rfdc_sample_count;
     wire [31:0]  rfdc_dropped_count;
@@ -323,44 +317,6 @@ module t510_fengine_board_top (
     wire [255:0] core_dac_tone_phase_inject_vec;
     wire [15:0]  core_dac_tone_mode_vec;
     wire [31:0]  core_dac_phase_epoch;
-    wire         core_diag_adc_force_zero;
-    wire         core_diag_adc_force_hold;
-    wire [7:0]  core_diag_adc_channel_mask;
-    wire         core_diag_dac_gate;
-    wire         core_dac_tx_witness_arm_pulse;
-    wire         core_dac_tx_witness_clear_pulse;
-    wire [8:0]   core_dac_tx_witness_capture_words;
-    wire [9:0]   core_dac_tx_witness_rd_word;
-    wire [31:0]  dac_audit_phase_epoch_seen_raw;
-    wire [31:0]  dac_audit_ch0_phase_acc_raw;
-    wire [31:0]  dac_audit_ch0_phase_step_raw;
-    wire [31:0]  dac_audit_ch0_phase0_raw;
-    wire [31:0]  dac_audit_ch0_mode_raw;
-    wire         dac_tx_witness_armed_ctrl;
-    wire         dac_tx_witness_valid_ctrl;
-    wire         dac_tx_witness_capturing_ctrl;
-    wire         dac_tx_witness_overflow_ctrl;
-    wire         dac_tx_witness_tvalid_seen_ctrl;
-    wire         dac_tx_witness_tready_seen_ctrl;
-    wire         dac_tx_witness_ready_gap_seen_ctrl;
-    wire [8:0]   dac_tx_witness_word_count_ctrl;
-    wire [31:0]  dac_tx_witness_phase_epoch_ctrl;
-    wire [31:0]  dac_tx_witness_phase_acc_ctrl;
-    wire [31:0]  dac_tx_witness_phase_step_ctrl;
-    wire [31:0]  dac_tx_witness_phase0_ctrl;
-    wire [31:0]  dac_tx_witness_mode_ctrl;
-    wire [31:0]  dac_tx_witness_ready_gap_count_ctrl;
-    wire [31:0]  dac_tx_witness_rd_data_ctrl;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_phase_epoch_seen_meta = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_phase_epoch_seen_sync = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_ch0_phase_acc_meta = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_ch0_phase_acc_sync = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_ch0_phase_step_meta = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_ch0_phase_step_sync = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_ch0_phase0_meta = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_ch0_phase0_sync = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_ch0_mode_meta = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic [31:0] dac_audit_ch0_mode_sync = 32'd0;
     (* ASYNC_REG = "TRUE" *) logic [7:0]   dac_enable_mask_meta = 8'hff;
     (* ASYNC_REG = "TRUE" *) logic [7:0]   dac_enable_mask_sync = 8'hff;
     (* ASYNC_REG = "TRUE" *) logic [127:0] dac_tone_amplitude_vec_meta = {8{16'd2048}};
@@ -375,16 +331,7 @@ module t510_fengine_board_top (
     (* ASYNC_REG = "TRUE" *) logic [15:0]  dac_tone_mode_vec_sync = 16'd0;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  dac_phase_epoch_meta = 32'd0;
     (* ASYNC_REG = "TRUE" *) logic [31:0]  dac_phase_epoch_sync = 32'd0;
-    (* ASYNC_REG = "TRUE" *) logic         diag_adc_force_zero_meta = 1'b0;
-    (* ASYNC_REG = "TRUE" *) logic         diag_adc_force_zero_sync = 1'b0;
-    (* ASYNC_REG = "TRUE" *) logic         diag_adc_force_hold_meta = 1'b0;
-    (* ASYNC_REG = "TRUE" *) logic         diag_adc_force_hold_sync = 1'b0;
-    (* ASYNC_REG = "TRUE" *) logic [7:0]   diag_adc_channel_mask_meta = 8'hff;
-    (* ASYNC_REG = "TRUE" *) logic [7:0]   diag_adc_channel_mask_sync = 8'hff;
-    (* ASYNC_REG = "TRUE" *) logic         diag_dac_gate_meta = 1'b0;
-    (* ASYNC_REG = "TRUE" *) logic         diag_dac_gate_sync = 1'b0;
 
-`ifdef T510_STAGE32
     // Do not use an exact one-second timeout here.  The external PPS and the
     // 80 MHz ADC AXIS clock have finite phase/frequency tolerance, so an exact
     // 80,000,000-cycle limit can deassert pps_recent briefly just before a
@@ -394,10 +341,6 @@ module t510_fengine_board_top (
     // one expected PPS is missed, while tolerating normal edge wander.
     localparam [27:0] PPS_RECENT_TIMEOUT_CYCLES = 28'd100_000_000;
     localparam [23:0] PPS_BLINK_CYCLES          = 24'd4_000_000;
-`else
-    localparam [27:0] PPS_RECENT_TIMEOUT_CYCLES = 28'd122_880_000;
-    localparam [23:0] PPS_BLINK_CYCLES          = 24'd6_144_000;
-`endif
 
     logic [27:0] heartbeat = 28'd0;
     logic [1:0]  pps_sync = 2'b00;
@@ -454,8 +397,6 @@ module t510_fengine_board_top (
     assign qsfp0_resetl   = 1'b1;
     assign qsfp0_lpmode   = 1'b0;
     assign qsfp0_modsell  = 1'b0;
-    wire [7:0] dac_loopback_enable_mask = diag_dac_gate_sync ? 8'h00 : dac_enable_mask_sync;
-    wire [127:0] dac_loopback_amplitude_vec = diag_dac_gate_sync ? 128'd0 : dac_tone_amplitude_vec_sync;
 
     always_ff @(posedge adc_m_axis_clk or negedge data_rst_n) begin
         if (!data_rst_n) begin
@@ -510,8 +451,6 @@ module t510_fengine_board_top (
             dac_tone_mode_vec_sync <= 16'd0;
             dac_phase_epoch_meta <= 32'd0;
             dac_phase_epoch_sync <= 32'd0;
-            diag_dac_gate_meta <= 1'b0;
-            diag_dac_gate_sync <= 1'b0;
         end else begin
             dac_enable_mask_meta <= core_dac_enable_mask;
             dac_enable_mask_sync <= dac_enable_mask_meta;
@@ -527,52 +466,6 @@ module t510_fengine_board_top (
             dac_tone_mode_vec_sync <= dac_tone_mode_vec_meta;
             dac_phase_epoch_meta <= core_dac_phase_epoch;
             dac_phase_epoch_sync <= dac_phase_epoch_meta;
-            diag_dac_gate_meta <= core_diag_dac_gate;
-            diag_dac_gate_sync <= diag_dac_gate_meta;
-        end
-    end
-
-    always_ff @(posedge adc_m_axis_clk or negedge data_rst_n) begin
-        if (!data_rst_n) begin
-            diag_adc_force_zero_meta <= 1'b0;
-            diag_adc_force_zero_sync <= 1'b0;
-            diag_adc_force_hold_meta <= 1'b0;
-            diag_adc_force_hold_sync <= 1'b0;
-            diag_adc_channel_mask_meta <= 8'hff;
-            diag_adc_channel_mask_sync <= 8'hff;
-        end else begin
-            diag_adc_force_zero_meta <= core_diag_adc_force_zero;
-            diag_adc_force_zero_sync <= diag_adc_force_zero_meta;
-            diag_adc_force_hold_meta <= core_diag_adc_force_hold;
-            diag_adc_force_hold_sync <= diag_adc_force_hold_meta;
-            diag_adc_channel_mask_meta <= core_diag_adc_channel_mask;
-            diag_adc_channel_mask_sync <= diag_adc_channel_mask_meta;
-        end
-    end
-
-    always_ff @(posedge ctrl_clk or negedge ctrl_rst_n) begin
-        if (!ctrl_rst_n) begin
-            dac_audit_phase_epoch_seen_meta <= 32'd0;
-            dac_audit_phase_epoch_seen_sync <= 32'd0;
-            dac_audit_ch0_phase_acc_meta <= 32'd0;
-            dac_audit_ch0_phase_acc_sync <= 32'd0;
-            dac_audit_ch0_phase_step_meta <= 32'd0;
-            dac_audit_ch0_phase_step_sync <= 32'd0;
-            dac_audit_ch0_phase0_meta <= 32'd0;
-            dac_audit_ch0_phase0_sync <= 32'd0;
-            dac_audit_ch0_mode_meta <= 32'd0;
-            dac_audit_ch0_mode_sync <= 32'd0;
-        end else begin
-            dac_audit_phase_epoch_seen_meta <= dac_audit_phase_epoch_seen_raw;
-            dac_audit_phase_epoch_seen_sync <= dac_audit_phase_epoch_seen_meta;
-            dac_audit_ch0_phase_acc_meta <= dac_audit_ch0_phase_acc_raw;
-            dac_audit_ch0_phase_acc_sync <= dac_audit_ch0_phase_acc_meta;
-            dac_audit_ch0_phase_step_meta <= dac_audit_ch0_phase_step_raw;
-            dac_audit_ch0_phase_step_sync <= dac_audit_ch0_phase_step_meta;
-            dac_audit_ch0_phase0_meta <= dac_audit_ch0_phase0_raw;
-            dac_audit_ch0_phase0_sync <= dac_audit_ch0_phase0_meta;
-            dac_audit_ch0_mode_meta <= dac_audit_ch0_mode_raw;
-            dac_audit_ch0_mode_sync <= dac_audit_ch0_mode_meta;
         end
     end
 
@@ -785,8 +678,8 @@ module t510_fengine_board_top (
     t510_dac_loopback_source u_dac_loopback_source (
         .clk(dac_s_axis_clk),
         .rst_n(data_rst_n),
-        .tone_enable_mask(dac_loopback_enable_mask),
-        .tone_amplitude_vec(dac_loopback_amplitude_vec),
+        .tone_enable_mask(dac_enable_mask_sync),
+        .tone_amplitude_vec(dac_tone_amplitude_vec_sync),
         .tone_phase_step_vec(dac_tone_phase_step_vec_sync),
         .tone_phase0_vec(dac_tone_phase0_vec_sync),
         .tone_phase_inject_vec(dac_tone_phase_inject_vec_sync),
@@ -816,68 +709,9 @@ module t510_fengine_board_top (
         .s32_axis_tdata(s32_axis_tdata),
         .s32_axis_tready(s32_axis_tready),
         .s32_axis_tvalid(s32_axis_tvalid),
-        .all_dac_ready(all_dac_ready),
-        .audit_phase_epoch_seen(dac_audit_phase_epoch_seen_raw),
-        .audit_ch0_phase_acc(dac_audit_ch0_phase_acc_raw),
-        .audit_ch0_phase_step(dac_audit_ch0_phase_step_raw),
-        .audit_ch0_phase0(dac_audit_ch0_phase0_raw),
-        .audit_ch0_mode(dac_audit_ch0_mode_raw)
+        .all_dac_ready(all_dac_ready)
     );
 
-`ifdef T510_STAGE27H_PRODUCTION_ONLY
-    assign dac_tx_witness_rd_data_ctrl = 32'd0;
-    assign dac_tx_witness_armed_ctrl = 1'b0;
-    assign dac_tx_witness_valid_ctrl = 1'b0;
-    assign dac_tx_witness_capturing_ctrl = 1'b0;
-    assign dac_tx_witness_overflow_ctrl = 1'b0;
-    assign dac_tx_witness_tvalid_seen_ctrl = 1'b0;
-    assign dac_tx_witness_tready_seen_ctrl = 1'b0;
-    assign dac_tx_witness_ready_gap_seen_ctrl = 1'b0;
-    assign dac_tx_witness_word_count_ctrl = 9'd0;
-    assign dac_tx_witness_phase_epoch_ctrl = 32'd0;
-    assign dac_tx_witness_phase_acc_ctrl = 32'd0;
-    assign dac_tx_witness_phase_step_ctrl = 32'd0;
-    assign dac_tx_witness_phase0_ctrl = 32'd0;
-    assign dac_tx_witness_mode_ctrl = 32'd0;
-    assign dac_tx_witness_ready_gap_count_ctrl = 32'd0;
-`else
-    dac_tx_witness_capture #(
-        .DATA_W(128),
-        .CAPTURE_WORDS(256)
-    ) u_dac_tx_witness_capture (
-        .clk(dac_s_axis_clk),
-        .rst_n(data_rst_n),
-        .ctrl_clk(ctrl_clk),
-        .ctrl_rst_n(ctrl_rst_n),
-        .arm_pulse_ctrl(core_dac_tx_witness_arm_pulse),
-        .clear_pulse_ctrl(core_dac_tx_witness_clear_pulse),
-        .capture_words_ctrl(core_dac_tx_witness_capture_words),
-        .s_axis_tdata(s00_axis_tdata),
-        .s_axis_tvalid(s00_axis_tvalid),
-        .s_axis_tready(s00_axis_tready),
-        .phase_epoch(dac_audit_phase_epoch_seen_raw),
-        .phase_acc(dac_audit_ch0_phase_acc_raw),
-        .phase_step(dac_audit_ch0_phase_step_raw),
-        .phase0(dac_audit_ch0_phase0_raw),
-        .mode(dac_audit_ch0_mode_raw),
-        .ctrl_rd_word(core_dac_tx_witness_rd_word),
-        .ctrl_rd_data(dac_tx_witness_rd_data_ctrl),
-        .ctrl_armed(dac_tx_witness_armed_ctrl),
-        .ctrl_valid(dac_tx_witness_valid_ctrl),
-        .ctrl_capturing(dac_tx_witness_capturing_ctrl),
-        .ctrl_overflow(dac_tx_witness_overflow_ctrl),
-        .ctrl_tvalid_seen(dac_tx_witness_tvalid_seen_ctrl),
-        .ctrl_tready_seen(dac_tx_witness_tready_seen_ctrl),
-        .ctrl_ready_gap_seen(dac_tx_witness_ready_gap_seen_ctrl),
-        .ctrl_word_count(dac_tx_witness_word_count_ctrl),
-        .ctrl_phase_epoch(dac_tx_witness_phase_epoch_ctrl),
-        .ctrl_phase_acc(dac_tx_witness_phase_acc_ctrl),
-        .ctrl_phase_step(dac_tx_witness_phase_step_ctrl),
-        .ctrl_phase0(dac_tx_witness_phase0_ctrl),
-        .ctrl_mode(dac_tx_witness_mode_ctrl),
-        .ctrl_ready_gap_count(dac_tx_witness_ready_gap_count_ctrl)
-    );
-`endif
 
     rfdc_adc_axis_adapter u_rfdc_adc_axis_adapter (
         .clk(adc_m_axis_clk),
@@ -931,9 +765,6 @@ module t510_fengine_board_top (
         .m33_axis_tready(m33_axis_tready),
         .m33_axis_tvalid(m33_axis_tvalid),
         .active_port_mask(rfdc_active_port_mask),
-        .diag_force_zero(diag_adc_force_zero_sync),
-        .diag_force_hold(diag_adc_force_hold_sync),
-        .diag_channel_mask(diag_adc_channel_mask_sync),
         .m_axis_tdata(adc_axis_tdata),
         .m_axis_tuser(adc_axis_tuser),
         .m_axis_sample0(adc_axis_sample0),
@@ -946,12 +777,6 @@ module t510_fengine_board_top (
         .m_preview_tdata3(adc_preview_tdata3),
         .m_preview_sample0(adc_preview_sample0),
         .m_preview_tvalid(adc_preview_tvalid),
-        .m_raw_preview_tdata0(adc_raw_preview_tdata0),
-        .m_raw_preview_tdata1(adc_raw_preview_tdata1),
-        .m_raw_preview_tdata2(adc_raw_preview_tdata2),
-        .m_raw_preview_tdata3(adc_raw_preview_tdata3),
-        .m_raw_preview_sample0(adc_raw_preview_sample0),
-        .m_raw_preview_tvalid(adc_raw_preview_tvalid),
         .all_adc_valid(all_adc_valid),
         .current_valid_mask(rfdc_current_valid_mask),
         .seen_valid_mask(rfdc_seen_valid_mask),
@@ -1098,12 +923,6 @@ module t510_fengine_board_top (
         .s_axis_preview_tdata3(adc_preview_tdata3),
         .s_axis_preview_sample0(adc_preview_sample0),
         .s_axis_preview_tvalid(adc_preview_tvalid),
-        .s_axis_raw_witness_tdata0(adc_raw_preview_tdata0),
-        .s_axis_raw_witness_tdata1(adc_raw_preview_tdata1),
-        .s_axis_raw_witness_tdata2(adc_raw_preview_tdata2),
-        .s_axis_raw_witness_tdata3(adc_raw_preview_tdata3),
-        .s_axis_raw_witness_sample0(adc_raw_preview_sample0),
-        .s_axis_raw_witness_tvalid(adc_raw_preview_tvalid),
         .rfdc_status_flags({
             25'd0,
             pps_recent,
@@ -1118,26 +937,6 @@ module t510_fengine_board_top (
         .rfdc_dropped_count(rfdc_dropped_count),
         .rfdc_current_valid_mask(rfdc_current_valid_mask),
         .rfdc_seen_valid_mask(rfdc_seen_valid_mask),
-        .dac_audit_phase_epoch_seen(dac_audit_phase_epoch_seen_sync),
-        .dac_audit_ch0_phase_acc(dac_audit_ch0_phase_acc_sync),
-        .dac_audit_ch0_phase_step(dac_audit_ch0_phase_step_sync),
-        .dac_audit_ch0_phase0(dac_audit_ch0_phase0_sync),
-        .dac_audit_ch0_mode(dac_audit_ch0_mode_sync),
-        .dac_tx_witness_armed(dac_tx_witness_armed_ctrl),
-        .dac_tx_witness_valid(dac_tx_witness_valid_ctrl),
-        .dac_tx_witness_capturing(dac_tx_witness_capturing_ctrl),
-        .dac_tx_witness_overflow(dac_tx_witness_overflow_ctrl),
-        .dac_tx_witness_tvalid_seen(dac_tx_witness_tvalid_seen_ctrl),
-        .dac_tx_witness_tready_seen(dac_tx_witness_tready_seen_ctrl),
-        .dac_tx_witness_ready_gap_seen(dac_tx_witness_ready_gap_seen_ctrl),
-        .dac_tx_witness_word_count(dac_tx_witness_word_count_ctrl),
-        .dac_tx_witness_phase_epoch(dac_tx_witness_phase_epoch_ctrl),
-        .dac_tx_witness_phase_acc(dac_tx_witness_phase_acc_ctrl),
-        .dac_tx_witness_phase_step(dac_tx_witness_phase_step_ctrl),
-        .dac_tx_witness_phase0(dac_tx_witness_phase0_ctrl),
-        .dac_tx_witness_mode(dac_tx_witness_mode_ctrl),
-        .dac_tx_witness_ready_gap_count(dac_tx_witness_ready_gap_count_ctrl),
-        .dac_tx_witness_rd_data(dac_tx_witness_rd_data_ctrl),
         .rfdc_active_port_mask(rfdc_active_port_mask),
         .m_axis_tx_tdata(core_tx_tdata),
         .m_axis_tx_tkeep(core_tx_tkeep),
@@ -1201,14 +1000,6 @@ module t510_fengine_board_top (
         .dac_tone_phase_inject_vec(core_dac_tone_phase_inject_vec),
         .dac_tone_mode_vec(core_dac_tone_mode_vec),
         .dac_phase_epoch(core_dac_phase_epoch),
-        .diag_adc_force_zero(core_diag_adc_force_zero),
-        .diag_adc_force_hold(core_diag_adc_force_hold),
-        .diag_adc_channel_mask(core_diag_adc_channel_mask),
-        .diag_dac_gate(core_diag_dac_gate),
-        .dac_tx_witness_arm_pulse(core_dac_tx_witness_arm_pulse),
-        .dac_tx_witness_clear_pulse(core_dac_tx_witness_clear_pulse),
-        .dac_tx_witness_capture_words(core_dac_tx_witness_capture_words),
-        .dac_tx_witness_rd_word(core_dac_tx_witness_rd_word),
         .irq(core_irq)
     );
 

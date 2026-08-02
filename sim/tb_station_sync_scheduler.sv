@@ -16,7 +16,7 @@ module tb_station_sync_scheduler;
     logic pps_recent = 1'b1;
     logic ref_locked = 1'b1;
     logic rfdc_ready = 1'b1;
-    logic [1:0] bandwidth_mode = 2'd2;
+    logic [1:0] sample_rate_mode = 2'd2;
     logic aa100_active = 1'b0;
     logic adc_valid = 0;
     logic [63:0] adc_raw_sample0 = 0;
@@ -44,7 +44,7 @@ module tb_station_sync_scheduler;
         .schedule_tag(schedule_tag), .schedule_mts_result_id(mts_result_id),
         .pps_in(pps_in), .pps_count(pps_count), .pps_recent(pps_recent),
         .ref_locked(ref_locked), .rfdc_ready(rfdc_ready),
-        .science_bandwidth_mode(bandwidth_mode), .science_aa100_active(aa100_active),
+        .science_sample_rate_mode(sample_rate_mode), .science_aa100_active(aa100_active),
         .adc_valid(adc_valid), .adc_raw_sample0(adc_raw_sample0),
         .adc_observation_sample0(observation_sample0),
         .science_valid(science_valid), .science_ready(science_ready),
@@ -146,7 +146,7 @@ module tb_station_sync_scheduler;
         `TB_CHECK_EQ(state, 4'd0, "explicit ABORT clears the RFDC fault state")
         `TB_CHECK_EQ(error_code, 32'd0, "explicit ABORT clears RFDC fault code")
         generation = 2; first_sample0 = 32768;
-        bandwidth_mode = 2'd1;
+        sample_rate_mode = 2'd1;
         aa100_active = 1'b1;
         pulse(0);
         `TB_CHECK_EQ(error_code, 32'd2, "AA100 rejects an unreachable first_sample0 residue")

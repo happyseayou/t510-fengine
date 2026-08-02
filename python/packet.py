@@ -38,7 +38,7 @@ FLAG_FIFO_OVERFLOW = 1 << 5
 ETH_TYPE_IPV4 = 0x0800
 IP_PROTO_UDP = 17
 
-TIME_BANDWIDTH_DECIMATION = {
+TIME_SAMPLE_RATE_DECIMATION = {
     320: 1,
     160: 2,
 }
@@ -391,36 +391,36 @@ class EthernetIPv4UDPFrame:
         }
 
 
-def normalize_time_bandwidth_mhz(bandwidth_mhz: int | float | str) -> int:
+def normalize_time_sample_rate_msps(sample_rate_msps: int | float | str) -> int:
     try:
-        value = int(round(float(str(bandwidth_mhz).lower().replace("mhz", "").strip())))
+        value = int(round(float(str(sample_rate_msps).lower().replace("mhz", "").strip())))
     except Exception as exc:
-        raise ValueError(f"unsupported TIME bandwidth: {bandwidth_mhz!r}") from exc
-    if value not in TIME_BANDWIDTH_DECIMATION:
-        raise ValueError("Stage 32 TIME complex sample rate must be 160 or 320 MS/s")
+        raise ValueError(f"unsupported TIME sample rate: {sample_rate_msps!r}") from exc
+    if value not in TIME_SAMPLE_RATE_DECIMATION:
+        raise ValueError("Stage 33 TIME complex sample rate must be 160 or 320 MS/s")
     return value
 
 
-def time_decimation_for_bandwidth(bandwidth_mhz: int | float | str) -> int:
-    return TIME_BANDWIDTH_DECIMATION[normalize_time_bandwidth_mhz(bandwidth_mhz)]
+def time_decimation_for_sample_rate(sample_rate_msps: int | float | str) -> int:
+    return TIME_SAMPLE_RATE_DECIMATION[normalize_time_sample_rate_msps(sample_rate_msps)]
 
 
-def time_sample_rate_hz_for_bandwidth(bandwidth_mhz: int | float | str) -> float:
-    return RAW_SAMPLE_RATE_HZ / float(time_decimation_for_bandwidth(bandwidth_mhz))
+def time_sample_rate_hz_for_sample_rate(sample_rate_msps: int | float | str) -> float:
+    return RAW_SAMPLE_RATE_HZ / float(time_decimation_for_sample_rate(sample_rate_msps))
 
 
-def expected_time_sample0_delta(header: T510PacketHeader, bandwidth_mhz: int | float | str) -> int:
-    return int(header.time_count) * TIME_SUBSAMPLES_PER_BEAT * time_decimation_for_bandwidth(bandwidth_mhz)
+def expected_time_sample0_delta(header: T510PacketHeader, sample_rate_msps: int | float | str) -> int:
+    return int(header.time_count) * TIME_SUBSAMPLES_PER_BEAT * time_decimation_for_sample_rate(sample_rate_msps)
 
 
-def infer_time_bandwidth_from_delta(header: T510PacketHeader, sample0_delta: int) -> int | None:
+def infer_time_sample_rate_from_delta(header: T510PacketHeader, sample0_delta: int) -> int | None:
     denom = int(header.time_count) * TIME_SUBSAMPLES_PER_BEAT
     if denom <= 0 or int(sample0_delta) % denom != 0:
         return None
     decim = int(sample0_delta) // denom
-    for bandwidth, candidate in TIME_BANDWIDTH_DECIMATION.items():
+    for sample_rate_msps, candidate in TIME_SAMPLE_RATE_DECIMATION.items():
         if int(candidate) == decim:
-            return int(bandwidth)
+            return int(sample_rate_msps)
     return None
 
 
@@ -438,10 +438,10 @@ def time_payload_complex_offset(*, beat: int, sub_sample: int, channel: int) -> 
 def decode_time_udp_payload_iq(
     udp_payload: bytes,
     *,
-    bandwidth_mhz: int | float | str = 320,
+    sample_rate_msps: int | float | str = 320,
     channels: Iterable[int] | None = None,
 ) -> dict[str, object]:
-    """Decode a T510 TIME UDP payload according to docs/time_udp_payload_v2.md.
+    """Decode a T510 TIME UDP payload according to docs/t510_udp_payload_v2.md.
 
     ``udp_payload`` is the UDP payload, not the whole Ethernet frame. It must
     contain the 128-byte T510 header followed by the TIME sample payload.
@@ -463,8 +463,8 @@ def decode_time_udp_payload_iq(
     if int(header.payload_bytes) != TIME_PAYLOAD_BYTES:
         raise ValueError(f"unexpected TIME payload_bytes={header.payload_bytes}; expected {TIME_PAYLOAD_BYTES}")
 
-    bandwidth = normalize_time_bandwidth_mhz(bandwidth_mhz)
-    decim = time_decimation_for_bandwidth(bandwidth)
+    sample_rate_msps = normalize_time_sample_rate_msps(sample_rate_msps)
+    decim = time_decimation_for_sample_rate(sample_rate_msps)
     selected_channels = list(range(TIME_NINPUT)) if channels is None else [int(ch) for ch in channels]
     for channel in selected_channels:
         if not 0 <= channel < TIME_NINPUT:
@@ -485,10 +485,10 @@ def decode_time_udp_payload_iq(
     return {
         "header": header,
         "header_dict": header.to_dict(),
-        "bandwidth_mhz": bandwidth,
+        "sample_rate_msps": sample_rate_msps,
         "decimation": decim,
-        "sample_rate_hz": time_sample_rate_hz_for_bandwidth(bandwidth),
+        "sample_rate_hz": time_sample_rate_hz_for_sample_rate(sample_rate_msps),
         "sample_count_per_channel": sample_count,
-        "expected_sample0_delta": expected_time_sample0_delta(header, bandwidth),
+        "expected_sample0_delta": expected_time_sample0_delta(header, sample_rate_msps),
         "channels": decoded,
     }

@@ -28,11 +28,6 @@ module tb_t510_dac_loopback_source;
     wire s30_axis_tvalid;
     wire s32_axis_tvalid;
     wire all_dac_ready;
-    wire [31:0] audit_phase_epoch_seen;
-    wire [31:0] audit_ch0_phase_acc;
-    wire [31:0] audit_ch0_phase_step;
-    wire [31:0] audit_ch0_phase0;
-    wire [31:0] audit_ch0_mode;
 
     always #5 clk = ~clk;
 
@@ -102,12 +97,7 @@ module tb_t510_dac_loopback_source;
         .s32_axis_tdata(s32_axis_tdata),
         .s32_axis_tready(1'b1),
         .s32_axis_tvalid(s32_axis_tvalid),
-        .all_dac_ready(all_dac_ready),
-        .audit_phase_epoch_seen(audit_phase_epoch_seen),
-        .audit_ch0_phase_acc(audit_ch0_phase_acc),
-        .audit_ch0_phase_step(audit_ch0_phase_step),
-        .audit_ch0_phase0(audit_ch0_phase0),
-        .audit_ch0_mode(audit_ch0_mode)
+        .all_dac_ready(all_dac_ready)
     );
 
     initial begin
@@ -116,8 +106,6 @@ module tb_t510_dac_loopback_source;
         #1;
         `TB_CHECK(all_dac_ready, "all DAC ready when tready high")
         `TB_CHECK(s00_axis_tvalid && s02_axis_tvalid && s32_axis_tvalid, "all DAC valid high")
-        `TB_CHECK_EQ(audit_phase_epoch_seen, 32'd0, "DAC audit epoch reset")
-        `TB_CHECK_EQ(audit_ch0_phase_step, 32'h4000_0000, "DAC audit phase step")
         check_ch0_quadrature("positive Fs/4 complex rotation");
 
         @(posedge clk);
@@ -137,7 +125,6 @@ module tb_t510_dac_loopback_source;
         tone_phase_epoch <= 32'd2;
         @(posedge clk);
         #1;
-        `TB_CHECK_EQ(audit_phase_epoch_seen, 32'd2, "DAC audit epoch follows reset")
         check_ch0_quadrature("epoch reset");
 
         tone_mode_vec[1:0] = 2'd1;
@@ -146,7 +133,6 @@ module tb_t510_dac_loopback_source;
         tone_phase_epoch <= 32'd3;
         repeat (2) @(posedge clk);
         #1;
-        `TB_CHECK_EQ(audit_ch0_mode, 32'd1, "DAC audit mode readback")
         `TB_CHECK(s16(s00_axis_tdata[15:0]) > 16'sd4070, "constant phasor phase0=0 is positive I")
         `TB_CHECK(s16(s00_axis_tdata[31:16]) > -16'sd16 && s16(s00_axis_tdata[31:16]) < 16'sd16, "constant phasor phase0=0 has Q near zero")
         `TB_CHECK_EQ(s00_axis_tdata[47:32], s00_axis_tdata[15:0], "constant phasor i1 equals i0")
@@ -178,7 +164,6 @@ module tb_t510_dac_loopback_source;
         tone_phase_epoch <= 32'd6;
         @(posedge clk);
         #1;
-        `TB_CHECK_EQ(audit_phase_epoch_seen, 32'd6, "eight-channel phase epoch applied")
         check_ch0_quadrature("eight-channel synchronized positive sequence");
         `TB_CHECK_EQ(s02_axis_tdata, s00_axis_tdata, "channel 1 phase synchronized")
         `TB_CHECK_EQ(s10_axis_tdata, s00_axis_tdata, "channel 2 phase synchronized")

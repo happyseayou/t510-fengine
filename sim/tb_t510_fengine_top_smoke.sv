@@ -110,37 +110,11 @@ module tb_t510_fengine_top_smoke;
         .s_axis_preview_tdata3(s_axis_adc_tdata[1023:768]),
         .s_axis_preview_sample0(s_axis_adc_sample0),
         .s_axis_preview_tvalid(s_axis_adc_tvalid && s_axis_adc_tready),
-        .s_axis_raw_witness_tdata0(s_axis_adc_tdata[255:0]),
-        .s_axis_raw_witness_tdata1(s_axis_adc_tdata[511:256]),
-        .s_axis_raw_witness_tdata2(s_axis_adc_tdata[767:512]),
-        .s_axis_raw_witness_tdata3(s_axis_adc_tdata[1023:768]),
-        .s_axis_raw_witness_sample0(s_axis_adc_sample0),
-        .s_axis_raw_witness_tvalid(s_axis_adc_tvalid && s_axis_adc_tready),
         .rfdc_status_flags(32'h0000_000f),
         .rfdc_sample_count(64'd0),
         .rfdc_dropped_count(32'd0),
         .rfdc_current_valid_mask(16'hffff),
         .rfdc_seen_valid_mask(16'hffff),
-        .dac_audit_phase_epoch_seen(32'd0),
-        .dac_audit_ch0_phase_acc(32'd0),
-        .dac_audit_ch0_phase_step(32'd0),
-        .dac_audit_ch0_phase0(32'd0),
-        .dac_audit_ch0_mode(32'd0),
-        .dac_tx_witness_armed(1'b0),
-        .dac_tx_witness_valid(1'b0),
-        .dac_tx_witness_capturing(1'b0),
-        .dac_tx_witness_overflow(1'b0),
-        .dac_tx_witness_tvalid_seen(1'b0),
-        .dac_tx_witness_tready_seen(1'b0),
-        .dac_tx_witness_ready_gap_seen(1'b0),
-        .dac_tx_witness_word_count(9'd0),
-        .dac_tx_witness_phase_epoch(32'd0),
-        .dac_tx_witness_phase_acc(32'd0),
-        .dac_tx_witness_phase_step(32'd0),
-        .dac_tx_witness_phase0(32'd0),
-        .dac_tx_witness_mode(32'd0),
-        .dac_tx_witness_ready_gap_count(32'd0),
-        .dac_tx_witness_rd_data(32'd0),
         .rfdc_active_port_mask(),
         .m_axis_tx_tdata(m_axis_tx_tdata),
         .m_axis_tx_tkeep(m_axis_tx_tkeep),
@@ -204,10 +178,6 @@ module tb_t510_fengine_top_smoke;
         .dac_tone_phase_inject_vec(),
         .dac_tone_mode_vec(),
         .dac_phase_epoch(),
-        .dac_tx_witness_arm_pulse(),
-        .dac_tx_witness_clear_pulse(),
-        .dac_tx_witness_capture_words(),
-        .dac_tx_witness_rd_word(),
         .irq(irq)
     );
 
@@ -294,8 +264,7 @@ module tb_t510_fengine_top_smoke;
         end
     endtask
 
-`ifdef T510_STAGE27J_PFB
-    task automatic load_stage27j_unity_pfb_coefficients;
+    task automatic load_unity_pfb_coefficients;
         integer tap;
         integer phase;
         reg signed [17:0] coeff;
@@ -324,9 +293,9 @@ module tb_t510_fengine_top_smoke;
                 axi_read(16'h0964, rd);
                 timeout = timeout + 1;
             end
-            `TB_CHECK(rd[2], "top 27j PFB shadow coefficient bank full")
+            `TB_CHECK(rd[2], "top current PFB shadow coefficient bank full")
             axi_read(16'h0970, rd);
-            `TB_CHECK_EQ(rd, 32'd16384, "top 27j PFB coefficient load count")
+            `TB_CHECK_EQ(rd, 32'd16384, "top current PFB coefficient load count")
 
             axi_write(16'h0960, 32'h0000_0042);
             timeout = 0;
@@ -335,18 +304,17 @@ module tb_t510_fengine_top_smoke;
                 axi_read(16'h0964, rd);
                 timeout = timeout + 1;
             end
-            `TB_CHECK(rd[0], "top 27j PFB active coefficient bank valid")
-            `TB_CHECK_EQ(rd[11:8], 4'd4, "top 27j PFB active taps")
-            `TB_CHECK(!rd[5], "top 27j PFB coefficient command error clear")
+            `TB_CHECK(rd[0], "top current PFB active coefficient bank valid")
+            `TB_CHECK_EQ(rd[11:8], 4'd4, "top current PFB active taps")
+            `TB_CHECK(!rd[5], "top current PFB coefficient command error clear")
             axi_read(16'h0974, rd);
-            `TB_CHECK_EQ(rd, 32'h27a4_0001, "top 27j PFB active coefficient id")
+            `TB_CHECK_EQ(rd, 32'h27a4_0001, "top current PFB active coefficient id")
             axi_read(16'h0978, rd);
-            `TB_CHECK_EQ(rd, 32'h2000_0000, "top 27j PFB active coefficient checksum")
+            `TB_CHECK_EQ(rd, 32'h2000_0000, "top current PFB active coefficient checksum")
             axi_read(16'h097c, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "top 27j PFB coefficient error count")
+            `TB_CHECK_EQ(rd, 32'd0, "top current PFB coefficient error count")
         end
     endtask
-`endif
 
     task automatic wait_for_state(input [3:0] expected_state);
         reg [31:0] rd;
@@ -657,18 +625,11 @@ module tb_t510_fengine_top_smoke;
             `TB_CHECK_EQ(beat1[(120-64)*8 +: 8], 8'h01, "top production SPEC product byte0")
             `TB_CHECK_EQ(beat1[(121-64)*8 +: 8], 8'hf1, "top production SPEC product byte1")
             spec_status_byte1 = beat1[(123-64)*8 +: 8];
-`ifdef T510_STAGE27J_PFB
             `TB_CHECK((spec_status_byte1 & 8'h01) == 8'd0, "top production SPEC FFT-only status bit cleared")
             `TB_CHECK((spec_status_byte1 & 8'h02) != 8'd0, "top production SPEC AA100 status bit")
             `TB_CHECK((spec_status_byte1 & 8'h04) != 8'd0, "top production SPEC PFB-active status bit")
             `TB_CHECK_EQ(beat2[0*8 +: 8], 8'h04, "top production SPEC taps low")
             `TB_CHECK_EQ(beat2[1*8 +: 8], 8'h00, "top production SPEC taps high")
-`else
-            `TB_CHECK((spec_status_byte1 & 8'h01) != 8'd0, "top production SPEC FFT-only status bit")
-            `TB_CHECK((spec_status_byte1 & 8'h02) != 8'd0, "top production SPEC XFFT configured status bit")
-            `TB_CHECK_EQ(beat2[0*8 +: 8], 8'h00, "top production SPEC taps low")
-            `TB_CHECK_EQ(beat2[1*8 +: 8], 8'h00, "top production SPEC taps high")
-`endif
         end
     endtask
 
@@ -684,9 +645,7 @@ module tb_t510_fengine_top_smoke;
             axi_write(32'h0000_d010, 32'd100_000_000);
             axi_write(32'h0000_d014, 32'd2);
             axi_write(32'h0000_d018, 32'd31_457);
-`ifdef T510_STAGE27J_PFB
-            load_stage27j_unity_pfb_coefficients();
-`endif
+            load_unity_pfb_coefficients();
             axi_write(16'h0900, 32'h0000_0003);
             axi_write(16'h000c, 32'h0000_0001);
             wait_for_state(4'd6);
@@ -707,16 +666,7 @@ module tb_t510_fengine_top_smoke;
     initial begin
         check_stop_and_abort_flush_both_domains();
         check_default_waits_without_pps();
-`ifdef T510_STAGE27H_PRODUCTION_ONLY
         run_production_spec_cmac();
-`else
-        run_mode(2'd0, 0, 1'b1);
-        run_spec_header_capture();
-        run_production_spec_cmac();
-        run_mode(2'd1, 1, 1'b1);
-        run_mode(2'd2, 0, 1'b1);
-        run_mode(2'd3, 0, 1'b0);
-`endif
         `TB_PASS("tb_t510_fengine_top_smoke")
     end
 

@@ -32,12 +32,7 @@ module t510_dac_loopback_source (
     output wire [127:0] s32_axis_tdata,
     input  wire         s32_axis_tready,
     output wire         s32_axis_tvalid,
-    output wire         all_dac_ready,
-    output wire [31:0]  audit_phase_epoch_seen,
-    output wire [31:0]  audit_ch0_phase_acc,
-    output wire [31:0]  audit_ch0_phase_step,
-    output wire [31:0]  audit_ch0_phase0,
-    output wire [31:0]  audit_ch0_mode
+    output wire         all_dac_ready
 );
 
     logic [31:0] phase [0:7];
@@ -733,10 +728,4 @@ module t510_dac_loopback_source (
     assign all_dac_ready =
         s00_axis_tready && s02_axis_tready && s10_axis_tready && s12_axis_tready &&
         s20_axis_tready && s22_axis_tready && s30_axis_tready && s32_axis_tready;
-    assign audit_phase_epoch_seen = phase_epoch_seen;
-    assign audit_ch0_phase_acc = phase[0];
-    assign audit_ch0_phase_step = tone_phase_step_vec[31:0];
-    assign audit_ch0_phase0 = tone_phase0_vec[31:0];
-    assign audit_ch0_mode = {30'd0, tone_mode_vec[1:0]};
-
 endmodule

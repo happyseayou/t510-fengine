@@ -1,0 +1,28 @@
+[Unit]
+Description=T510 Stage 33 LMK external-reference watchdog
+After=local-fs.target
+Before=t510-agent.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/t510-agent/current
+Environment=PYTHONPATH=/opt/t510-agent/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=XILINX_XRT=/usr
+ExecStart=/usr/local/share/pynq-venv/bin/python3 /opt/t510-agent/current/python/t510_ref_watchdog.py --bitfile /opt/t510-agent/current/overlay/t510_fengine.bit --state /run/t510-ref-watchdog.json --lock /run/t510-ref-watchdog.lock --configure-lock /run/t510-configure.lock --interval-ms 100 --unlock-confirmations 2 --spi-error-confirmations 5 --stop-timeout-ms 2000
+Restart=always
+RestartSec=1
+TimeoutStopSec=5
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelTunables=false
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

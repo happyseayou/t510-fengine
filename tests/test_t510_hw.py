@@ -20,10 +20,10 @@ class FakeHardwareCore:
 
     def read_status(self):
         return {
-            "core_version": 0x00010032,
+            "core_version": 0x00010033,
             "board_id": self.board_id,
             "streaming": 0,
-            "science_bandwidth_mode": 0,
+            "science_sample_rate_mode": 0,
             "science_output_mode": 2,
             "pps_count": 44,
             "pps_status_input_high": 1,
@@ -44,7 +44,7 @@ class FakeHardwareCore:
             "rfdc_dropped_count": 4,
             "rfdc_downstream_ready": 1,
             "science_dropped_beat_count": 5,
-            "science_bandwidth_mhz": 160,
+            "science_sample_rate_msps": 160,
             "science_antialias_taps": 55,
             "science_antialias_100m_active": 1,
             "science_antialias_100m_primed": 1,
@@ -83,14 +83,14 @@ class FakeHardwareCore:
         return {
             "available": True,
             "mixers": [
-                {"kind": "dac", "frequency_mhz": 100.0},
-                {"kind": "dac", "frequency_mhz": 100.0},
+                {"kind": "dac", "frequency_mhz": 200.0}
+                for _ in range(8)
             ],
         }
 
     def read_lmk_status(self, *, include_registers=False):
         return {
-            "profile_id": "stage32_160_manual_clkin2_continuous",
+            "profile_id": "160m_10m_cont_manual_clkin2_continuous",
             "sysref_mode": "continuous",
             "selected_ref": "external_10mhz",
             "lmk_clkin": "CLKin2 (manual)",
@@ -201,9 +201,9 @@ def configure_body() -> dict:
             }
         )
     return {
-        "bitstream_id": "fengine-0x00010032",
+        "bitstream_id": "fengine-0x00010033",
         "board_id": 37,
-        "profile": {"bandwidth_mhz": 160, "mode": "time_spec", "center_mhz": 100.0},
+        "profile": {"sample_rate_msps": 160, "mode": "time_spec", "center_mhz": 200.0},
         "source": {"ip": "10.0.1.1", "mac": "02:00:00:00:00:01"},
         "endpoints": endpoints,
     }
@@ -216,10 +216,10 @@ class T510HelperTests(unittest.TestCase):
         self.bitstream = Path(self.temp.name) / "test.bit"
         self.bitstream.write_bytes(b"test-bitstream")
         self.proof = {
-            "id": "fengine-0x00010032",
+            "id": "fengine-0x00010033",
             "path": str(self.bitstream),
             "sha256": hashlib.sha256(b"test-bitstream").hexdigest(),
-            "core_version": "0x00010032",
+            "core_version": "0x00010033",
             "mts_adc_target_latency": 240,
             "mts_dac_target_latency": 224,
         }
@@ -240,14 +240,14 @@ class T510HelperTests(unittest.TestCase):
         self.pynq_state.start()
         self.mts_state = mock.patch.object(
             t510_hw,
-            "STAGE32_MTS_STATE_PATH",
-            Path(self.temp.name) / "stage32-mts.json",
+            "MTS_STATE_PATH",
+            Path(self.temp.name) / "mts.json",
         )
         self.mts_state.start()
-        self.watchdog_path = Path(self.temp.name) / "stage32-ref-watchdog.json"
+        self.watchdog_path = Path(self.temp.name) / "ref-watchdog.json"
         self.watchdog_state = mock.patch.object(
             t510_hw,
-            "STAGE32_REFERENCE_WATCHDOG_STATE_PATH",
+            "REFERENCE_WATCHDOG_STATE_PATH",
             self.watchdog_path,
         )
         self.watchdog_state.start()
@@ -274,7 +274,7 @@ class T510HelperTests(unittest.TestCase):
         self.watchdog_path.write_text(json.dumps(state), encoding="utf-8")
 
     @mock.patch.object(t510_hw, "_record_active_bitstream_state")
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_configure_uses_prepare_and_leaves_stream_stopped(
         self,
         record_active_bitstream_state,
@@ -302,10 +302,10 @@ class T510HelperTests(unittest.TestCase):
         self.assertFalse(result["streaming"])
         record_active_bitstream_state.assert_called_once_with(self.bitstream)
 
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_status_is_one_snapshot_of_cumulative_registers(self) -> None:
         result = t510_hw._status({"bitstream": self.proof, "request": {}})
-        self.assertEqual(result["core_version"], "0x00010032")
+        self.assertEqual(result["core_version"], "0x00010033")
         self.assertEqual(result["board_id"], 1)
         self.assertEqual(result["counters"]["time_packets"], 100)
         self.assertEqual(result["counters"]["spec_dropped"], 3)
@@ -318,15 +318,20 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(result["channelizer"]["packet_chan_count"], 256)
         self.assertEqual(result["channelizer"]["peak_chan"], 512)
         self.assertEqual(result["channelizer"]["coefficient_id"], "0x50464234")
+        self.assertEqual(result["rfdc"]["adc_analog_sample_rate_hz"], 3_840_000_000)
+        self.assertEqual(result["rfdc"]["dac_analog_sample_rate_hz"], 3_840_000_000)
+        self.assertEqual(result["rfdc"]["complex_sample_rate_hz"], 320_000_000)
+        self.assertEqual(result["rfdc"]["adc_decimation"], 12)
+        self.assertEqual(result["rfdc"]["dac_interpolation"], 12)
         self.assertTrue(result["reference_watchdog"]["healthy"])
 
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_dac_requires_matching_board_and_complete_readback(self) -> None:
         channels = [
             {
                 "channel": channel,
                 "enabled": True,
-                "rf_frequency_mhz": 100.01,
+                "rf_frequency_mhz": 200.01,
                 "amplitude_percent": 25.0,
                 "phase_deg": float(channel),
             }
@@ -337,7 +342,7 @@ class T510HelperTests(unittest.TestCase):
                 "bitstream": self.proof,
                 "request": {
                     "expected_board_id": 1,
-                    "center_mhz": 100.0,
+                    "center_mhz": 200.0,
                     "channels": channels,
                 },
             }
@@ -350,13 +355,13 @@ class T510HelperTests(unittest.TestCase):
                     "bitstream": self.proof,
                     "request": {
                         "expected_board_id": 2,
-                        "center_mhz": 100.0,
+                        "center_mhz": 200.0,
                         "channels": channels,
                     },
                 }
             )
 
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_start_stop_and_reset_are_semantic_operations(self) -> None:
         request = {"bitstream": self.proof, "request": {"expected_board_id": 1}}
         started = t510_hw._start(request)
@@ -370,7 +375,7 @@ class T510HelperTests(unittest.TestCase):
         self.assertTrue(reset["reset"])
         self.assertTrue(FakeController.instances[-1].core.reset_called)
 
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_start_fails_closed_when_reference_watchdog_latched(self) -> None:
         self._write_watchdog_state(
             healthy=False,
@@ -389,12 +394,12 @@ class T510HelperTests(unittest.TestCase):
         self.assertIn("FAULT_LATCHED", caught.exception.details["errors"])
         self.assertIn("PLL1_NOT_LOCKED", caught.exception.details["errors"])
 
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_arm_fails_closed_when_reference_watchdog_state_is_stale(self) -> None:
         self._write_watchdog_state(
             updated_at_unix_ms=(
                 time.time_ns() // 1_000_000
-                - t510_hw.STAGE32_REFERENCE_WATCHDOG_MAX_AGE_MS
+                - t510_hw.REFERENCE_WATCHDOG_MAX_AGE_MS
                 - 1
             )
         )
@@ -408,8 +413,8 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "REFERENCE_WATCHDOG_NOT_READY")
         self.assertIn("STATE_STALE", caught.exception.details["errors"])
 
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
-    def test_stage31_prepare_arm_abort_helpers_preserve_transaction_identity(self) -> None:
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
+    def test_scheduled_sync_prepare_arm_abort_helpers_preserve_transaction_identity(self) -> None:
         request = {
             "bitstream": self.proof,
             "request": {
@@ -462,7 +467,7 @@ class T510HelperTests(unittest.TestCase):
         with self.assertRaisesRegex(t510_hw.HelperError, "SHA256"):
             t510_hw._configure({"bitstream": proof, "request": configure_body()})
 
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_cold_boot_rejects_mmio_before_constructing_controller(self) -> None:
         with (
             mock.patch.object(
@@ -470,16 +475,16 @@ class T510HelperTests(unittest.TestCase):
                 "_read_fpga_manager_state",
                 return_value="unknown",
             ),
-            mock.patch.object(t510_hw, "_load_stage29") as load_stage29,
+            mock.patch.object(t510_hw, "_load_control") as load_t510_control,
         ):
             with self.assertRaises(t510_hw.HelperError) as caught:
                 t510_hw._status({"bitstream": self.proof, "request": {}})
         self.assertEqual(caught.exception.code, "PL_NOT_CONFIGURED")
         self.assertEqual(caught.exception.exit_code, t510_hw.EXIT_STATE_CONFLICT)
-        load_stage29.assert_not_called()
+        load_t510_control.assert_not_called()
         self.assertEqual(FakeController.instances, [])
 
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_active_bitstream_mismatch_rejects_mmio(self) -> None:
         with mock.patch.object(
             t510_hw,
@@ -499,7 +504,7 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "ACTIVE_BITSTREAM_MISMATCH")
         self.assertEqual(FakeController.instances, [])
 
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_matching_active_hash_accepts_release_path_alias(self) -> None:
         with mock.patch.object(
             t510_hw,
@@ -510,11 +515,11 @@ class T510HelperTests(unittest.TestCase):
             },
         ):
             result = t510_hw._status({"bitstream": self.proof, "request": {}})
-        self.assertEqual(result["core_version"], "0x00010032")
+        self.assertEqual(result["core_version"], "0x00010033")
         self.assertTrue(FakeController.instances)
 
     @mock.patch.object(t510_hw, "_record_active_bitstream_state")
-    @mock.patch.object(t510_hw, "Stage29Controller", FakeController)
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_configure_is_allowed_when_pl_is_not_configured(
         self,
         record_active_bitstream_state,

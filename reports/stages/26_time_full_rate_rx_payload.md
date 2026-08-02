@@ -9,7 +9,7 @@ Stage 26 已完成本地实现、仿真和 Vivado 生成链路，但 setup timin
 当前状态：
 
 - `CORE_VERSION=0x0001001C`
-- `docs/time_udp_payload_v2.md` 已新增并作为 TIME UDP payload v2 的权威说明
+- `docs/t510_udp_payload_v2.md` 现作为 TIME/SPEC UDP payload v2 的权威说明
 - Rust receiver 已落地，HTML selector 可动态切换 `20/100/200MHz` 解码/校验/显示
 - RTL 已新增 native 512-bit TIME/UDP/CMAC path
 - 本地 Python / Rust / XSim 回归通过
@@ -54,4 +54,4 @@ Stage 26 已完成本地实现、仿真和 Vivado 生成链路，但 setup timin
 
 ## Payload Contract
 
-详见 `docs/time_udp_payload_v2.md`。
+详见 `docs/t510_udp_payload_v2.md`。

@@ -1,0 +1,12 @@
+[Unit]
+Description=T510 100G receiver NIC tuning
+Wants=network-online.target
+After=NetworkManager.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/t510-time-rx/current/host_t510_rx_tune.sh --mode time_spec --queue-count 20 enp1s0f0np0
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

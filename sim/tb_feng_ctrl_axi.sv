@@ -7,25 +7,8 @@ module tb_feng_ctrl_axi;
 
     always #5 clk = ~clk;
 
-`ifdef T510_STAGE27H_PRODUCTION_ONLY
-    localparam bit TB_PRODUCTION_27H = 1'b1;
     localparam integer TB_TX_ENDPOINTS = 24;
     localparam integer TB_SPEC_ROUTES = 16;
-`else
-    localparam bit TB_PRODUCTION_27H = 1'b0;
-    localparam integer TB_TX_ENDPOINTS = 72;
-    localparam integer TB_SPEC_ROUTES = 64;
-`endif
-`ifdef T510_STAGE27I_RAW_WITNESS
-    localparam bit TB_RAW_WITNESS_DIAGNOSTIC = 1'b1;
-`else
-    localparam bit TB_RAW_WITNESS_DIAGNOSTIC = 1'b0;
-`endif
-`ifdef T510_STAGE27J_PFB
-    localparam bit TB_PRODUCTION_27J_PFB = 1'b1;
-`else
-    localparam bit TB_PRODUCTION_27J_PFB = 1'b0;
-`endif
 
     logic [31:0] s_axi_awaddr = 32'd0;
     logic        s_axi_awvalid = 1'b0;
@@ -88,53 +71,6 @@ module tb_feng_ctrl_axi;
     logic [7:0]   tx_selected_endpoint_id = 8'd9;
     logic [5:0]   tx_selected_route_id = 6'd1;
     logic         tx_selected_route_is_time = 1'b0;
-    logic         tx_header_capture_armed = 1'b0;
-    logic         tx_header_capture_valid = 1'b0;
-    logic [4:0]   tx_header_capture_word_count = 5'd0;
-    logic         tx_frame_capture_armed = 1'b0;
-    logic         tx_frame_capture_valid = 1'b0;
-    logic [4:0]   tx_frame_capture_word_count = 5'd0;
-    logic         tx_payload_witness_armed = 1'b1;
-    logic         tx_payload_witness_valid = 1'b1;
-    logic         tx_payload_witness_capturing = 1'b0;
-    logic [10:0]  tx_payload_witness_word_count = 11'd1040;
-    logic [15:0]  tx_payload_witness_stream_type = 16'd0;
-    logic [63:0]  tx_payload_witness_sample0 = 64'h0000_0001_0000_0100;
-    logic [63:0]  tx_payload_witness_frame_id = 64'h0000_0000_0000_0042;
-    logic [31:0]  tx_payload_witness_seq_no = 32'h0000_0011;
-    logic [31:0]  tx_payload_witness_chan0 = 32'd256;
-    logic [63:0]  tx_payload_witness_layout_word = 64'h0100_0001_0008_0000;
-    logic [31:0]  tx_payload_witness_payload_bytes = 32'd8192;
-    logic [31:0]  tx_payload_witness_route_meta = 32'h0000_0640;
-    logic [31:0]  tx_payload_witness_rfdc_flags = 32'h0000_000f;
-    logic [63:0]  tx_payload_witness_rfdc_sample_count = 64'h0000_0001_0000_0100;
-    logic [31:0]  tx_payload_witness_dac_phase_epoch = 32'd17;
-    logic         tx_payload_witness_overflow = 1'b0;
-    logic         tx_payload_witness_filter_mismatch = 1'b0;
-    logic         dac_tx_witness_armed = 1'b1;
-    logic         dac_tx_witness_valid = 1'b1;
-    logic         dac_tx_witness_capturing = 1'b0;
-    logic         dac_tx_witness_overflow = 1'b0;
-    logic         dac_tx_witness_tvalid_seen = 1'b1;
-    logic         dac_tx_witness_tready_seen = 1'b1;
-    logic         dac_tx_witness_ready_gap_seen = 1'b0;
-    logic [8:0]   dac_tx_witness_word_count = 9'd256;
-    logic [31:0]  dac_tx_witness_phase_epoch = 32'd17;
-    logic [31:0]  dac_tx_witness_phase_acc = 32'h1234_5678;
-    logic [31:0]  dac_tx_witness_phase_step = 32'h0102_0304;
-    logic [31:0]  dac_tx_witness_phase0 = 32'h4000_0000;
-    logic [31:0]  dac_tx_witness_mode = 32'd1;
-    logic [31:0]  dac_tx_witness_ready_gap_count = 32'd0;
-    logic         rfdc_axis_raw_witness_armed = 1'b0;
-    logic         rfdc_axis_raw_witness_valid = 1'b1;
-    logic         rfdc_axis_raw_witness_capturing = 1'b0;
-    logic         rfdc_axis_raw_witness_overflow = 1'b0;
-    logic         rfdc_axis_raw_witness_tvalid_seen = 1'b1;
-    logic [8:0]   rfdc_axis_raw_witness_beat_count = 9'd4;
-    logic [2:0]   rfdc_axis_raw_witness_channel_select = 3'd3;
-    logic [63:0]  rfdc_axis_raw_witness_sample0 = 64'h0000_0001_0000_0200;
-    logic [31:0]  rfdc_axis_raw_witness_rfdc_flags = 32'h0000_001f;
-    logic [15:0]  rfdc_axis_raw_witness_valid_mask = 16'h00ff;
     logic [31:0]  pfb_status = 32'h0000_0003;
     logic [31:0]  pfb_frame_count = 32'd0;
     logic [31:0]  pfb_overflow_count = 32'd0;
@@ -207,9 +143,6 @@ module tb_feng_ctrl_axi;
     wire [15:0] time_udp_port;
     wire [15:0] rfdc_active_mask;
     wire [63:0] unix_seconds;
-    wire        tx_header_capture_arm_pulse;
-    wire [4:0]  tx_header_capture_rd_word;
-    wire [31:0] tx_header_capture_rd_data;
     wire [31:0] tx_control;
     wire        tx_clear_pulse;
     wire [TB_TX_ENDPOINTS-1:0] tx_endpoint_enable;
@@ -224,31 +157,11 @@ module tb_feng_ctrl_axi;
     wire [7:0]  tx_time_route_enable;
     wire [127:0] tx_time_route_input_mask_vec;
     wire [64-1:0] tx_time_route_endpoint_vec;
-    wire        tx_frame_capture_arm_pulse;
-    wire [4:0]  tx_frame_capture_rd_word;
-    wire [31:0] tx_frame_capture_rd_data;
-    wire        tx_payload_witness_arm_pulse;
-    wire        tx_payload_witness_clear_pulse;
-    wire [1:0]  tx_payload_witness_stream_filter;
-    wire [10:0] tx_payload_witness_capture_words;
-    wire [11:0] tx_payload_witness_rd_word;
-    wire [31:0] tx_payload_witness_rd_data;
-    wire        dac_tx_witness_arm_pulse;
-    wire        dac_tx_witness_clear_pulse;
-    wire [8:0]  dac_tx_witness_capture_words;
-    wire [9:0]  dac_tx_witness_rd_word;
-    wire [31:0] dac_tx_witness_rd_data;
-    wire        rfdc_axis_raw_witness_arm_pulse;
-    wire        rfdc_axis_raw_witness_clear_pulse;
-    wire [2:0]  rfdc_axis_raw_witness_channel_select_ctrl;
-    wire [8:0]  rfdc_axis_raw_witness_capture_beats;
-    wire [9:0]  rfdc_axis_raw_witness_rd_word;
-    wire [31:0] rfdc_axis_raw_witness_rd_data;
     wire [31:0] dac_phase_epoch;
-    wire [1:0]  science_bandwidth_mode_cfg;
+    wire [1:0]  science_sample_rate_mode_cfg;
     wire [2:0]  science_output_mode_cfg;
-    wire        science_aa100_active_tb = (science_bandwidth_mode_cfg == 2'd1);
-    wire        science_aa100_primed_tb = (science_bandwidth_mode_cfg == 2'd1);
+    wire        science_aa100_active_tb = (science_sample_rate_mode_cfg == 2'd1);
+    wire        science_aa100_primed_tb = (science_sample_rate_mode_cfg == 2'd1);
     wire [31:0] time_live_interval_beats;
     wire        time_ddr_ring_enable;
     wire        time_ddr_ring_clear_pulse;
@@ -257,22 +170,7 @@ module tb_feng_ctrl_axi;
     wire        time_multiflow_enable;
     wire [2:0]  time_multiflow_base_endpoint;
     wire [3:0]  time_multiflow_count;
-    wire        preview_audit_clear_pulse;
-    wire [1:0]  preview_audit_source_select;
-    wire        preview_audit_event_enable;
-    wire        preview_audit_freeze_on_event;
-    wire [15:0] preview_audit_event_threshold;
-    wire [7:0]  preview_event_rd_addr;
-    wire        diag_adc_force_zero;
-    wire        diag_adc_force_hold;
-    wire [7:0]  diag_adc_channel_mask;
-    wire        diag_dac_gate;
 
-    assign tx_header_capture_rd_data = 32'hca00_0000 | {27'd0, tx_header_capture_rd_word};
-    assign tx_frame_capture_rd_data = 32'hfb00_0000 | {27'd0, tx_frame_capture_rd_word};
-    assign tx_payload_witness_rd_data = 32'hd000_0000 | {20'd0, tx_payload_witness_rd_word};
-    assign dac_tx_witness_rd_data = 32'hdc00_0000 | {22'd0, dac_tx_witness_rd_word};
-    assign rfdc_axis_raw_witness_rd_data = 32'he800_0000 | {22'd0, rfdc_axis_raw_witness_rd_word};
 
     localparam integer TB_SPEC_HIT_PAD = TB_SPEC_ROUTES - 2;
     wire [TB_SPEC_ROUTES*32-1:0] tx_spec_route_hit_counts_tb =
@@ -280,10 +178,7 @@ module tb_feng_ctrl_axi;
 
     feng_ctrl_axi #(
         .N_TX_ENDPOINTS(TB_TX_ENDPOINTS),
-        .N_SPEC_ROUTES(TB_SPEC_ROUTES),
-        .PRODUCTION_27H(TB_PRODUCTION_27H),
-        .PRODUCTION_27J_PFB(TB_PRODUCTION_27J_PFB),
-        .RAW_WITNESS_DIAGNOSTIC(TB_RAW_WITNESS_DIAGNOSTIC)
+        .N_SPEC_ROUTES(TB_SPEC_ROUTES)
     ) dut (
         .s_axi_aclk(clk),
         .s_axi_aresetn(rst_n),
@@ -351,58 +246,6 @@ module tb_feng_ctrl_axi;
         .tx_selected_endpoint_id(tx_selected_endpoint_id),
         .tx_selected_route_id(tx_selected_route_id),
         .tx_selected_route_is_time(tx_selected_route_is_time),
-        .tx_header_capture_armed(tx_header_capture_armed),
-        .tx_header_capture_valid(tx_header_capture_valid),
-        .tx_header_capture_word_count(tx_header_capture_word_count),
-        .tx_header_capture_rd_data(tx_header_capture_rd_data),
-        .tx_frame_capture_armed(tx_frame_capture_armed),
-        .tx_frame_capture_valid(tx_frame_capture_valid),
-        .tx_frame_capture_word_count(tx_frame_capture_word_count),
-        .tx_frame_capture_rd_data(tx_frame_capture_rd_data),
-        .tx_payload_witness_armed(tx_payload_witness_armed),
-        .tx_payload_witness_valid(tx_payload_witness_valid),
-        .tx_payload_witness_capturing(tx_payload_witness_capturing),
-        .tx_payload_witness_word_count(tx_payload_witness_word_count),
-        .tx_payload_witness_stream_type(tx_payload_witness_stream_type),
-        .tx_payload_witness_sample0(tx_payload_witness_sample0),
-        .tx_payload_witness_frame_id(tx_payload_witness_frame_id),
-        .tx_payload_witness_seq_no(tx_payload_witness_seq_no),
-        .tx_payload_witness_chan0(tx_payload_witness_chan0),
-        .tx_payload_witness_layout_word(tx_payload_witness_layout_word),
-        .tx_payload_witness_payload_bytes(tx_payload_witness_payload_bytes),
-        .tx_payload_witness_route_meta(tx_payload_witness_route_meta),
-        .tx_payload_witness_rfdc_flags(tx_payload_witness_rfdc_flags),
-        .tx_payload_witness_rfdc_sample_count(tx_payload_witness_rfdc_sample_count),
-        .tx_payload_witness_dac_phase_epoch(tx_payload_witness_dac_phase_epoch),
-        .tx_payload_witness_overflow(tx_payload_witness_overflow),
-        .tx_payload_witness_filter_mismatch(tx_payload_witness_filter_mismatch),
-        .tx_payload_witness_rd_data(tx_payload_witness_rd_data),
-        .dac_tx_witness_armed(dac_tx_witness_armed),
-        .dac_tx_witness_valid(dac_tx_witness_valid),
-        .dac_tx_witness_capturing(dac_tx_witness_capturing),
-        .dac_tx_witness_overflow(dac_tx_witness_overflow),
-        .dac_tx_witness_tvalid_seen(dac_tx_witness_tvalid_seen),
-        .dac_tx_witness_tready_seen(dac_tx_witness_tready_seen),
-        .dac_tx_witness_ready_gap_seen(dac_tx_witness_ready_gap_seen),
-        .dac_tx_witness_word_count(dac_tx_witness_word_count),
-        .dac_tx_witness_phase_epoch(dac_tx_witness_phase_epoch),
-        .dac_tx_witness_phase_acc(dac_tx_witness_phase_acc),
-        .dac_tx_witness_phase_step(dac_tx_witness_phase_step),
-        .dac_tx_witness_phase0(dac_tx_witness_phase0),
-        .dac_tx_witness_mode(dac_tx_witness_mode),
-        .dac_tx_witness_ready_gap_count(dac_tx_witness_ready_gap_count),
-        .dac_tx_witness_rd_data(dac_tx_witness_rd_data),
-        .rfdc_axis_raw_witness_armed(rfdc_axis_raw_witness_armed),
-        .rfdc_axis_raw_witness_valid(rfdc_axis_raw_witness_valid),
-        .rfdc_axis_raw_witness_capturing(rfdc_axis_raw_witness_capturing),
-        .rfdc_axis_raw_witness_overflow(rfdc_axis_raw_witness_overflow),
-        .rfdc_axis_raw_witness_tvalid_seen(rfdc_axis_raw_witness_tvalid_seen),
-        .rfdc_axis_raw_witness_beat_count(rfdc_axis_raw_witness_beat_count),
-        .rfdc_axis_raw_witness_channel_select(rfdc_axis_raw_witness_channel_select),
-        .rfdc_axis_raw_witness_sample0(rfdc_axis_raw_witness_sample0),
-        .rfdc_axis_raw_witness_rfdc_flags(rfdc_axis_raw_witness_rfdc_flags),
-        .rfdc_axis_raw_witness_valid_mask(rfdc_axis_raw_witness_valid_mask),
-        .rfdc_axis_raw_witness_rd_data(rfdc_axis_raw_witness_rd_data),
         .tx_spec_route_hit_counts(tx_spec_route_hit_counts_tb),
         .tx_time_route_hit_counts({32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd33}),
         .time_ddr_ring_status(time_ddr_ring_status),
@@ -434,47 +277,13 @@ module tb_feng_ctrl_axi;
         .pfb_coeff_error_count(pfb_coeff_error_count),
         .science_aa100_active(science_aa100_active_tb),
         .science_aa100_primed(science_aa100_primed_tb),
-`ifdef T510_STAGE32
         .science_aa100_coeff_version(32'hAA16_0055),
-`else
-        .science_aa100_coeff_version(32'hAA10_0041),
-`endif
-        .debug_busy(1'b0),
-        .debug_done(1'b1),
-        .debug_error(1'b0),
-        .debug_capture_count(32'd1024),
-        .debug_peak_bin(32'd7),
-        .debug_peak_power(32'h0001_2345),
-        .debug_time_rd_data(32'h1234_5678),
-        .debug_fft_rd_data(32'h8765_4321),
         .preview_busy(1'b0),
         .preview_done(1'b1),
         .preview_error(1'b0),
         .preview_capture_count(32'd1024),
         .preview_sample0(64'h0000_0001_0000_0200),
         .preview_rd_data(32'hfeed_cafe),
-        .preview_event_rd_data(32'hea00_0000 | {24'd0, preview_event_rd_addr}),
-        .preview_audit_status(32'h0000_0101),
-        .preview_audit_start_count(32'd3),
-        .preview_audit_first_count(32'd3),
-        .preview_audit_done_count(32'd2),
-        .preview_audit_start_sample0(64'h0000_0001_0000_1000),
-        .preview_audit_first_sample0(64'h0000_0001_0000_1010),
-        .preview_audit_done_sample0(64'h0000_0001_0000_140c),
-        .preview_audit_start_to_first_latency(32'd9),
-        .preview_audit_capture_beats(32'd256),
-        .preview_audit_valid_gap_count(32'd4),
-        .preview_audit_sample0_error_count(32'd5),
-        .preview_event_sample0(64'h0000_0001_0000_2004),
-        .preview_event_max_code(32'd32000),
-        .preview_event_info(32'h0000_1200),
-        .preview_event_rfdc_flags(32'h0000_000f),
-        .preview_event_dac_phase_epoch(32'd17),
-        .dac_audit_phase_epoch_seen(32'd17),
-        .dac_audit_ch0_phase_acc(32'h1234_5678),
-        .dac_audit_ch0_phase_step(32'h0102_0304),
-        .dac_audit_ch0_phase0(32'h4000_0000),
-        .dac_audit_ch0_mode(32'd1),
         .board_id(board_id),
         .mode(mode),
         .arm_latched(arm_latched),
@@ -532,10 +341,6 @@ module tb_feng_ctrl_axi;
         .tx_time_route_input_mask_vec(tx_time_route_input_mask_vec),
         .tx_time_route_endpoint_vec(tx_time_route_endpoint_vec),
         .rfdc_active_mask(rfdc_active_mask),
-        .debug_capture_start_pulse(),
-        .debug_capture_clear_pulse(),
-        .debug_time_rd_addr(),
-        .debug_fft_rd_addr(),
         .dac_tone_enable(),
         .dac_tone_amplitude(),
         .dac_tone_phase_step(),
@@ -551,30 +356,6 @@ module tb_feng_ctrl_axi;
         .preview_input_mask(),
         .preview_rd_input(),
         .preview_rd_addr(),
-        .preview_audit_clear_pulse(preview_audit_clear_pulse),
-        .preview_audit_source_select(preview_audit_source_select),
-        .preview_audit_event_enable(preview_audit_event_enable),
-        .preview_audit_freeze_on_event(preview_audit_freeze_on_event),
-        .preview_audit_event_threshold(preview_audit_event_threshold),
-        .preview_event_rd_addr(preview_event_rd_addr),
-        .tx_header_capture_arm_pulse(tx_header_capture_arm_pulse),
-        .tx_header_capture_rd_word(tx_header_capture_rd_word),
-        .tx_frame_capture_arm_pulse(tx_frame_capture_arm_pulse),
-        .tx_frame_capture_rd_word(tx_frame_capture_rd_word),
-        .tx_payload_witness_arm_pulse(tx_payload_witness_arm_pulse),
-        .tx_payload_witness_clear_pulse(tx_payload_witness_clear_pulse),
-        .tx_payload_witness_stream_filter(tx_payload_witness_stream_filter),
-        .tx_payload_witness_capture_words(tx_payload_witness_capture_words),
-        .tx_payload_witness_rd_word(tx_payload_witness_rd_word),
-        .dac_tx_witness_arm_pulse(dac_tx_witness_arm_pulse),
-        .dac_tx_witness_clear_pulse(dac_tx_witness_clear_pulse),
-        .dac_tx_witness_capture_words(dac_tx_witness_capture_words),
-        .dac_tx_witness_rd_word(dac_tx_witness_rd_word),
-        .rfdc_axis_raw_witness_arm_pulse(rfdc_axis_raw_witness_arm_pulse),
-        .rfdc_axis_raw_witness_clear_pulse(rfdc_axis_raw_witness_clear_pulse),
-        .rfdc_axis_raw_witness_channel_select_ctrl(rfdc_axis_raw_witness_channel_select_ctrl),
-        .rfdc_axis_raw_witness_capture_beats(rfdc_axis_raw_witness_capture_beats),
-        .rfdc_axis_raw_witness_rd_word(rfdc_axis_raw_witness_rd_word),
         .unix_seconds(unix_seconds),
         .time_live_interval_beats(time_live_interval_beats),
         .time_ddr_ring_enable(time_ddr_ring_enable),
@@ -584,12 +365,8 @@ module tb_feng_ctrl_axi;
         .time_multiflow_enable(time_multiflow_enable),
         .time_multiflow_base_endpoint(time_multiflow_base_endpoint),
         .time_multiflow_count(time_multiflow_count),
-        .science_bandwidth_mode_cfg(science_bandwidth_mode_cfg),
-        .science_output_mode_cfg(science_output_mode_cfg),
-        .diag_adc_force_zero(diag_adc_force_zero),
-        .diag_adc_force_hold(diag_adc_force_hold),
-        .diag_adc_channel_mask(diag_adc_channel_mask),
-        .diag_dac_gate(diag_dac_gate)
+        .science_sample_rate_mode_cfg(science_sample_rate_mode_cfg),
+        .science_output_mode_cfg(science_output_mode_cfg)
     );
 
     task automatic reset_dut;
@@ -698,262 +475,6 @@ module tb_feng_ctrl_axi;
         end
     endtask
 
-    task automatic expect_header_capture_arm_pulse;
-        integer idx;
-        bit seen;
-        begin
-            seen = 1'b0;
-            fork
-                begin
-                    axi_write(16'h0378, 32'h0000_0001);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (tx_header_capture_arm_pulse) begin
-                            seen = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(seen, "TX header capture arm pulse was not observed")
-        end
-    endtask
-
-    task automatic expect_no_header_capture_arm_pulse;
-        integer idx;
-        bit seen;
-        begin
-            seen = 1'b0;
-            fork
-                begin
-                    axi_write(16'h0378, 32'h0000_0001);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (tx_header_capture_arm_pulse) begin
-                            seen = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(!seen, "production TX header capture arm pulse should be archived/no-op")
-        end
-    endtask
-
-    task automatic expect_frame_capture_arm_pulse;
-        integer idx;
-        bit seen;
-        begin
-            seen = 1'b0;
-            fork
-                begin
-                    axi_write(16'hb030, 32'h0000_0001);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (tx_frame_capture_arm_pulse) begin
-                            seen = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(seen, "TX frame capture arm pulse was not observed")
-        end
-    endtask
-
-    task automatic expect_no_frame_capture_arm_pulse;
-        integer idx;
-        bit seen;
-        begin
-            seen = 1'b0;
-            fork
-                begin
-                    axi_write(16'hb030, 32'h0000_0001);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (tx_frame_capture_arm_pulse) begin
-                            seen = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(!seen, "production TX frame capture arm pulse should be archived/no-op")
-        end
-    endtask
-
-    task automatic expect_payload_witness_pulses;
-        integer idx;
-        bit seen_arm;
-        bit seen_clear;
-        begin
-            seen_arm = 1'b0;
-            seen_clear = 1'b0;
-            fork
-                begin
-                    axi_write(16'h0790, 32'h0000_0003);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (tx_payload_witness_arm_pulse) begin
-                            seen_arm = 1'b1;
-                        end
-                        if (tx_payload_witness_clear_pulse) begin
-                            seen_clear = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(seen_arm, "TX payload witness arm pulse was not observed")
-            `TB_CHECK(seen_clear, "TX payload witness clear pulse was not observed")
-        end
-    endtask
-
-    task automatic expect_no_payload_witness_pulses;
-        integer idx;
-        bit seen_arm;
-        bit seen_clear;
-        begin
-            seen_arm = 1'b0;
-            seen_clear = 1'b0;
-            fork
-                begin
-                    axi_write(16'h0790, 32'h0000_0003);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (tx_payload_witness_arm_pulse) begin
-                            seen_arm = 1'b1;
-                        end
-                        if (tx_payload_witness_clear_pulse) begin
-                            seen_clear = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(!seen_arm, "production TX payload witness arm pulse should be archived/no-op")
-            `TB_CHECK(!seen_clear, "production TX payload witness clear pulse should be archived/no-op")
-        end
-    endtask
-
-    task automatic expect_dac_tx_witness_pulses;
-        integer idx;
-        bit seen_arm;
-        bit seen_clear;
-        begin
-            seen_arm = 1'b0;
-            seen_clear = 1'b0;
-            fork
-                begin
-                    axi_write(16'hb600, 32'h0000_0003);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (dac_tx_witness_arm_pulse) begin
-                            seen_arm = 1'b1;
-                        end
-                        if (dac_tx_witness_clear_pulse) begin
-                            seen_clear = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(seen_arm, "DAC TX witness arm pulse was not observed")
-            `TB_CHECK(seen_clear, "DAC TX witness clear pulse was not observed")
-        end
-    endtask
-
-    task automatic expect_no_dac_tx_witness_pulses;
-        integer idx;
-        bit seen_arm;
-        bit seen_clear;
-        begin
-            seen_arm = 1'b0;
-            seen_clear = 1'b0;
-            fork
-                begin
-                    axi_write(16'hb600, 32'h0000_0003);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (dac_tx_witness_arm_pulse) begin
-                            seen_arm = 1'b1;
-                        end
-                        if (dac_tx_witness_clear_pulse) begin
-                            seen_clear = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(!seen_arm, "production DAC TX witness arm pulse should be archived/no-op")
-            `TB_CHECK(!seen_clear, "production DAC TX witness clear pulse should be archived/no-op")
-        end
-    endtask
-
-    task automatic expect_rfdc_axis_raw_witness_pulses;
-        integer idx;
-        bit seen_arm;
-        bit seen_clear;
-        begin
-            seen_arm = 1'b0;
-            seen_clear = 1'b0;
-            fork
-                begin
-                    axi_write(16'he200, 32'h0000_0003);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (rfdc_axis_raw_witness_arm_pulse) begin
-                            seen_arm = 1'b1;
-                        end
-                        if (rfdc_axis_raw_witness_clear_pulse) begin
-                            seen_clear = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(seen_arm, "RFDC AXIS raw witness arm pulse was not observed")
-            `TB_CHECK(seen_clear, "RFDC AXIS raw witness clear pulse was not observed")
-        end
-    endtask
-
-    task automatic expect_no_rfdc_axis_raw_witness_pulses;
-        integer idx;
-        bit seen_arm;
-        bit seen_clear;
-        begin
-            seen_arm = 1'b0;
-            seen_clear = 1'b0;
-            fork
-                begin
-                    axi_write(16'he200, 32'h0000_0003);
-                end
-                begin
-                    for (idx = 0; idx < 12; idx = idx + 1) begin
-                        @(posedge clk);
-                        if (rfdc_axis_raw_witness_arm_pulse) begin
-                            seen_arm = 1'b1;
-                        end
-                        if (rfdc_axis_raw_witness_clear_pulse) begin
-                            seen_clear = 1'b1;
-                        end
-                    end
-                end
-            join
-            `TB_CHECK(!seen_arm, "production RFDC raw witness arm pulse should be archived/no-op")
-            `TB_CHECK(!seen_clear, "production RFDC raw witness clear pulse should be archived/no-op")
-        end
-    endtask
-
     task automatic expect_tx_clear_pulse;
         integer idx;
         bit seen;
@@ -1005,19 +526,7 @@ module tb_feng_ctrl_axi;
         reset_dut();
 
         axi_read(16'h0000, rd);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(rd, 32'h0001_0032, "CORE_VERSION Stage 32")
-`elsif T510_STAGE27J_PFB
-        `TB_CHECK_EQ(rd, 32'h0001_0031, "CORE_VERSION Stage 31 scheduled sync")
-`elsif T510_STAGE27I_ANTI_ALIAS
-        `TB_CHECK_EQ(rd, 32'h0001_002b, "CORE_VERSION 100MHz anti-alias candidate")
-`else
-        if (TB_RAW_WITNESS_DIAGNOSTIC) begin
-            `TB_CHECK_EQ(rd, 32'h0001_002a, "CORE_VERSION raw witness diagnostic")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'h0001_0029, "CORE_VERSION")
-        end
-`endif
+        `TB_CHECK_EQ(rd, 32'h0001_0033, "CORE_VERSION Stage 33")
         axi_read(16'h0008, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default MODE")
         axi_read(16'h0114, rd);
@@ -1029,51 +538,32 @@ module tb_feng_ctrl_axi;
         axi_read(16'h0908, rd);
         `TB_CHECK_EQ(rd, 32'd4096, "default PFB nchan")
         axi_read(16'h090c, rd);
-        if (TB_PRODUCTION_27J_PFB) begin
-            `TB_CHECK_EQ(rd, 32'd4, "default Stage 27j PFB taps")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd0, "default PFB taps")
-        end
-        axi_write(16'h090c, 32'd4);
-        axi_read(16'h090c, rd);
-        if (TB_PRODUCTION_27J_PFB) begin
-            `TB_CHECK_EQ(rd, 32'd4, "Stage 27j production keeps 4 PFB taps")
-        end else if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd0, "production FFT-only clamps PFB taps")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd4, "PFB taps nonzero write readback")
-        end
+        `TB_CHECK_EQ(rd, 32'd4, "current PFB uses four taps")
         axi_write(16'h090c, 32'd0);
         axi_read(16'h090c, rd);
-        if (TB_PRODUCTION_27J_PFB) begin
-            `TB_CHECK_EQ(rd, 32'd4, "Stage 27j production rejects taps=0")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd0, "PFB taps zero write readback for FFT-only")
-        end
-        if (TB_PRODUCTION_27J_PFB) begin
-            axi_read(16'h0960, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0040, "Stage 27j default PFB coeff control")
-            axi_write(16'h0968, 32'h0000_1234);
-            axi_read(16'h0968, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_1234, "Stage 27j PFB coeff index readback")
-            axi_write(16'h096c, 32'h0001_ffff);
-            axi_read(16'h096c, rd);
-            `TB_CHECK_EQ(rd, 32'h0001_ffff, "Stage 27j PFB coeff data readback")
-            axi_write(16'h0960, 32'h0000_0048);
-            axi_write(16'h0968, 32'h0000_1234);
-            axi_write(16'h096c, 32'h0000_1111);
-            `TB_CHECK_EQ(pfb_coeff_index, 14'h1234, "Stage 27j coeff write pulse keeps current payload index")
-            `TB_CHECK_EQ(pfb_coeff_data, 18'h01111, "Stage 27j coeff write pulse keeps current payload data")
-            axi_read(16'h0968, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_1235, "Stage 27j coeff auto-increment advances next MMIO index")
-            axi_write(16'h096c, 32'h0000_2222);
-            `TB_CHECK_EQ(pfb_coeff_index, 14'h1235, "Stage 27j next coeff payload uses incremented index")
-            `TB_CHECK_EQ(pfb_coeff_data, 18'h02222, "Stage 27j next coeff payload uses new data")
-            axi_read(16'h0968, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_1236, "Stage 27j coeff auto-increment remains monotonic")
-            axi_read(16'h0974, rd);
-            `TB_CHECK_EQ(rd, pfb_coeff_active_id, "Stage 27j PFB active coeff id status")
-        end
+        `TB_CHECK_EQ(rd, 32'd4, "PFB tap count is fixed")
+        axi_read(16'h0960, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0040, "default PFB coefficient control")
+        axi_write(16'h0968, 32'h0000_1234);
+        axi_read(16'h0968, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_1234, "PFB coefficient index readback")
+        axi_write(16'h096c, 32'h0001_ffff);
+        axi_read(16'h096c, rd);
+        `TB_CHECK_EQ(rd, 32'h0001_ffff, "PFB coefficient data readback")
+        axi_write(16'h0960, 32'h0000_0048);
+        axi_write(16'h0968, 32'h0000_1234);
+        axi_write(16'h096c, 32'h0000_1111);
+        `TB_CHECK_EQ(pfb_coeff_index, 14'h1234, "coefficient payload index")
+        `TB_CHECK_EQ(pfb_coeff_data, 18'h01111, "coefficient payload data")
+        axi_read(16'h0968, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_1235, "coefficient index auto-increments")
+        axi_write(16'h096c, 32'h0000_2222);
+        `TB_CHECK_EQ(pfb_coeff_index, 14'h1235, "next coefficient payload index")
+        `TB_CHECK_EQ(pfb_coeff_data, 18'h02222, "next coefficient payload data")
+        axi_read(16'h0968, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_1236, "coefficient index remains monotonic")
+        axi_read(16'h0974, rd);
+        `TB_CHECK_EQ(rd, pfb_coeff_active_id, "active coefficient id status")
         axi_read(16'h0918, rd);
         `TB_CHECK_EQ(rd, 32'd256, "default PFB channel count")
         axi_read(16'h091c, rd);
@@ -1089,25 +579,15 @@ module tb_feng_ctrl_axi;
         axi_read(16'hd000, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0001, "default science control forces dry-run")
         axi_read(16'hd004, rd);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(rd, 32'h0000_0d10, "default Stage 32 status is 160MS/s/OFF with half-band active")
-`elsif T510_STAGE27I_ANTI_ALIAS
-        `TB_CHECK_EQ(rd, 32'h0000_0d10, "default science status is 100MHz/OFF with anti-alias active and primed inputs")
-`else
-        `TB_CHECK_EQ(rd, 32'h0000_0110, "default science status is 100MHz/OFF without F-engine valid")
-`endif
+        `TB_CHECK_EQ(rd, 32'h0000_0d10, "default current status is 160MS/s/OFF with half-band active")
         axi_read(16'hd008, rd);
         `TB_CHECK_EQ(rd, 32'd1, "default science rate tier is narrow")
-        `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd1, "default science bandwidth output")
+        `TB_CHECK_EQ(science_sample_rate_mode_cfg, 2'd1, "default science bandwidth output")
         axi_read(16'hd00c, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default science mode is OFF")
         `TB_CHECK_EQ(science_output_mode_cfg, 3'd0, "default science mode output")
         axi_read(16'hd010, rd);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(rd, 32'd160_000_000, "default Stage 32 science sample rate")
-`else
-        `TB_CHECK_EQ(rd, 32'd122_880_000, "default science sample rate")
-`endif
+        `TB_CHECK_EQ(rd, 32'd160_000_000, "default current science sample rate")
         axi_read(16'hd014, rd);
         `TB_CHECK_EQ(rd, 32'd2, "default science decim factor")
         axi_read(16'hd01c, rd);
@@ -1115,13 +595,7 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(rd[4], 1'b0, "RFDC science bus truncation block is cleared")
         `TB_CHECK_EQ(rd[11], 1'b0, "science rate drop block is clear by default")
         axi_read(16'hd020, rd);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(rd, 32'h0000_0707, "Stage 32 science capability word")
-`elsif T510_STAGE27I_ANTI_ALIAS
-        `TB_CHECK_EQ(rd, 32'h0000_0707, "science capability word with 100MHz anti-alias")
-`else
-        `TB_CHECK_EQ(rd, 32'h0000_0307, "science capability word")
-`endif
+        `TB_CHECK_EQ(rd, 32'h0000_0707, "current science capability word")
         axi_read(16'hd024, rd);
         `TB_CHECK_EQ(rd, 32'd7680, "default TIME live interval beats")
         `TB_CHECK_EQ(time_live_interval_beats, 32'd7680, "default TIME live interval output")
@@ -1151,37 +625,14 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(time_multiflow_base_endpoint, 3'd0, "default TIME multiflow base endpoint")
         `TB_CHECK_EQ(time_multiflow_count, 4'd1, "default TIME multiflow count")
         axi_read(16'hd054, rd);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(rd, 32'h0000_0337, "Stage 32 half-band status active primed 55 taps")
-`else
-        `TB_CHECK_EQ(rd, 32'h0000_0329, "Stage 27i 100MHz anti-alias status active primed 41 taps")
-`endif
+        `TB_CHECK_EQ(rd, 32'h0000_0337, "current half-band status active primed 55 taps")
         axi_read(16'hd058, rd);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(rd, 32'haa16_0055, "Stage 32 half-band coefficient version")
-`else
-        `TB_CHECK_EQ(rd, 32'haa10_0041, "Stage 27i 100MHz anti-alias coefficient version")
-`endif
+        `TB_CHECK_EQ(rd, 32'haa16_0055, "current half-band coefficient version")
         axi_read(16'hd060, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_ff00, "default Stage 27i diagnostic controls disabled")
-        `TB_CHECK_EQ(diag_adc_force_zero, 1'b0, "default ADC force-zero disabled")
-        `TB_CHECK_EQ(diag_adc_force_hold, 1'b0, "default ADC force-hold disabled")
-        `TB_CHECK_EQ(diag_adc_channel_mask, 8'hff, "default ADC diagnostic channel mask")
-        `TB_CHECK_EQ(diag_dac_gate, 1'b0, "default DAC diagnostic gate disabled")
+        `TB_CHECK_EQ(rd, 32'd0, "retired diagnostic register is reserved")
         axi_write(16'hd060, 32'h0001_0103);
         axi_read(16'hd060, rd);
-        `TB_CHECK_EQ(rd, 32'h0001_0103, "Stage 27i diagnostic control write/readback")
-        `TB_CHECK_EQ(diag_adc_force_zero, 1'b1, "ADC force-zero output")
-        `TB_CHECK_EQ(diag_adc_force_hold, 1'b1, "ADC force-hold output")
-        `TB_CHECK_EQ(diag_adc_channel_mask, 8'h01, "ADC diagnostic channel mask output")
-        `TB_CHECK_EQ(diag_dac_gate, 1'b1, "DAC diagnostic gate output")
-        axi_write(16'hd060, 32'h0000_ff00);
-        axi_read(16'hd060, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_ff00, "Stage 27i diagnostic controls restored disabled")
-        `TB_CHECK_EQ(diag_adc_force_zero, 1'b0, "ADC force-zero restored disabled")
-        `TB_CHECK_EQ(diag_adc_force_hold, 1'b0, "ADC force-hold restored disabled")
-        `TB_CHECK_EQ(diag_adc_channel_mask, 8'hff, "ADC diagnostic channel mask restored")
-        `TB_CHECK_EQ(diag_dac_gate, 1'b0, "DAC diagnostic gate restored disabled")
+        `TB_CHECK_EQ(rd, 32'd0, "reserved diagnostic register ignores writes")
         axi_write(16'hd050, 32'h0008_0001);
         axi_read(16'hd050, rd);
         `TB_CHECK_EQ(rd, 32'h0008_0001, "TIME multiflow 8-flow readback")
@@ -1260,192 +711,46 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(rd, 32'h0000_0701, "TIME route7 indirect control")
         axi_read(16'hb158, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0080, "TIME route7 indirect mask")
-        if (TB_PRODUCTION_27H) begin
-            axi_read(16'h0794, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TX payload witness status archived")
-            axi_read(16'h079c, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TX payload witness words archived")
-            axi_read(16'h07a0, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TX payload witness sample0 archived")
-            axi_read(16'h07d8, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production paired coherence archived")
-            axi_read(32'h0001_0000, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TX payload witness buffer archived")
-            axi_write(16'h0798, 32'd1);
-            `TB_CHECK_EQ(tx_payload_witness_stream_filter, 2'd0, "production TX payload witness stream filter no-op")
-            axi_write(16'h079c, 32'd64);
-            `TB_CHECK_EQ(tx_payload_witness_capture_words, 11'd1040, "production TX payload witness capture words no-op")
-            expect_no_payload_witness_pulses();
-
-            axi_read(16'hb604, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production DAC TX witness status archived")
-            axi_read(16'hb608, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production DAC TX witness words archived")
-            axi_read(16'hb610, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production DAC TX witness phase epoch archived")
-            axi_read(16'hc000, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production DAC TX witness buffer archived")
-            axi_write(16'hb608, 32'd64);
-            `TB_CHECK_EQ(dac_tx_witness_capture_words, 9'd256, "production DAC TX witness capture words no-op")
-            expect_no_dac_tx_witness_pulses();
-
-            if (TB_RAW_WITNESS_DIAGNOSTIC) begin
-                axi_read(16'he204, rd);
-                `TB_CHECK_EQ(rd, 32'h0300_0412, "27i RFDC AXIS raw witness status")
-                axi_read(16'he20c, rd);
-                `TB_CHECK_EQ(rd, 32'd256, "27i RFDC AXIS raw witness capture beats")
-                axi_read(16'he210, rd);
-                `TB_CHECK_EQ(rd, 32'h0000_0200, "27i RFDC AXIS raw witness sample0 low")
-                axi_read(16'he214, rd);
-                `TB_CHECK_EQ(rd, 32'h0000_0001, "27i RFDC AXIS raw witness sample0 high")
-                axi_read(16'he21c, rd);
-                `TB_CHECK_EQ(rd, 32'd16, "27i RFDC AXIS raw witness word count")
-                axi_read(16'he800, rd);
-                `TB_CHECK_EQ(rd, 32'he800_0000, "27i RFDC AXIS raw witness buffer read")
-                axi_write(16'he208, 32'd5);
-                `TB_CHECK_EQ(rfdc_axis_raw_witness_channel_select_ctrl, 3'd5, "27i RFDC AXIS raw witness channel output")
-                axi_write(16'he20c, 32'd32);
-                `TB_CHECK_EQ(rfdc_axis_raw_witness_capture_beats, 9'd32, "27i RFDC AXIS raw witness beats output")
-                expect_rfdc_axis_raw_witness_pulses();
-            end else begin
-                axi_read(16'he204, rd);
-                `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness status archived")
-                axi_read(16'he20c, rd);
-                `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness beats archived")
-                axi_read(16'he210, rd);
-                `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness sample0 archived")
-                axi_read(16'he800, rd);
-                `TB_CHECK_EQ(rd, 32'd0, "production RFDC AXIS raw witness buffer archived")
-                axi_write(16'he208, 32'd5);
-                `TB_CHECK_EQ(rfdc_axis_raw_witness_channel_select_ctrl, 3'd0, "production RFDC AXIS raw witness channel no-op")
-                axi_write(16'he20c, 32'd32);
-                `TB_CHECK_EQ(rfdc_axis_raw_witness_capture_beats, 9'd256, "production RFDC AXIS raw witness beats no-op")
-                expect_no_rfdc_axis_raw_witness_pulses();
-            end
-        end else begin
-            axi_read(16'h0794, rd);
-            `TB_CHECK_EQ(rd, 32'h0004_1003, "TX payload witness status")
-            axi_read(16'h079c, rd);
-            `TB_CHECK_EQ(rd, 32'd1040, "default TX payload witness capture words")
-            axi_read(16'h07a0, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0100, "TX payload witness sample0 low")
-            axi_read(16'h07a4, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0001, "TX payload witness sample0 high")
-            axi_read(16'h07b8, rd);
-            `TB_CHECK_EQ(rd, 32'h0008_0000, "TX payload witness layout low")
-            axi_read(16'h07bc, rd);
-            `TB_CHECK_EQ(rd, 32'h0100_0001, "TX payload witness layout high")
-            axi_read(16'h07d0, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0100, "TX payload witness RFDC sample count low")
-            axi_read(16'h07d8, rd);
-            `TB_CHECK_EQ(rd, 32'h0004_1003, "paired coherence status")
-            axi_read(16'h07dc, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0400, "paired source sample0 low")
-            axi_read(16'h07e0, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0004, "paired source sample0 high")
-            axi_read(16'h07e4, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0200, "paired preview sample0 low")
-            axi_read(16'h07e8, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0001, "paired preview sample0 high")
-            axi_read(16'h07ec, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0100, "paired header sample0 low")
-            axi_read(16'h07f0, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0001, "paired header sample0 high")
-            axi_read(16'h07f4, rd);
-            `TB_CHECK_EQ(rd, 32'hffff_ff00, "paired sample0 delta low")
-            axi_read(16'h07f8, rd);
-            `TB_CHECK_EQ(rd, 32'hffff_ffff, "paired sample0 delta high")
-            axi_read(32'h0001_0000, rd);
-            `TB_CHECK_EQ(rd, 32'hd000_0000, "TX payload witness buffer read")
-            axi_write(16'h0798, 32'd1);
-            `TB_CHECK_EQ(tx_payload_witness_stream_filter, 2'd1, "TX payload witness stream filter output")
-            axi_write(16'h079c, 32'd64);
-            `TB_CHECK_EQ(tx_payload_witness_capture_words, 11'd64, "TX payload witness capture words output")
-            expect_payload_witness_pulses();
-            axi_read(16'hb604, rd);
-            `TB_CHECK_EQ(rd, 32'h0001_0033, "DAC TX witness status")
-            axi_read(16'hb608, rd);
-            `TB_CHECK_EQ(rd, 32'd256, "default DAC TX witness capture words")
-            axi_read(16'hb60c, rd);
-            `TB_CHECK_EQ(rd, 32'd256, "DAC TX witness buffer words")
-            axi_read(16'hb610, rd);
-            `TB_CHECK_EQ(rd, 32'd17, "DAC TX witness phase epoch")
-            axi_read(16'hb614, rd);
-            `TB_CHECK_EQ(rd, 32'h1234_5678, "DAC TX witness phase accumulator")
-            axi_read(16'hb618, rd);
-            `TB_CHECK_EQ(rd, 32'h0102_0304, "DAC TX witness phase step")
-            axi_read(16'hb61c, rd);
-            `TB_CHECK_EQ(rd, 32'h4000_0000, "DAC TX witness phase0")
-            axi_read(16'hb620, rd);
-            `TB_CHECK_EQ(rd, 32'd1, "DAC TX witness mode")
-            axi_read(16'hc000, rd);
-            `TB_CHECK_EQ(rd, 32'hdc00_0000, "DAC TX witness buffer read")
-            axi_write(16'hb608, 32'd64);
-            `TB_CHECK_EQ(dac_tx_witness_capture_words, 9'd64, "DAC TX witness capture words output")
-            expect_dac_tx_witness_pulses();
-            axi_read(16'he204, rd);
-            `TB_CHECK_EQ(rd, 32'h0300_0412, "RFDC AXIS raw witness status")
-            axi_read(16'he20c, rd);
-            `TB_CHECK_EQ(rd, 32'd256, "default RFDC AXIS raw witness capture beats")
-            axi_read(16'he210, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0200, "RFDC AXIS raw witness sample0 low")
-            axi_read(16'he214, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0001, "RFDC AXIS raw witness sample0 high")
-            axi_read(16'he218, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_001f, "RFDC AXIS raw witness flags")
-            axi_read(16'he21c, rd);
-            `TB_CHECK_EQ(rd, 32'd16, "RFDC AXIS raw witness word count")
-            axi_read(16'he220, rd);
-            `TB_CHECK_EQ(rd, 32'd1024, "RFDC AXIS raw witness buffer words")
-            axi_read(16'he224, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_00ff, "RFDC AXIS raw witness valid mask")
-            axi_read(16'he800, rd);
-            `TB_CHECK_EQ(rd, 32'he800_0000, "RFDC AXIS raw witness buffer read")
-            axi_write(16'he208, 32'd5);
-            `TB_CHECK_EQ(rfdc_axis_raw_witness_channel_select_ctrl, 3'd5, "RFDC AXIS raw witness channel output")
-            axi_write(16'he20c, 32'd32);
-            `TB_CHECK_EQ(rfdc_axis_raw_witness_capture_beats, 9'd32, "RFDC AXIS raw witness capture beats output")
-            expect_rfdc_axis_raw_witness_pulses();
-        end
+        axi_read(16'h0794, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired payload window is reserved")
+        axi_write(16'h0798, 32'd1);
+        axi_read(16'h0798, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired payload control ignores writes")
+        axi_read(16'hb604, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired DAC witness window is reserved")
+        axi_write(16'hb608, 32'd64);
+        axi_read(16'hb608, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired DAC witness control ignores writes")
+        axi_read(16'he204, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired RFDC witness window is reserved")
+        axi_write(16'he208, 32'd5);
+        axi_read(16'he208, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired RFDC witness control ignores writes")
+        axi_read(32'h0001_0000, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired payload buffer is reserved")
+        axi_read(16'hc000, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired DAC witness buffer is reserved")
+        axi_read(16'he800, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired RFDC witness buffer is reserved")
 
         axi_write(16'hd008, 32'd0);
         axi_write(16'hd00c, 32'd3);
         axi_read(16'hd004, rd);
-`ifdef T510_STAGE32
         `TB_CHECK_EQ(rd, 32'h0000_6d13, "unsupported tier zero falls back to 160MS/s TIME_SPEC")
-`else
-        `TB_CHECK_EQ(rd, 32'h0000_6013, "20MHz TIME_SPEC enables time and spec but waits for F-engine valid")
-`endif
         axi_read(16'hd010, rd);
-`ifdef T510_STAGE32
         `TB_CHECK_EQ(rd, 32'd160_000_000, "fallback narrow science sample rate")
-`else
-        `TB_CHECK_EQ(rd, 32'd30_720_000, "20MHz science sample rate")
-`endif
         axi_read(16'hd014, rd);
-`ifdef T510_STAGE32
         `TB_CHECK_EQ(rd, 32'd2, "fallback narrow science decim factor")
-`else
-        `TB_CHECK_EQ(rd, 32'd8, "20MHz science decim factor")
-`endif
         axi_read(16'hd01c, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0140, "20MHz TIME_SPEC blocks dry-run and missing F-engine backend")
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd1, "invalid Stage 32 tier falls back to narrow")
-`else
-        `TB_CHECK_EQ(science_bandwidth_mode_cfg, 2'd0, "20MHz science bandwidth output")
-`endif
+        `TB_CHECK_EQ(science_sample_rate_mode_cfg, 2'd1, "invalid current tier falls back to narrow")
         `TB_CHECK_EQ(science_output_mode_cfg, 3'd3, "TIME_SPEC science mode output")
 
         axi_write(16'hd008, 32'd2);
         axi_read(16'hd004, rd);
         `TB_CHECK_EQ(rd, 32'h0000_6217, "200MHz TIME_SPEC is explicitly rejected")
         axi_read(16'hd010, rd);
-`ifdef T510_STAGE32
         `TB_CHECK_EQ(rd, 32'd320_000_000, "320MS/s science sample rate")
-`else
-        `TB_CHECK_EQ(rd, 32'd245_760_000, "200MHz science sample rate")
-`endif
         axi_read(16'hd014, rd);
         `TB_CHECK_EQ(rd, 32'd1, "200MHz science decim factor")
         axi_read(16'hd01c, rd);
@@ -1533,76 +838,25 @@ module tb_feng_ctrl_axi;
         `TB_CHECK_EQ(chan_split, 32'd1024, "chan_split output")
         `TB_CHECK_EQ(scale_id, 32'h1234_5678, "scale_id output")
         `TB_CHECK_EQ(unix_seconds, 64'h1122_3344_5566_7788, "unix_seconds output")
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(pfb_chan0, 32'd0, "production FFT-only clamps PFB chan0")
-            `TB_CHECK_EQ(pfb_chan_count, 16'd256, "production FFT-only clamps PFB channel count")
-            `TB_CHECK_EQ(pfb_time_count, 16'd1, "production FFT-only clamps PFB time count")
-            `TB_CHECK_EQ(spec_chan_count, 16'd256, "production SPEC channel count stays 256")
-            `TB_CHECK_EQ(spec_time_count, 16'd1, "production SPEC time count stays 1")
-        end else begin
-            `TB_CHECK_EQ(pfb_chan0, 32'd128, "PFB chan0 output")
-            `TB_CHECK_EQ(pfb_chan_count, 16'd32, "PFB channel count output")
-            `TB_CHECK_EQ(pfb_time_count, 16'd8, "PFB time count output")
-            `TB_CHECK_EQ(spec_chan_count, 16'd32, "legacy SPEC channel count mirrors PFB")
-            `TB_CHECK_EQ(spec_time_count, 16'd8, "legacy SPEC time count mirrors PFB")
-        end
+        `TB_CHECK_EQ(pfb_chan0, 32'd0, "PFB channel origin is fixed")
+        `TB_CHECK_EQ(pfb_chan_count, 16'd256, "PFB channel count is fixed")
+        `TB_CHECK_EQ(pfb_time_count, 16'd1, "PFB time count is fixed")
+        `TB_CHECK_EQ(spec_chan_count, 16'd256, "SPEC channel count stays 256")
+        `TB_CHECK_EQ(spec_time_count, 16'd1, "SPEC time count stays one")
         axi_read(16'h0914, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd0, "production FFT-only PFB chan0 readback")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd128, "PFB chan0 readback")
-        end
+        `TB_CHECK_EQ(rd, 32'd0, "PFB channel origin readback")
         axi_read(16'h0918, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd256, "production FFT-only PFB channel count readback")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd32, "PFB channel count readback")
-        end
+        `TB_CHECK_EQ(rd, 32'd256, "PFB channel count readback")
         axi_read(16'h091c, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd1, "production FFT-only PFB time count readback")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd8, "PFB time count readback")
-        end
+        `TB_CHECK_EQ(rd, 32'd1, "PFB time count readback")
         axi_read(16'h0910, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'h0000_0556, "production FFT-only 12-bit XFFT scale schedule readback")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'h0000_5556, "PFB FFT shift readback")
-        end
-        if (TB_PRODUCTION_27H) begin
-            axi_read(32'h0001_3064, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production endpoint bulk window archived")
-            axi_read(32'h0001_3070, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production endpoint bulk port archived")
-            axi_read(32'h0001_4040, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production SPEC route bulk window archived")
-            axi_read(32'h0001_4044, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production SPEC route bulk chan0 archived")
-            axi_read(32'h0001_4840, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TIME route bulk window archived")
-            axi_read(32'h0001_4844, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TIME route bulk mask archived")
-        end else begin
-            axi_read(32'h0001_3064, rd);
-            `TB_CHECK_EQ(rd, 32'h0a00_0112, "endpoint3 IP readback")
-            axi_read(32'h0001_306c, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_1122, "endpoint3 MAC high readback")
-            axi_read(32'h0001_3070, rd);
-            `TB_CHECK_EQ(rd, 32'd4400, "endpoint3 dst port readback")
-            axi_read(32'h0001_3074, rd);
-            `TB_CHECK_EQ(rd, 32'd4001, "endpoint3 src port readback")
-            axi_read(32'h0001_4040, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0301, "SPEC route2 control readback")
-            axi_read(32'h0001_4044, rd);
-            `TB_CHECK_EQ(rd, 32'd1024, "SPEC route2 chan0 readback")
-            axi_read(32'h0001_4048, rd);
-            `TB_CHECK_EQ(rd, 32'd64, "SPEC route2 count readback")
-            axi_read(32'h0001_4840, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0301, "TIME route2 control readback")
-            axi_read(32'h0001_4844, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_000f, "TIME route2 mask readback")
-        end
+        `TB_CHECK_EQ(rd, 32'h0000_0556, "12-bit XFFT scale schedule readback")
+        axi_read(32'h0001_3064, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired endpoint bulk window is reserved")
+        axi_read(32'h0001_4040, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired SPEC route bulk window is reserved")
+        axi_read(32'h0001_4840, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired TIME route bulk window is reserved")
 
         fsm_state = 4'd6;
         streaming = 1'b1;
@@ -1621,9 +875,6 @@ module tb_feng_ctrl_axi;
         tx_fifo_level_words = 32'd123;
         tx_fifo_high_water_words = 32'd456;
         tx_fifo_backpressure_cycles = 32'd789;
-        tx_header_capture_armed = 1'b1;
-        tx_header_capture_valid = 1'b0;
-        tx_header_capture_word_count = 5'd7;
         pfb_status = 32'h0000_0013;
         pfb_frame_count = 32'd17;
         pfb_overflow_count = 32'd2;
@@ -1680,17 +931,9 @@ module tb_feng_ctrl_axi;
         axi_read(16'h0360, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0002, "TX link dry-run flags readback")
         axi_read(16'h0364, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd0, "production TX dry-run packet count archived")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd5, "TX dry-run packet count readback")
-        end
+        `TB_CHECK_EQ(rd, 32'd0, "retired TX dry-run packet count is reserved")
         axi_read(16'h0368, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd0, "production TX dry-run byte count archived")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd4096, "TX dry-run byte count readback")
-        end
+        `TB_CHECK_EQ(rd, 32'd0, "retired TX dry-run byte count is reserved")
         axi_read(16'h036c, rd);
         `TB_CHECK_EQ(rd, 32'd123, "TX FIFO level readback")
         axi_read(16'h0370, rd);
@@ -1698,11 +941,7 @@ module tb_feng_ctrl_axi;
         axi_read(16'h0374, rd);
         `TB_CHECK_EQ(rd, 32'd789, "TX FIFO backpressure readback")
         axi_read(16'h037c, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd0, "production TX header capture armed status archived")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'h0007_0001, "TX header capture armed status")
-        end
+        `TB_CHECK_EQ(rd, 32'd0, "retired TX header status is reserved")
         axi_read(16'hb004, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0682, "TX preflight status readback")
         axi_read(16'hb008, rd);
@@ -1724,23 +963,11 @@ module tb_feng_ctrl_axi;
         axi_read(16'hb704, rd);
         `TB_CHECK_EQ(rd, 32'h0000_01d3, "TX CMAC source status readback")
         axi_read(32'h0001_400c, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd0, "production TX SPEC route0 bulk hit archived")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd11, "TX SPEC route0 hit readback")
-        end
+        `TB_CHECK_EQ(rd, 32'd0, "retired SPEC route0 bulk hit is reserved")
         axi_read(32'h0001_402c, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd0, "production TX SPEC route1 bulk hit archived")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd22, "TX SPEC route1 hit readback")
-        end
+        `TB_CHECK_EQ(rd, 32'd0, "retired SPEC route1 bulk hit is reserved")
         axi_read(32'h0001_480c, rd);
-        if (TB_PRODUCTION_27H) begin
-            `TB_CHECK_EQ(rd, 32'd0, "production TX TIME route0 bulk hit archived")
-        end else begin
-            `TB_CHECK_EQ(rd, 32'd33, "TX TIME route0 hit readback")
-        end
+        `TB_CHECK_EQ(rd, 32'd0, "retired TIME route0 bulk hit is reserved")
         axi_read(16'h0904, rd);
         `TB_CHECK_EQ(rd, 32'h0000_0013, "PFB status readback")
         axi_read(16'h0920, rd);
@@ -1780,83 +1007,25 @@ module tb_feng_ctrl_axi;
         axi_write(16'h0900, 32'h0000_0001);
         axi_read(16'h0900, rd);
         `TB_CHECK_EQ(rd, 32'd1, "PFB enable readback")
-        if (TB_PRODUCTION_27H) begin
-            expect_no_header_capture_arm_pulse();
-            expect_no_frame_capture_arm_pulse();
-            expect_tx_clear_pulse();
-            tx_header_capture_armed = 1'b0;
-            tx_header_capture_valid = 1'b1;
-            tx_header_capture_word_count = 5'd16;
-            tx_frame_capture_armed = 1'b0;
-            tx_frame_capture_valid = 1'b1;
-            tx_frame_capture_word_count = 5'd16;
-            axi_read(16'h037c, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TX header capture status archived")
-            axi_read(16'hb034, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TX frame capture status archived")
-            axi_read(16'h0380, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TX header capture buffer archived")
-            axi_read(16'hb040, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production TX frame capture buffer archived")
-            axi_read(16'h0500, rd);
-            `TB_CHECK_EQ(rd, 32'd12, "clip lane0 readback")
-            axi_read(16'h0524, rd);
-            `TB_CHECK_EQ(rd, 32'd34, "mean lane1 readback")
-            axi_read(16'h0404, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production debug status archived")
-            axi_read(16'h0408, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production debug NFFT archived")
-            axi_read(16'h0410, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production debug peak bin archived")
-            axi_read(16'h0414, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production debug peak power archived")
-            axi_read(16'h0800, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production debug time buffer archived")
-            axi_read(16'h1800, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "production debug FFT buffer archived")
-        end else begin
-            expect_header_capture_arm_pulse();
-            expect_frame_capture_arm_pulse();
-            expect_tx_clear_pulse();
-            tx_header_capture_armed = 1'b0;
-            tx_header_capture_valid = 1'b1;
-            tx_header_capture_word_count = 5'd16;
-            tx_frame_capture_armed = 1'b0;
-            tx_frame_capture_valid = 1'b1;
-            tx_frame_capture_word_count = 5'd16;
-            axi_read(16'h037c, rd);
-            `TB_CHECK_EQ(rd, 32'h0010_0002, "TX header capture valid status")
-            axi_read(16'hb034, rd);
-            `TB_CHECK_EQ(rd, 32'h0010_0002, "TX frame capture valid status")
-            axi_read(16'h0380, rd);
-            `TB_CHECK_EQ(rd, 32'hca00_0000, "TX header capture buffer word 0")
-            `TB_CHECK_EQ(tx_header_capture_rd_word, 5'd0, "TX header capture read word 0")
-            axi_read(16'h0384, rd);
-            `TB_CHECK_EQ(rd, 32'hca00_0001, "TX header capture buffer word 1")
-            `TB_CHECK_EQ(tx_header_capture_rd_word, 5'd1, "TX header capture read word 1")
-            axi_read(16'hb040, rd);
-            `TB_CHECK_EQ(rd, 32'hfb00_0000, "TX frame capture buffer word 0")
-            `TB_CHECK_EQ(tx_frame_capture_rd_word, 5'd0, "TX frame capture read word 0")
-            axi_read(16'hb044, rd);
-            `TB_CHECK_EQ(rd, 32'hfb00_0001, "TX frame capture buffer word 1")
-            `TB_CHECK_EQ(tx_frame_capture_rd_word, 5'd1, "TX frame capture read word 1")
-            axi_read(16'h0500, rd);
-            `TB_CHECK_EQ(rd, 32'd12, "clip lane0 readback")
-            axi_read(16'h0524, rd);
-            `TB_CHECK_EQ(rd, 32'd34, "mean lane1 readback")
-            axi_read(16'h0404, rd);
-            `TB_CHECK_EQ(rd, 32'h0000_0004, "debug done status readback")
-            axi_read(16'h0408, rd);
-            `TB_CHECK_EQ(rd, 32'd1024, "debug NFFT readback")
-            axi_read(16'h0410, rd);
-            `TB_CHECK_EQ(rd, 32'd7, "debug peak bin readback")
-            axi_read(16'h0414, rd);
-            `TB_CHECK_EQ(rd, 32'h0001_2345, "debug peak power readback")
-            axi_read(16'h0800, rd);
-            `TB_CHECK_EQ(rd, 32'h1234_5678, "debug time buffer readback")
-            axi_read(16'h1800, rd);
-            `TB_CHECK_EQ(rd, 32'h8765_4321, "debug FFT buffer readback")
-        end
+        expect_tx_clear_pulse();
+        axi_read(16'h037c, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired TX header status is reserved")
+        axi_read(16'hb034, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired TX frame status is reserved")
+        axi_read(16'h0380, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired TX header buffer is reserved")
+        axi_read(16'hb040, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired TX frame buffer is reserved")
+        axi_read(16'h0500, rd);
+        `TB_CHECK_EQ(rd, 32'd12, "clip lane0 readback")
+        axi_read(16'h0524, rd);
+        `TB_CHECK_EQ(rd, 32'd34, "mean lane1 readback")
+        axi_read(16'h0404, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired debug status is reserved")
+        axi_read(16'h0800, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired debug time buffer is reserved")
+        axi_read(16'h1800, rd);
+        `TB_CHECK_EQ(rd, 32'd0, "retired debug FFT buffer is reserved")
         axi_read(16'h0600, rd);
         `TB_CHECK_EQ(rd, 32'h0000_00ff, "default DAC enable mask")
         axi_write(16'h0600, 32'h0000_0055);
@@ -1891,67 +1060,21 @@ module tb_feng_ctrl_axi;
         axi_read(16'h0718, rd);
         `TB_CHECK_EQ(rd, 32'd1024, "preview nsamp readback")
         axi_read(16'h071c, rd);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(rd, 32'd320_000_000, "Stage 32 preview sample rate readback")
-`else
-        `TB_CHECK_EQ(rd, 32'd245_760_000, "preview sample rate readback")
-`endif
+        `TB_CHECK_EQ(rd, 32'd320_000_000, "current preview sample rate readback")
         axi_read(16'h0720, rd);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(rd, 32'd80_000_000, "Stage 32 preview AXIS beat rate readback")
-`else
-        `TB_CHECK_EQ(rd, 32'd61_440_000, "preview axis beat rate readback")
-`endif
+        `TB_CHECK_EQ(rd, 32'd80_000_000, "current preview AXIS beat rate readback")
         axi_read(16'h0724, rd);
         `TB_CHECK_EQ(rd, 32'd1, "preview mode readback")
         axi_write(16'h0730, 32'h0000_0207);
         axi_read(16'h0730, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0206, "preview audit control readback")
-        `TB_CHECK_EQ(preview_audit_source_select, 2'd2, "preview audit source output")
-        `TB_CHECK(preview_audit_event_enable, "preview audit event enable output")
-        `TB_CHECK(preview_audit_freeze_on_event, "preview audit freeze output")
-        axi_read(16'h0734, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0101, "preview audit status readback")
-        axi_read(16'h0738, rd);
-        `TB_CHECK_EQ(rd, 32'd3, "preview audit start count")
-        axi_read(16'h074c, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_1010, "preview audit first sample0 low")
-        axi_read(16'h0750, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0001, "preview audit first sample0 high")
-        axi_read(16'h075c, rd);
-        `TB_CHECK_EQ(rd, 32'd9, "preview audit latency")
-        axi_read(16'h0760, rd);
-        `TB_CHECK_EQ(rd, 32'd256, "preview audit capture beats")
-        axi_read(16'h0764, rd);
-        `TB_CHECK_EQ(rd, 32'd4, "preview audit valid gaps")
-        axi_read(16'h0768, rd);
-        `TB_CHECK_EQ(rd, 32'd5, "preview audit sample0 errors")
+        `TB_CHECK_EQ(rd, 32'd0, "retired preview diagnostic control is reserved")
         axi_write(16'h0770, 32'd28000);
-        `TB_CHECK_EQ(preview_audit_event_threshold, 16'd28000, "preview audit threshold output")
         axi_read(16'h0770, rd);
-        `TB_CHECK_EQ(rd, 32'd28000, "preview audit threshold readback")
-        axi_read(16'h0774, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_2004, "preview event sample0 low")
-        axi_read(16'h077c, rd);
-        `TB_CHECK_EQ(rd, 32'd32000, "preview event max code")
-        axi_read(16'h0784, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_000f, "preview event RFDC flags")
-        axi_read(16'h0788, rd);
-        `TB_CHECK_EQ(rd, 32'd17, "preview event DAC epoch")
-        axi_read(16'h078c, rd);
-        `TB_CHECK_EQ(rd, 32'd256, "preview event buffer words")
+        `TB_CHECK_EQ(rd, 32'd0, "retired preview event threshold is reserved")
         axi_read(16'ha808, rd);
-        `TB_CHECK_EQ(rd, 32'hea00_0002, "preview event buffer readback")
+        `TB_CHECK_EQ(rd, 32'd0, "retired preview event buffer is reserved")
         axi_read(16'h06e0, rd);
-        `TB_CHECK_EQ(rd, 32'd17, "DAC audit epoch seen")
-        axi_read(16'h06e4, rd);
-        `TB_CHECK_EQ(rd, 32'h1234_5678, "DAC audit phase accumulator")
-        axi_read(16'h06e8, rd);
-        `TB_CHECK_EQ(rd, 32'h0102_0304, "DAC audit phase step")
-        axi_read(16'h06ec, rd);
-        `TB_CHECK_EQ(rd, 32'h4000_0000, "DAC audit phase0")
-        axi_read(16'h06f0, rd);
-        `TB_CHECK_EQ(rd, 32'd1, "DAC audit mode")
+        `TB_CHECK_EQ(rd, 32'd0, "retired DAC audit window is reserved")
         axi_read(16'h2800, rd);
         `TB_CHECK_EQ(rd, 32'hfeed_cafe, "preview buffer readback")
 

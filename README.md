@@ -1,65 +1,121 @@
-# T510 Stage 29 F-engine Production Release
+# T510 Stage 33 F-engine
 
-Stage 29 is the production software surface for the frozen T510 F-engine hardware baseline.
+Stage 33 raises every ADC and DAC tile to `3.84 GS/s`. The RFDC performs 12×
+decimation/interpolation, so the complex baseband remains `320 MS/s` and both
+ADC/DAC AXIS clocks remain `80 MHz`. The existing 1024-bit science bus, PFB,
+TIME/SPEC packet formats, UDP ports, and Rust receiver protocol are unchanged.
 
-## Frozen hardware contract
+## Hardware and API contract
 
 - Target: `xczu47dr-ffve1156-2-i`
-- `CORE_VERSION=0x00010030`
-- Overlay bitstream SHA256: `7486a55b6f7e50e5875474e7d85299b107e9384cfff454316f64f2d3d7e9800d`
-- TIME UDP ports: `4300..4307`
-- SPEC UDP ports: `4308..4323`
-- SPEC: `FENGINE_IQ16`, 4096 channels, `16 x 256 x 1`, 8 inputs, 8192-byte payload, 4-tap PFB
-- Production synchronization: external 10 MHz plus external PPS
+- `CORE_VERSION=0x00010033`
+- ADC: `3.84 GS/s`, 12× decimation, R2C fine mixer, Nyquist zone 1
+- DAC: `3.84 GS/s`, 12× interpolation, C2R fine mixer, Nyquist zone 1
+- RFDC complex baseband: `320 MS/s`; `sample0` remains on this timebase
+- RFDC reference: stable 160 MHz LMK profile with continuous 10 MHz SYSREF
+- TIME UDP ports: `4300..4307`; SPEC UDP ports: `4308..4323`
+- SPEC: 4096 channels, `16 x 256 x 1`, 8 inputs, 8192-byte payload, 4-tap PFB
+- API remains `/api/v2`; compatibility names such as `FEngineConfig` and
+  `sample_rate_msps` are retained
 
-Stage 29 does not change RTL, Vivado IP, constraints, overlay files, UDP headers, payload layout, or Rust preview binary protocols.
+The supported profiles and complete-band first-Nyquist center limits are:
 
-## Supported production profiles
+| Complex rate | Center range | TIME_ONLY | SPEC_ONLY | TIME_SPEC |
+| ---: | ---: | --- | --- | --- |
+| 160 MS/s | 80..1840 MHz | supported | supported | supported |
+| 320 MS/s | 160..1760 MHz | supported | supported | rejected |
 
-| Bandwidth | TIME_ONLY | SPEC_ONLY | TIME_SPEC |
-| --- | --- | --- | --- |
-| 100 MHz | supported | supported | supported |
-| 200 MHz | supported | supported | rejected: exceeds 100GbE capacity |
+DAC/RF signals must satisfy `1 <= f < 1920 MHz` and remain within center ±80
+MHz at 160 MS/s or center ±160 MHz at 320 MS/s. A live `/api/v2/dac` update is
+accepted only when its `center_mhz` matches all eight current RFDC DAC mixer
+readbacks; a mismatch returns HTTP 409.
 
-The strict Python API is exported from `python.stage29`: `Stage29Config`, `Stage29Mode`, `FlowDestination`, `DacChannelConfig`, and `Stage29Controller`. `Stage29Config.board_id` programs the 16-bit identity carried by every T510 packet; multi-board deployments must assign each board a unique ID, source IP, and source MAC. TIME has eight independently addressed endpoints and SPEC has sixteen. The CMAC source IP/MAC are configurable once per board, while every endpoint has an independent source port and destination tuple; defaults remain board ID `0`, source `10.0.1.1` / `02:00:00:00:00:01`, with ports `4000..4023`. All eight DAC lanes retain independent in-band frequency, amplitude, phase, and enable controls. Low-level historical `T510FEngine` methods remain available for compatibility, while production callers use `configure_science_29()` and `run_stage29_validation()`.
+## Main entry points
 
-The Rust Web preview is a seven-widget GridStack workspace: TIME, SPEC amplitude, phase, power, waterfall and phasor views, plus display-only controls. Apache ECharts 6.1.0 is packaged locally; interactive plots keep refreshing while restoring stable hover readouts, amplitude/power support frequency zoom and reset, and amplitude is displayed as `20 log10(max(|X|, 1 code))`. The waterfall uses a fixed, non-interactive 1 Hz RF/time grid, while phasor defaults to the relative reference-channel basis. GridStack handles drag, resize, snap, responsive compaction and browser-local layout persistence. The receiver remains permanently sized for all 24 production flows (`4300..4323`), while `output_mode` selects the active TIME/SPEC health contract. Hardware control remains exclusively in PYNQ/Jupyter.
+- Python control: `python.t510_control.FEngineController`
+- Jupyter console: `python.t510_console.create_console`
+- Board Agent: `rust/t510_board_agent`
+- TIME/SPEC receiver: `rust/t510_time_rx`
+- OpenAPI: `rust/t510_board_agent/assets/openapi.json`
+- TIME/SPEC wire contract: `docs/t510_udp_payload_v2.md`
+- Stage 33 configuration: `config/stage33/`
+- Current-project Vivado preparation: `scripts/build_stage33.tcl`
+- Current-project artifact export: `scripts/export_stage33_current_project.tcl`
+- Export verification/latest promotion: `scripts/build_stage33.sh`
+- Board release: `scripts/pynq_publish_stage33.sh`
+- Receiver release: `scripts/host_publish_stage33_rx.sh`
+- MTS campaign: `scripts/pynq_stage33_mts_campaign.py`
+- Eight-lane RF gate: `scripts/pynq_stage33_8lane_loopback.py`
+- Eight-lane RF point campaign: `scripts/pynq_stage33_rf_campaign.py`
+- DAC purity point campaign: `scripts/stage33_dac_purity_matrix.py`
+- Cold-start/service/resume gate: `scripts/stage33_cold_start_gate.py`
+- Board/host gate: `scripts/stage33_agent_host_gate.py`
+- Production matrix: `scripts/stage33_release_matrix.py`
+- Stage report: `reports/stages/33_rfdc_adc_dac_3p84g_release.md`
+- Offline verification: `reports/vivado/stage33/latest_only_build_submission_20260803.md`
+- Deployment/evidence guide: `reports/deployment/stage33_replication_guide.md`
 
-## Production entrypoints
+## MTS release gate
 
-- Jupyter: `notebooks/00_stage29_fengine_production_control.ipynb`
-- Board gate: `scripts/stage29_board_validate.py`
-- Host/Rust gate: `scripts/stage29_host_validate.py`
-- Host RX tuning: `scripts/host_stage29_rx_tune.sh`
-- PYNQ publish: `scripts/pynq_publish_stage29.sh`
-- Signal-path audit: `scripts/pynq_stage29_signal_audit.py`
-- QSFP preflight: `scripts/pynq_qsfp_udp_preflight_check.py`
-- Packet inspection: `scripts/check_t510_packet.py`
+Retired targets `230/336` are not valid Stage 33 defaults. Run a discovery
+campaign consisting of 20 RFDC resets, 10 overlay reloads, and 10 LMK reloads.
+Set the ADC target to the observed maximum +20 and the DAC target to the
+observed maximum +16, then repeat the same 40 cycles with fixed targets and
+require 40/40 passes. The fixed report also requires identical ADC/DAC
+four-tile latency and offset vectors across all 40 cycles.
 
-Example board gates, each performing a fresh bitstream download:
+`config/stage33/config.example.json` remains intentionally non-deployable until
+this evidence exists. `scripts/stage33_finalize_catalog.py` validates both
+reports and writes the targets, campaign proof, and the sole release bitstream
+SHA into that catalog. The publish and install scripts read the SHA from the
+catalog and fail closed on placeholders.
+
+## Offline regression
 
 ```bash
-sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/stage29_board_validate.py --board-id 0 --bandwidth-mhz 100 --mode time_only
-sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/stage29_board_validate.py --board-id 0 --bandwidth-mhz 100 --mode spec_only
-sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/stage29_board_validate.py --board-id 0 --bandwidth-mhz 100 --mode time_spec
-sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/stage29_board_validate.py --board-id 0 --bandwidth-mhz 200 --mode time_only
-sudo -E /usr/local/share/pynq-venv/bin/python3 scripts/stage29_board_validate.py --board-id 0 --bandwidth-mhz 200 --mode spec_only
+python3 -m unittest discover -s tests -p 'test_*.py'
+cargo test --manifest-path rust/t510_board_agent/Cargo.toml
+cargo test --manifest-path rust/t510_time_rx/Cargo.toml
+scripts/run_xsim_batch.sh
 ```
 
-Tune the host and run the matching 60-second Rust gate:
+Once the finalized candidate is on the physical board, the production matrix
+provides the frozen 5×60 s smoke, 3×10 minute soak, and 60 minute all-DAC-lane
+thermal campaigns:
 
 ```bash
-sudo scripts/host_stage29_rx_tune.sh --mode time_spec ens2f0np0
-python3 scripts/stage29_host_validate.py --bandwidth-mhz 100 --mode time_spec --seconds 60
+scripts/stage33_release_matrix.py --suite smoke_60s --tag candidate1
+scripts/stage33_release_matrix.py --suite soak_10m --tag candidate1
+scripts/stage33_release_matrix.py --suite thermal_60m --tag candidate1
 ```
 
-## Build and regression tools
+The matrix performs a fresh configure/MTS for each case, continuously polls
+PLL/SYSREF/RFDC/data-path health, and mutes all DAC lanes after the thermal
+case.
 
-- Project setup: `scripts/setup_project.tcl`
-- Overlay export: `scripts/export_overlay.tcl`
-- XFFT IP creation: `scripts/create_fengine_xfft_ip.tcl`
-- XSim: `scripts/run_xsim_batch.sh` or `scripts/run_sim.tcl`
-- Vivado message policy: `scripts/vivado_msg_policy.tcl`
-- AA100 coefficient check: `scripts/stage29_verify_aa100_coeffs.py`
+The RF acceptance entry points cover eight lanes at center frequencies 200,
+960, and 1760 MHz, plus a 1.90 GHz signal, followed by the low/mid/high DAC
+purity and image/spur gates. The board campaign reads its fixed targets and
+candidate SHA only from the finalized catalog:
 
-Historical implementation and hardware acceptance evidence remains under `reports/`. X-engine, beamformer, switch/DGX integration, payload changes, and `200MHz TIME_SPEC` are outside Stage 29.
+```bash
+scripts/pynq_stage33_rf_campaign.py --tag candidate1
+scripts/stage33_dac_purity_matrix.py --tag candidate1
+scripts/stage33_cold_start_gate.py --tag candidate1
+```
+
+Vivado release acceptance additionally requires block-design validation,
+synthesis, implementation, DRC, bitstream generation, non-negative WNS/WHS,
+and generated RFDC metadata readback at 3.84G/12×/80 MHz. After the cleaned
+candidate passes board acceptance, only its latest artifact and run state are retained.
+
+Stage 33 is built directly in the existing `demo-ant.xpr`; no second Vivado
+project is created. Through the attached Vivado GUI, source
+`scripts/build_stage33.tcl`, run the existing `synth_1` and `impl_1` with the
+Vivado MCP operations, and generate the bitstream. Then set a new
+`T510_STAGE33_BUILD_DIR` below `build/stage33-vivado/` and source
+`scripts/export_stage33_current_project.tcl`. This directory is only an
+immutable artifact snapshot from the current project, not another project.
+Finally run `STAGE33_BUILD_ID=<id> scripts/build_stage33.sh` to verify the
+generated XCI/HWH contract and advance the Stage 33 artifact/report `latest`
+symlinks.

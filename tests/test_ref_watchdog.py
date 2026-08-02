@@ -170,7 +170,7 @@ class ReferenceWatchdogPolicyTests(unittest.TestCase):
             )
             with mock.patch.object(
                 t510_hw,
-                "STAGE32_CONFIGURE_LOCK_PATH",
+                "CONFIGURE_LOCK_PATH",
                 configure_lock,
             ):
                 with t510_hw._configure_hardware_guard(True):

@@ -20,29 +20,12 @@ module tb_rfdc_fullrate_preview;
     wire error;
     wire [31:0] capture_count;
     wire [63:0] sample0;
-    logic [1:0] audit_source_select = 2'd0;
-    logic audit_event_enable = 1'b0;
-    logic audit_freeze_on_event = 1'b1;
-    logic audit_clear = 1'b0;
-    logic [15:0] audit_event_threshold = 16'd28000;
     logic [7:0] event_rd_addr = 8'd0;
     wire [31:0] event_rd_data;
-    wire [31:0] audit_status;
-    wire [31:0] audit_start_count;
-    wire [31:0] audit_first_count;
-    wire [31:0] audit_done_count;
-    wire [63:0] audit_start_sample0;
-    wire [63:0] audit_first_sample0;
-    wire [63:0] audit_done_sample0;
-    wire [31:0] audit_latency;
-    wire [31:0] audit_capture_beats;
-    wire [31:0] audit_valid_gap_count;
-    wire [31:0] audit_sample0_error_count;
     wire [63:0] event_sample0;
     wire [31:0] event_max_code;
     wire [31:0] event_info;
     wire [31:0] event_rfdc_flags;
-    wire [31:0] event_dac_phase_epoch;
 
     always #5 clk = ~clk;
     always #5 ctrl_clk = ~ctrl_clk;
@@ -85,41 +68,16 @@ module tb_rfdc_fullrate_preview;
         .s_axis_adc_tdata3(make_bus(sample_base + 16'd3)),
         .s_axis_adc_sample0(sample0_base + sample_base),
         .s_axis_adc_tvalid(1'b1),
-        .audit_source_select(audit_source_select),
-        .audit_event_enable(audit_event_enable),
-        .audit_freeze_on_event(audit_freeze_on_event),
-        .audit_clear_pulse(audit_clear),
-        .audit_event_threshold(audit_event_threshold),
-        .rfdc_status_flags(32'h0000_000f),
-        .dac_phase_epoch_ctrl(32'd7),
         .ctrl_capture_start_pulse(capture_start),
         .ctrl_capture_clear_pulse(capture_clear),
         .ctrl_rd_input(rd_input),
         .ctrl_rd_addr(rd_addr),
-        .ctrl_event_rd_addr(event_rd_addr),
         .ctrl_rd_data(rd_data),
-        .ctrl_event_rd_data(event_rd_data),
         .ctrl_busy(busy),
         .ctrl_done(done),
         .ctrl_error(error),
         .ctrl_capture_count(capture_count),
-        .ctrl_sample0(sample0),
-        .ctrl_audit_status(audit_status),
-        .ctrl_audit_start_count(audit_start_count),
-        .ctrl_audit_first_count(audit_first_count),
-        .ctrl_audit_done_count(audit_done_count),
-        .ctrl_audit_start_sample0(audit_start_sample0),
-        .ctrl_audit_first_sample0(audit_first_sample0),
-        .ctrl_audit_done_sample0(audit_done_sample0),
-        .ctrl_audit_start_to_first_latency(audit_latency),
-        .ctrl_audit_capture_beats(audit_capture_beats),
-        .ctrl_audit_valid_gap_count(audit_valid_gap_count),
-        .ctrl_audit_sample0_error_count(audit_sample0_error_count),
-        .ctrl_event_sample0(event_sample0),
-        .ctrl_event_max_code(event_max_code),
-        .ctrl_event_info(event_info),
-        .ctrl_event_rfdc_flags(event_rfdc_flags),
-        .ctrl_event_dac_phase_epoch(event_dac_phase_epoch)
+        .ctrl_sample0(sample0)
     );
 
     always_ff @(posedge clk) begin
@@ -164,14 +122,6 @@ module tb_rfdc_fullrate_preview;
         `TB_CHECK(!error, "full-rate preview has no error")
         `TB_CHECK_EQ(capture_count, 32'd1024, "full-rate preview captures 1024 samples")
         `TB_CHECK_EQ(sample0[1:0], 2'd0, "full-rate preview sample0 is a baseband sample index")
-        `TB_CHECK_EQ(audit_start_count, 32'd1, "audit start count")
-        `TB_CHECK_EQ(audit_first_count, 32'd1, "audit first write count")
-        `TB_CHECK_EQ(audit_done_count, 32'd1, "audit done count")
-        `TB_CHECK_EQ(audit_capture_beats, 32'd256, "audit captures 256 beats for 1024 full-rate samples")
-        `TB_CHECK_EQ(audit_sample0_error_count, 32'd0, "audit sample0 step clean")
-        `TB_CHECK_EQ(audit_valid_gap_count, 32'd0, "audit valid gap clean")
-        `TB_CHECK_EQ(audit_first_sample0, sample0, "audit first sample0 matches preview metadata")
-        `TB_CHECK_EQ(audit_done_sample0, sample0 + 64'd1020, "audit done sample0 is last beat base")
         first_sample = sample0[15:0] - sample0_base[15:0];
 
         read_preview(3'd0, 10'd0, data);

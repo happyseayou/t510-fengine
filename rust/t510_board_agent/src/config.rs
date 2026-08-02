@@ -41,13 +41,36 @@ pub struct BitstreamSpec {
     pub mts_adc_target_latency: Option<i32>,
     #[serde(default)]
     pub mts_dac_target_latency: Option<i32>,
+    #[serde(default)]
+    pub mts_campaign: Option<MtsCampaignProof>,
     pub profiles: Vec<ProfileSpec>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct MtsCampaignCycles {
+    pub rfdc_reset: u32,
+    pub overlay_reload: u32,
+    pub lmk_reload: u32,
+    pub passed: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MtsCampaignProof {
+    pub discovery: MtsCampaignCycles,
+    pub fixed: MtsCampaignCycles,
+    pub observed_adc_max: i32,
+    pub observed_dac_max: i32,
+    pub adc_margin: i32,
+    pub dac_margin: i32,
+    pub evidence_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileSpec {
-    pub bandwidth_mhz: u16,
+    pub sample_rate_msps: u16,
     pub modes: Vec<ProfileMode>,
 }
 
@@ -58,6 +81,8 @@ pub struct PublicBitstream {
     pub core_version: String,
     pub mts_adc_target_latency: Option<i32>,
     pub mts_dac_target_latency: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mts_campaign: Option<MtsCampaignProof>,
     pub profiles: Vec<ProfileSpec>,
 }
 
@@ -160,14 +185,69 @@ impl RuntimeConfig {
                 ));
             }
             let core_value = u32::from_str_radix(core, 16).expect("validated core version");
-            if core_value == 0x0001_0032
-                && (item.mts_adc_target_latency.is_none()
-                    || item.mts_dac_target_latency.is_none()
-                    || item.mts_adc_target_latency.is_some_and(|value| value < 0)
-                    || item.mts_dac_target_latency.is_some_and(|value| value < 0))
+            if core_value != 0x0001_0033 {
+                return Err(format!(
+                    "bitstream {} must use current CORE_VERSION 0x00010033",
+                    item.id
+                ));
+            }
+            if item.mts_adc_target_latency.is_none()
+                || item.mts_dac_target_latency.is_none()
+                || item.mts_adc_target_latency.is_some_and(|value| value < 0)
+                || item.mts_dac_target_latency.is_some_and(|value| value < 0)
             {
                 return Err(format!(
-                    "Stage 32 bitstream {} requires frozen non-negative ADC/DAC MTS target latencies",
+                    "Stage 33 bitstream {} requires frozen non-negative ADC/DAC MTS target latencies",
+                    item.id
+                ));
+            }
+            if item.mts_adc_target_latency == Some(230) || item.mts_dac_target_latency == Some(336)
+            {
+                return Err(format!(
+                    "Stage 33 bitstream {} must not reuse the retired ADC/DAC MTS targets 230/336; use newly discovered targets",
+                    item.id
+                ));
+            }
+            let campaign = item.mts_campaign.as_ref().ok_or_else(|| {
+                format!(
+                    "Stage 33 bitstream {} requires an MTS discovery/fixed campaign proof",
+                    item.id
+                )
+            })?;
+            for (name, cycles) in [
+                ("discovery", &campaign.discovery),
+                ("fixed", &campaign.fixed),
+            ] {
+                if cycles.rfdc_reset != 20
+                    || cycles.overlay_reload != 10
+                    || cycles.lmk_reload != 10
+                    || cycles.passed != 40
+                {
+                    return Err(format!(
+                            "Stage 33 bitstream {} {name} MTS campaign must pass 20 RFDC reset + 10 overlay reload + 10 LMK reload cycles (40/40)",
+                            item.id
+                        ));
+                }
+            }
+            if campaign.adc_margin != 20 || campaign.dac_margin != 16 {
+                return Err(format!(
+                    "Stage 33 bitstream {} MTS margins must be ADC +20 and DAC +16",
+                    item.id
+                ));
+            }
+            if item.mts_adc_target_latency != Some(campaign.observed_adc_max + 20)
+                || item.mts_dac_target_latency != Some(campaign.observed_dac_max + 16)
+            {
+                return Err(format!(
+                        "Stage 33 bitstream {} MTS targets must equal observed maxima plus the frozen margins",
+                        item.id
+                    ));
+            }
+            if campaign.evidence_sha256.len() != 64
+                || hex::decode(&campaign.evidence_sha256).is_err()
+            {
+                return Err(format!(
+                    "Stage 33 bitstream {} MTS evidence_sha256 must be 64 hex digits",
                     item.id
                 ));
             }
@@ -189,6 +269,7 @@ impl RuntimeConfig {
                 core_version: item.core_version.clone(),
                 mts_adc_target_latency: item.mts_adc_target_latency,
                 mts_dac_target_latency: item.mts_dac_target_latency,
+                mts_campaign: item.mts_campaign.clone(),
                 profiles: item.profiles.clone(),
             };
             let helper = HelperBitstream {

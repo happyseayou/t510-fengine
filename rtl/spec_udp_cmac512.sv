@@ -7,8 +7,7 @@ module spec_udp_cmac512 #(
     parameter integer DATA_FIFO_DEPTH    = 256,
     parameter integer DATA_COUNT_W       = 9,
     parameter integer TOKEN_FIFO_DEPTH   = 16,
-    parameter integer TOKEN_COUNT_W      = 5,
-    parameter bit     PRODUCTION_27H     = 1'b0
+    parameter integer TOKEN_COUNT_W      = 5
 ) (
     input  wire                         s_clk,
     input  wire                         s_rst_n,
@@ -319,7 +318,6 @@ module spec_udp_cmac512 #(
         end
     endfunction
 
-    integer route_idx;
     always_comb begin
         route_found_comb = 1'b0;
         route_id_comb = 6'd0;
@@ -327,34 +325,18 @@ module spec_udp_cmac512 #(
         route_endpoint_enabled_comb = 1'b0;
         packet_chan_end_comb = spec_chan0 + {16'd0, spec_chan_count};
         route_chan_end_comb = 32'd0;
-        if (PRODUCTION_27H) begin
-            route_id_comb = {2'd0, spec_chan0[11:8]};
-            if ((N_SPEC_ROUTES >= 16) &&
-                (spec_chan_count == 16'd256) &&
-                (spec_time_count == 16'd1) &&
-                (spec_chan0[7:0] == 8'd0) &&
-                (spec_chan0[31:12] == 20'd0) &&
-                spec_route_enable[spec_chan0[11:8]] &&
-                (spec_route_chan0(spec_chan0[11:8]) == spec_chan0) &&
-                (spec_route_chan_count(spec_chan0[11:8]) == 16'd256)) begin
-                route_found_comb = 1'b1;
-                endpoint_id_comb = spec_route_endpoint(spec_chan0[11:8]);
-                route_chan_end_comb = spec_chan0 + 32'd256;
-            end
-        end else begin
-            for (route_idx = 0; route_idx < N_SPEC_ROUTES; route_idx = route_idx + 1) begin
-                if (!route_found_comb &&
-                    spec_route_enable[route_idx] &&
-                    (spec_route_chan_count(route_idx) != 16'd0) &&
-                    (spec_chan_count != 16'd0) &&
-                    (spec_chan0 >= spec_route_chan0(route_idx)) &&
-                    (packet_chan_end_comb <= (spec_route_chan0(route_idx) + {16'd0, spec_route_chan_count(route_idx)}))) begin
-                    route_found_comb = 1'b1;
-                    route_id_comb = route_idx[5:0];
-                    endpoint_id_comb = spec_route_endpoint(route_idx);
-                    route_chan_end_comb = spec_route_chan0(route_idx) + {16'd0, spec_route_chan_count(route_idx)};
-                end
-            end
+        route_id_comb = {2'd0, spec_chan0[11:8]};
+        if ((N_SPEC_ROUTES >= 16) &&
+            (spec_chan_count == 16'd256) &&
+            (spec_time_count == 16'd1) &&
+            (spec_chan0[7:0] == 8'd0) &&
+            (spec_chan0[31:12] == 20'd0) &&
+            spec_route_enable[spec_chan0[11:8]] &&
+            (spec_route_chan0(spec_chan0[11:8]) == spec_chan0) &&
+            (spec_route_chan_count(spec_chan0[11:8]) == 16'd256)) begin
+            route_found_comb = 1'b1;
+            endpoint_id_comb = spec_route_endpoint(spec_chan0[11:8]);
+            route_chan_end_comb = spec_chan0 + 32'd256;
         end
         if (route_found_comb) begin
             route_endpoint_enabled_comb = ({24'd0, endpoint_id_comb} < N_ENDPOINTS_I) &&

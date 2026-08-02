@@ -9,7 +9,7 @@ module tb_science_rate_selector;
 
     logic clk = 1'b0;
     logic rst_n = 1'b0;
-    logic [1:0] bandwidth_mode = 2'd2;
+    logic [1:0] sample_rate_mode = 2'd2;
     logic [DATA_W-1:0] s_axis_tdata = {DATA_W{1'b0}};
     logic [31:0] s_axis_tuser = 32'd0;
     logic [63:0] s_axis_sample0 = 64'd0;
@@ -85,7 +85,7 @@ module tb_science_rate_selector;
         .clk(clk),
         .rst_n(rst_n),
         .clear(1'b0),
-        .bandwidth_mode(bandwidth_mode),
+        .sample_rate_mode(sample_rate_mode),
         .s_axis_tdata(s_axis_tdata),
         .s_axis_tuser(s_axis_tuser),
         .s_axis_sample0(s_axis_sample0),
@@ -134,7 +134,7 @@ module tb_science_rate_selector;
     task automatic reset_case(input [1:0] mode_value);
         begin
             rst_n = 1'b0;
-            bandwidth_mode = mode_value;
+            sample_rate_mode = mode_value;
             m_axis_tready = 1'b1;
             s_axis_tvalid = 1'b0;
             s_axis_tlast = 1'b0;

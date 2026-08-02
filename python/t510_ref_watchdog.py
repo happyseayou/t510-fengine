@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resident Stage 32 external-reference safety watchdog.
+"""Resident Stage 33 external-reference safety watchdog.
 
 The T510 board does not route LMK04828 STATUS_LD1/STATUS_LD2 into the FPGA.
 Consequently the PL scheduler cannot distinguish a healthy external 10 MHz
@@ -31,10 +31,10 @@ from python.t510_clock import T510ClockController
 
 
 SCHEMA_VERSION = 1
-EXPECTED_CORE_VERSION = 0x0001_0032
-DEFAULT_STATE_PATH = Path("/run/t510-stage32-ref-watchdog.json")
-DEFAULT_LOCK_PATH = Path("/run/t510-stage32-ref-watchdog.lock")
-DEFAULT_CONFIGURE_LOCK_PATH = Path("/run/t510-stage32-configure.lock")
+EXPECTED_CORE_VERSION = 0x0001_0033
+DEFAULT_STATE_PATH = Path("/run/t510-ref-watchdog.json")
+DEFAULT_LOCK_PATH = Path("/run/t510-ref-watchdog.lock")
+DEFAULT_CONFIGURE_LOCK_PATH = Path("/run/t510-configure.lock")
 FPGA_MANAGER_STATE_PATH = Path("/sys/class/fpga_manager/fpga0/state")
 
 
@@ -208,9 +208,9 @@ class ReferenceWatchdog:
         return f"{active_sha1}:{timestamp}", state
 
     def _connect(self, identity: str) -> None:
-        from python.stage29 import Stage29Controller
+        from python.t510_control import FEngineController
 
-        controller = Stage29Controller(self.bitfile)
+        controller = FEngineController(self.bitfile)
         status = controller.connect(download=False)
         version = int(status.get("core_version", 0))
         if version != EXPECTED_CORE_VERSION:
@@ -331,7 +331,7 @@ class ReferenceWatchdog:
     def _state(self, *, mode: str, healthy: bool) -> dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,
-            "service": "t510-stage32-ref-watchdog",
+            "service": "t510-ref-watchdog",
             "pid": os.getpid(),
             "service_started_at": self.service_started_at,
             "updated_at": _timestamp(),

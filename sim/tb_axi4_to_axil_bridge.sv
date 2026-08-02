@@ -83,10 +83,7 @@ module tb_axi4_to_axil_bridge;
     logic [15:0] time_udp_port;
     logic [15:0] rfdc_active_mask;
     logic [63:0] unix_seconds;
-    wire [4:0] tx_header_capture_rd_word;
-    wire [31:0] tx_header_capture_rd_data;
 
-    assign tx_header_capture_rd_data = 32'hdb00_0000 | {27'd0, tx_header_capture_rd_word};
 
     axi4_to_axil_bridge dut_bridge (
         .clk(clk),
@@ -206,58 +203,6 @@ module tb_axi4_to_axil_bridge;
         .tx_selected_endpoint_id(8'd0),
         .tx_selected_route_id(6'd0),
         .tx_selected_route_is_time(1'b0),
-        .tx_header_capture_armed(1'b0),
-        .tx_header_capture_valid(1'b0),
-        .tx_header_capture_word_count(5'd0),
-        .tx_header_capture_rd_data(tx_header_capture_rd_data),
-        .tx_frame_capture_armed(1'b0),
-        .tx_frame_capture_valid(1'b0),
-        .tx_frame_capture_word_count(5'd0),
-        .tx_frame_capture_rd_data(32'd0),
-        .tx_payload_witness_armed(1'b0),
-        .tx_payload_witness_valid(1'b0),
-        .tx_payload_witness_capturing(1'b0),
-        .tx_payload_witness_word_count(11'd0),
-        .tx_payload_witness_stream_type(16'd0),
-        .tx_payload_witness_sample0(64'd0),
-        .tx_payload_witness_frame_id(64'd0),
-        .tx_payload_witness_seq_no(32'd0),
-        .tx_payload_witness_chan0(32'd0),
-        .tx_payload_witness_layout_word(64'd0),
-        .tx_payload_witness_payload_bytes(32'd0),
-        .tx_payload_witness_route_meta(32'd0),
-        .tx_payload_witness_rfdc_flags(32'd0),
-        .tx_payload_witness_rfdc_sample_count(64'd0),
-        .tx_payload_witness_dac_phase_epoch(32'd0),
-        .tx_payload_witness_overflow(1'b0),
-        .tx_payload_witness_filter_mismatch(1'b0),
-        .tx_payload_witness_rd_data(32'd0),
-        .dac_tx_witness_armed(1'b0),
-        .dac_tx_witness_valid(1'b0),
-        .dac_tx_witness_capturing(1'b0),
-        .dac_tx_witness_overflow(1'b0),
-        .dac_tx_witness_tvalid_seen(1'b0),
-        .dac_tx_witness_tready_seen(1'b0),
-        .dac_tx_witness_ready_gap_seen(1'b0),
-        .dac_tx_witness_word_count(9'd0),
-        .dac_tx_witness_phase_epoch(32'd0),
-        .dac_tx_witness_phase_acc(32'd0),
-        .dac_tx_witness_phase_step(32'd0),
-        .dac_tx_witness_phase0(32'd0),
-        .dac_tx_witness_mode(32'd0),
-        .dac_tx_witness_ready_gap_count(32'd0),
-        .dac_tx_witness_rd_data(32'd0),
-        .rfdc_axis_raw_witness_armed(1'b0),
-        .rfdc_axis_raw_witness_valid(1'b0),
-        .rfdc_axis_raw_witness_capturing(1'b0),
-        .rfdc_axis_raw_witness_overflow(1'b0),
-        .rfdc_axis_raw_witness_tvalid_seen(1'b0),
-        .rfdc_axis_raw_witness_beat_count(9'd0),
-        .rfdc_axis_raw_witness_channel_select(3'd0),
-        .rfdc_axis_raw_witness_sample0(64'd0),
-        .rfdc_axis_raw_witness_rfdc_flags(32'd0),
-        .rfdc_axis_raw_witness_valid_mask(16'd0),
-        .rfdc_axis_raw_witness_rd_data(32'd0),
         .tx_spec_route_hit_counts({64{32'd0}}),
         .tx_time_route_hit_counts({8{32'd0}}),
         .time_ddr_ring_status(32'd0),
@@ -290,42 +235,12 @@ module tb_axi4_to_axil_bridge;
         .science_aa100_active(1'b0),
         .science_aa100_primed(1'b0),
         .science_aa100_coeff_version(32'hAA10_0041),
-        .debug_busy(1'b0),
-        .debug_done(1'b0),
-        .debug_error(1'b0),
-        .debug_capture_count(32'd0),
-        .debug_peak_bin(32'd0),
-        .debug_peak_power(32'd0),
-        .debug_time_rd_data(32'd0),
-        .debug_fft_rd_data(32'd0),
         .preview_busy(1'b0),
         .preview_done(1'b0),
         .preview_error(1'b0),
         .preview_capture_count(32'd0),
         .preview_sample0(64'd0),
         .preview_rd_data(32'd0),
-        .preview_event_rd_data(32'd0),
-        .preview_audit_status(32'd0),
-        .preview_audit_start_count(32'd0),
-        .preview_audit_first_count(32'd0),
-        .preview_audit_done_count(32'd0),
-        .preview_audit_start_sample0(64'd0),
-        .preview_audit_first_sample0(64'd0),
-        .preview_audit_done_sample0(64'd0),
-        .preview_audit_start_to_first_latency(32'd0),
-        .preview_audit_capture_beats(32'd0),
-        .preview_audit_valid_gap_count(32'd0),
-        .preview_audit_sample0_error_count(32'd0),
-        .preview_event_sample0(64'd0),
-        .preview_event_max_code(32'd0),
-        .preview_event_info(32'd0),
-        .preview_event_rfdc_flags(32'd0),
-        .preview_event_dac_phase_epoch(32'd0),
-        .dac_audit_phase_epoch_seen(32'd0),
-        .dac_audit_ch0_phase_acc(32'd0),
-        .dac_audit_ch0_phase_step(32'd0),
-        .dac_audit_ch0_phase0(32'd0),
-        .dac_audit_ch0_mode(32'd0),
         .board_id(board_id),
         .mode(mode),
         .arm_latched(arm_latched),
@@ -384,10 +299,6 @@ module tb_axi4_to_axil_bridge;
         .tx_time_route_input_mask_vec(),
         .tx_time_route_endpoint_vec(),
         .rfdc_active_mask(rfdc_active_mask),
-        .debug_capture_start_pulse(),
-        .debug_capture_clear_pulse(),
-        .debug_time_rd_addr(),
-        .debug_fft_rd_addr(),
         .dac_tone_enable(),
         .dac_tone_amplitude(),
         .dac_tone_phase_step(),
@@ -403,30 +314,6 @@ module tb_axi4_to_axil_bridge;
         .preview_input_mask(),
         .preview_rd_input(),
         .preview_rd_addr(),
-        .preview_audit_clear_pulse(),
-        .preview_audit_source_select(),
-        .preview_audit_event_enable(),
-        .preview_audit_freeze_on_event(),
-        .preview_audit_event_threshold(),
-        .preview_event_rd_addr(),
-        .tx_header_capture_arm_pulse(),
-        .tx_header_capture_rd_word(tx_header_capture_rd_word),
-        .tx_frame_capture_arm_pulse(),
-        .tx_frame_capture_rd_word(),
-        .tx_payload_witness_arm_pulse(),
-        .tx_payload_witness_clear_pulse(),
-        .tx_payload_witness_stream_filter(),
-        .tx_payload_witness_capture_words(),
-        .tx_payload_witness_rd_word(),
-        .dac_tx_witness_arm_pulse(),
-        .dac_tx_witness_clear_pulse(),
-        .dac_tx_witness_capture_words(),
-        .dac_tx_witness_rd_word(),
-        .rfdc_axis_raw_witness_arm_pulse(),
-        .rfdc_axis_raw_witness_clear_pulse(),
-        .rfdc_axis_raw_witness_channel_select_ctrl(),
-        .rfdc_axis_raw_witness_capture_beats(),
-        .rfdc_axis_raw_witness_rd_word(),
         .unix_seconds(unix_seconds)
     );
 
@@ -531,15 +418,7 @@ module tb_axi4_to_axil_bridge;
         repeat (4) @(posedge clk);
 
         axi4_read_single(32'h8004_0000, rd);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(rd, 32'h0001_0032, "version via AXI4 bridge Stage 32")
-`elsif T510_STAGE27J_PFB
-        `TB_CHECK_EQ(rd, 32'h0001_002c, "version via AXI4 bridge Stage 27j PFB candidate")
-`elsif T510_STAGE27I_ANTI_ALIAS
-        `TB_CHECK_EQ(rd, 32'h0001_002b, "version via AXI4 bridge anti-alias candidate")
-`else
-        `TB_CHECK_EQ(rd, 32'h0001_0029, "version via AXI4 bridge")
-`endif
+        `TB_CHECK_EQ(rd, 32'h0001_0033, "version via AXI4 bridge Stage 33")
 
         axi4_write_single(32'h8004_0004, 32'h0000_0510);
         axi4_read_single(32'h8004_0004, rd);
@@ -553,15 +432,7 @@ module tb_axi4_to_axil_bridge;
         `TB_CHECK_EQ(rd, 32'h8004_00f0, "debug AR via AXI4 bridge")
 
         axi4_read_burst4(32'h8004_0000, b0, b1, b2, b3);
-`ifdef T510_STAGE32
-        `TB_CHECK_EQ(b0, 32'h0001_0032, "burst beat 0 version Stage 32")
-`elsif T510_STAGE27J_PFB
-        `TB_CHECK_EQ(b0, 32'h0001_002c, "burst beat 0 version Stage 27j PFB candidate")
-`elsif T510_STAGE27I_ANTI_ALIAS
-        `TB_CHECK_EQ(b0, 32'h0001_002b, "burst beat 0 version anti-alias candidate")
-`else
-        `TB_CHECK_EQ(b0, 32'h0001_0029, "burst beat 0 version")
-`endif
+        `TB_CHECK_EQ(b0, 32'h0001_0033, "burst beat 0 version Stage 33")
         `TB_CHECK_EQ(b1, 32'h0000_0510, "burst beat 1 board_id")
         `TB_CHECK_EQ(b2, 32'h0000_0001, "burst beat 2 mode")
         `TB_CHECK_EQ(b3, 32'h0000_0000, "burst beat 3 control")

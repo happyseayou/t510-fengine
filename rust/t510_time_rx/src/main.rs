@@ -1,5 +1,5 @@
-use clap::{Parser, ValueEnum};
 use base64::Engine;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::BTreeMap;
@@ -16,13 +16,12 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use t510_time_rx::{
-    ethernet_ipv4_udp_payload_range_fast, expected_sample0_delta, infer_bandwidth_from_sample0_delta,
-    parse_t510_header_fast, time_payload_complex_offset, validate_spec_header_fast,
-    validate_time_header_fast, BandwidthMode, ChannelWaveform, DisplayConfig, FastPacketError,
-    SpectrumLane, SpectrumSnapshot, T510Header, WaveformSnapshot, RAW_SAMPLE_RATE_HZ,
-    SPEC_BLOCK_CHANS_27F, SPEC_BLOCK_CHANS_27H, SPEC_BLOCK_COUNT_27F, SPEC_BLOCK_COUNT_27H,
-    SPEC_FFT_ONLY_FLAG, SPEC_PFB_ACTIVE_FLAG, SPEC_TIME_COUNT_27F, SPEC_TIME_COUNT_27H, STREAM_SPEC, STREAM_TIME,
-    TIME_NINPUT, TIME_SUBSAMPLES_PER_BEAT, TIME_UDP_PAYLOAD_BYTES,
+    ethernet_ipv4_udp_payload_range_fast, expected_sample0_delta,
+    infer_sample_rate_from_sample0_delta, parse_t510_header_fast, time_payload_complex_offset,
+    validate_spec_header_fast, validate_time_header_fast, ChannelWaveform, DisplayConfig,
+    FastPacketError, SampleRateMode, SpectrumLane, SpectrumSnapshot, T510Header, WaveformSnapshot,
+    RAW_SAMPLE_RATE_HZ, SPEC_BLOCK_COUNT, SPEC_TIME_COUNT, STREAM_SPEC, STREAM_TIME, TIME_NINPUT,
+    TIME_SUBSAMPLES_PER_BEAT, TIME_UDP_PAYLOAD_BYTES,
 };
 
 const ETH_P_ALL: u16 = 0x0003;
@@ -67,12 +66,11 @@ const SPECTRUM_PREVIEW_COLLECT_TIMEOUT: Duration = Duration::from_millis(500);
 const NO_DISPLAY_OWNER: usize = usize::MAX;
 const NO_SPECTRUM_FRAME: u64 = u64::MAX;
 const SPECTRUM_PREVIEW_GROUP_LEAD: u64 = 4096;
-const DEFAULT_FLOW_COUNT_27H: usize = 24;
-const DEFAULT_TIME_FLOW_COUNT_27H: usize = 8;
-const DEFAULT_SPEC_FLOW_COUNT_27H: usize = 16;
-const MAX_SPEC_FLOW_COUNT_27G: usize = 64;
-const MAX_FLOW_COUNT_27H: usize = 72;
-const MAX_WORKER_COUNT_27H: usize = 64;
+const DEFAULT_FLOW_COUNT: usize = 24;
+const DEFAULT_TIME_FLOW_COUNT: usize = 8;
+const DEFAULT_SPEC_FLOW_COUNT: usize = 16;
+const MAX_FLOW_COUNT: usize = 24;
+const MAX_WORKER_COUNT: usize = 64;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Backend {
@@ -103,55 +101,12 @@ enum PinWorkers {
     Off,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-enum SpecLayout {
-    Auto,
-    Stage27g,
-    Stage27h,
-    Stage27j,
-}
-
-impl SpecLayout {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Stage27g => "27g",
-            Self::Stage27h => "27h",
-            Self::Stage27j => "27j",
-        }
-    }
-
-    fn matches(self, header: &T510Header) -> bool {
-        match self {
-            Self::Auto => true,
-            Self::Stage27g => {
-                header.block_count == SPEC_BLOCK_COUNT_27F
-                    && header.chan_count == SPEC_BLOCK_CHANS_27F
-                    && header.time_count == SPEC_TIME_COUNT_27F
-                    && header.pfb_taps >= 4
-            }
-            Self::Stage27h => {
-                header.block_count == SPEC_BLOCK_COUNT_27H
-                    && header.chan_count == SPEC_BLOCK_CHANS_27H
-                    && header.time_count == SPEC_TIME_COUNT_27H
-                    && header.pfb_taps == 0
-                    && (header.spec_status_flags & SPEC_FFT_ONLY_FLAG) != 0
-            }
-            Self::Stage27j => {
-                header.block_count == SPEC_BLOCK_COUNT_27H
-                    && header.chan_count == SPEC_BLOCK_CHANS_27H
-                    && header.time_count == SPEC_TIME_COUNT_27H
-                    && header.pfb_taps >= 4
-                    && (header.spec_status_flags & SPEC_FFT_ONLY_FLAG) == 0
-                    && (header.spec_status_flags & SPEC_PFB_ACTIVE_FLAG) != 0
-            }
-        }
-    }
-}
-
 fn parse_u16_auto(value: &str) -> Result<u16, String> {
     let trimmed = value.trim();
-    if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
         u16::from_str_radix(hex, 16).map_err(|err| err.to_string())
     } else {
         trimmed.parse::<u16>().map_err(|err| err.to_string())
@@ -162,7 +117,7 @@ fn parse_u16_auto(value: &str) -> Result<u16, String> {
 #[command(
     author,
     version,
-    about = "T510 Stage 32 TIME/SPEC receiver and production F-engine preview"
+    about = "T510 Stage 33 TIME/SPEC receiver and production F-engine preview"
 )]
 struct Args {
     #[arg(long, default_value = "ens2f0np0")]
@@ -173,11 +128,11 @@ struct Args {
     dst_port_base: Option<u16>,
     #[arg(long, default_value_t = 4000)]
     src_port_base: u16,
-    #[arg(long, default_value_t = DEFAULT_FLOW_COUNT_27H)]
+    #[arg(long, default_value_t = DEFAULT_FLOW_COUNT)]
     flow_count: usize,
-    #[arg(long, default_value_t = DEFAULT_TIME_FLOW_COUNT_27H)]
+    #[arg(long, default_value_t = DEFAULT_TIME_FLOW_COUNT)]
     time_flow_count: usize,
-    #[arg(long, default_value_t = DEFAULT_SPEC_FLOW_COUNT_27H)]
+    #[arg(long, default_value_t = DEFAULT_SPEC_FLOW_COUNT)]
     spec_flow_count: usize,
     #[arg(long, default_value_t = 8192)]
     reorder_window: u32,
@@ -190,7 +145,7 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:8088")]
     web: String,
     #[arg(long, default_value_t = 160)]
-    initial_bandwidth_mhz: u32,
+    initial_sample_rate_msps: u32,
     #[arg(long, value_enum, default_value_t = Backend::Mmap)]
     backend: Backend,
     #[arg(long, default_value_t = 32)]
@@ -201,8 +156,6 @@ struct Args {
     fanout_mode: FanoutMode,
     #[arg(long, value_enum, default_value_t = PinWorkers::Auto)]
     pin_workers: PinWorkers,
-    #[arg(long, value_enum, default_value_t = SpecLayout::Stage27h)]
-    spec_layout: SpecLayout,
     #[arg(long, default_value_t = 512)]
     ring_mb: usize,
     #[arg(long, default_value_t = 4)]
@@ -223,7 +176,7 @@ impl Args {
     }
 
     fn flow_count_clamped(&self) -> usize {
-        self.flow_count.clamp(1, MAX_FLOW_COUNT_27H)
+        self.flow_count.clamp(1, MAX_FLOW_COUNT)
     }
 
     fn time_flow_count_clamped(&self) -> usize {
@@ -231,17 +184,14 @@ impl Args {
     }
 
     fn spec_flow_count_clamped(&self) -> usize {
-        let max_spec = match self.spec_layout {
-            SpecLayout::Stage27h | SpecLayout::Stage27j => DEFAULT_SPEC_FLOW_COUNT_27H,
-            SpecLayout::Auto | SpecLayout::Stage27g => MAX_SPEC_FLOW_COUNT_27G,
-        };
-        self.spec_flow_count
-            .min(max_spec)
-            .min(self.flow_count_clamped().saturating_sub(self.time_flow_count_clamped()))
+        self.spec_flow_count.min(DEFAULT_SPEC_FLOW_COUNT).min(
+            self.flow_count_clamped()
+                .saturating_sub(self.time_flow_count_clamped()),
+        )
     }
 
     fn worker_count_clamped(&self) -> usize {
-        self.worker_count.clamp(1, MAX_WORKER_COUNT_27H)
+        self.worker_count.clamp(1, MAX_WORKER_COUNT)
     }
 
     fn waveform_points_clamped(&self) -> usize {
@@ -266,7 +216,7 @@ struct FlowStats {
     sample0_gaps: u64,
     spec_seq_gaps: u64,
     spec_frame_gaps: u64,
-    detected_bandwidth_mhz: Option<u32>,
+    detected_sample_rate_msps: Option<u32>,
     last_seq_no: Option<u32>,
     last_frame_id: Option<u64>,
     last_sample0: Option<u64>,
@@ -300,7 +250,7 @@ impl FlowStats {
             sample0_gaps: 0,
             spec_seq_gaps: 0,
             spec_frame_gaps: 0,
-            detected_bandwidth_mhz: None,
+            detected_sample_rate_msps: None,
             last_seq_no: None,
             last_frame_id: None,
             last_sample0: None,
@@ -319,7 +269,7 @@ impl FlowStats {
     }
 
     fn clear_continuity(&mut self) {
-        self.detected_bandwidth_mhz = None;
+        self.detected_sample_rate_msps = None;
         self.last_seq_no = None;
         self.last_frame_id = None;
         self.last_sample0 = None;
@@ -379,7 +329,7 @@ struct WorkerStats {
     last_spec_sample0: Option<u64>,
     last_spec_chan0: Option<u32>,
     last_spec_chan_count: Option<u16>,
-    detected_bandwidth_mhz: Option<u32>,
+    detected_sample_rate_msps: Option<u32>,
     last_error: Option<String>,
 }
 
@@ -426,7 +376,7 @@ impl WorkerStats {
             last_spec_sample0: None,
             last_spec_chan0: None,
             last_spec_chan_count: None,
-            detected_bandwidth_mhz: None,
+            detected_sample_rate_msps: None,
             last_error: None,
         }
     }
@@ -446,7 +396,6 @@ struct ReceiverStats {
     active_flow_count: usize,
     active_time_flow_count: usize,
     active_spec_flow_count: usize,
-    spec_layout: String,
     worker_count: usize,
     active_worker_count: usize,
     fanout_group: u16,
@@ -510,8 +459,8 @@ struct ReceiverStats {
     last_spec_sample0: Option<u64>,
     last_spec_chan0: Option<u32>,
     last_spec_chan_count: Option<u16>,
-    selected_bandwidth_mhz: u32,
-    detected_bandwidth_mhz: Option<u32>,
+    selected_sample_rate_msps: u32,
+    detected_sample_rate_msps: Option<u32>,
     selected_detected_mismatch: bool,
     channel_rms_code: [f32; TIME_NINPUT],
     channel_max_abs_code: [i16; TIME_NINPUT],
@@ -540,7 +489,6 @@ impl ReceiverStats {
             active_flow_count: args.flow_count_clamped(),
             active_time_flow_count: args.time_flow_count_clamped(),
             active_spec_flow_count: args.spec_flow_count_clamped(),
-            spec_layout: args.spec_layout.label().to_string(),
             worker_count: args.worker_count_clamped(),
             active_worker_count: 0,
             fanout_group: args.fanout_group,
@@ -604,10 +552,10 @@ impl ReceiverStats {
             last_spec_sample0: None,
             last_spec_chan0: None,
             last_spec_chan_count: None,
-            selected_bandwidth_mhz: BandwidthMode::from_mhz(args.initial_bandwidth_mhz)
-                .unwrap_or(BandwidthMode::Msps160)
+            selected_sample_rate_msps: SampleRateMode::from_mhz(args.initial_sample_rate_msps)
+                .unwrap_or(SampleRateMode::Msps160)
                 .mhz(),
-            detected_bandwidth_mhz: None,
+            detected_sample_rate_msps: None,
             selected_detected_mismatch: false,
             channel_rms_code: [0.0; TIME_NINPUT],
             channel_max_abs_code: [0; TIME_NINPUT],
@@ -632,7 +580,7 @@ impl ReceiverStats {
 fn per_flow_detected_consensus(flows: &[FlowStats]) -> Option<u32> {
     let mut consensus = None;
     for flow in flows {
-        let Some(mhz) = flow.detected_bandwidth_mhz else {
+        let Some(mhz) = flow.detected_sample_rate_msps else {
             continue;
         };
         match consensus {
@@ -682,7 +630,7 @@ impl Default for SpecPreviewStatus {
             frame_id: None,
             sample0: None,
             coverage_blocks: 0,
-            block_count: SPEC_BLOCK_COUNT_27H,
+            block_count: SPEC_BLOCK_COUNT,
             complete: false,
             coverage_mask_lo: 0,
             coverage_mask_hi: 0,
@@ -723,7 +671,7 @@ impl Default for FullSpectrumAssembler {
             frame_id: 0,
             product_id: 0,
             nchan: 4096,
-            block_count: SPEC_BLOCK_COUNT_27H,
+            block_count: SPEC_BLOCK_COUNT,
             pfb_taps: 0,
             fft_shift: 0,
             spec_status_flags: 0,
@@ -767,7 +715,12 @@ impl FullSpectrumAssembler {
         self.coverage_mask_hi = 0;
         self.gap_before = false;
         if self.lanes.len() != block.lanes.len()
-            || self.lanes.first().map(|lane| lane.amplitude.len()).unwrap_or(0) != block.nchan as usize
+            || self
+                .lanes
+                .first()
+                .map(|lane| lane.amplitude.len())
+                .unwrap_or(0)
+                != block.nchan as usize
         {
             self.lanes = (0..block.lanes.len())
                 .map(|input| SpectrumLane {
@@ -858,7 +811,7 @@ impl FullSpectrumAssembler {
             frame_id: self.frame_id,
             chan0: 0,
             chan_count: self.nchan,
-            time_count: SPEC_TIME_COUNT_27H,
+            time_count: SPEC_TIME_COUNT,
             ninput: self.lanes.len() as u16,
             product_id: self.product_id,
             nchan: self.nchan,
@@ -950,7 +903,9 @@ impl SpecPreviewCapture {
         let new_frame = self
             .status
             .frame_id
-            .map(|frame_id| frame_id / u64::from(header.block_count.max(1)) != Self::header_frame_group(header))
+            .map(|frame_id| {
+                frame_id / u64::from(header.block_count.max(1)) != Self::header_frame_group(header)
+            })
             .unwrap_or(true);
         if !self.active || new_frame {
             self.arm_frame(header);
@@ -985,7 +940,8 @@ impl SpecPreviewCapture {
             .status
             .frame_id
             .map(|frame_id| {
-                FullSpectrumAssembler::frame_group(frame_id, block.block_count) != Self::block_frame_group(block)
+                FullSpectrumAssembler::frame_group(frame_id, block.block_count)
+                    != Self::block_frame_group(block)
             })
             .unwrap_or(true);
         if !self.active || new_frame {
@@ -1009,7 +965,10 @@ impl SpecPreviewCapture {
             last_dst_port: Some(block.dst_port),
             last_error: None,
         };
-        if complete && (!was_complete || self.last_publish.elapsed() >= interval.max(Duration::from_millis(1))) {
+        if complete
+            && (!was_complete
+                || self.last_publish.elapsed() >= interval.max(Duration::from_millis(1)))
+        {
             self.last_publish = Instant::now();
             Some(snapshot)
         } else {
@@ -1060,14 +1019,12 @@ impl Default for SpectrumPreviewGate {
 
 impl SpectrumPreviewGate {
     fn elapsed_ns(&self) -> u64 {
-        self.epoch
-            .elapsed()
-            .as_nanos()
-            .min(u128::from(u64::MAX)) as u64
+        self.epoch.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
     }
 
     fn reset(&self) {
-        self.target_frame_id.store(NO_SPECTRUM_FRAME, Ordering::SeqCst);
+        self.target_frame_id
+            .store(NO_SPECTRUM_FRAME, Ordering::SeqCst);
         self.target_sample0.store(0, Ordering::SeqCst);
         self.target_block_count.store(0, Ordering::SeqCst);
         self.mask_lo.store(0, Ordering::SeqCst);
@@ -1077,7 +1034,8 @@ impl SpectrumPreviewGate {
     }
 
     fn mark_complete(&self) {
-        self.target_frame_id.store(NO_SPECTRUM_FRAME, Ordering::SeqCst);
+        self.target_frame_id
+            .store(NO_SPECTRUM_FRAME, Ordering::SeqCst);
         self.target_sample0.store(0, Ordering::SeqCst);
         self.target_block_count.store(0, Ordering::SeqCst);
         self.mask_lo.store(0, Ordering::SeqCst);
@@ -1159,9 +1117,12 @@ impl SpectrumPreviewGate {
             let first = self.mask_lo.fetch_or(bit, Ordering::SeqCst) & bit == 0;
             if first {
                 let now_ns = self.elapsed_ns();
-                let _ = self
-                    .first_hit_ns
-                    .compare_exchange(0, now_ns, Ordering::SeqCst, Ordering::SeqCst);
+                let _ = self.first_hit_ns.compare_exchange(
+                    0,
+                    now_ns,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
             }
             first
         } else {
@@ -1169,9 +1130,12 @@ impl SpectrumPreviewGate {
             let first = self.mask_hi.fetch_or(bit, Ordering::SeqCst) & bit == 0;
             if first {
                 let now_ns = self.elapsed_ns();
-                let _ = self
-                    .first_hit_ns
-                    .compare_exchange(0, now_ns, Ordering::SeqCst, Ordering::SeqCst);
+                let _ = self.first_hit_ns.compare_exchange(
+                    0,
+                    now_ns,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
             }
             first
         }
@@ -1194,7 +1158,7 @@ struct SharedState {
 
 #[derive(Debug, Deserialize)]
 struct DisplayConfigPatch {
-    bandwidth_mhz: Option<u32>,
+    sample_rate_msps: Option<u32>,
     output_mode: Option<String>,
     center_mhz: Option<f64>,
     expected_mhz: Option<f64>,
@@ -1212,70 +1176,146 @@ struct DisplayConfigPatch {
 }
 
 impl DisplayConfigPatch {
-    fn apply_to(self, config: &mut DisplayConfig) {
+    fn apply_to(self, config: &mut DisplayConfig) -> Result<(), String> {
+        let mut next = config.clone();
         let scalar_target = self.expected_mhz.or(self.dac_mhz);
-        if let Some(value) = self.bandwidth_mhz {
-            config.bandwidth_mhz = value;
+        if let Some(value) = self.sample_rate_msps {
+            next.sample_rate_msps = value;
         }
         if let Some(value) = self.output_mode {
-            config.output_mode = value;
+            next.output_mode = value;
         }
         if let Some(value) = self.center_mhz {
-            config.center_mhz = value;
+            next.center_mhz = value;
         }
         if let Some(value) = self.expected_mhz {
-            config.expected_mhz = value;
+            next.expected_mhz = value;
         }
         if let Some(value) = self.dac_mhz {
-            config.dac_mhz = value;
+            next.dac_mhz = value;
         }
         if let Some(value) = scalar_target {
-            config.target_mhz_by_channel.fill(value);
+            next.target_mhz_by_channel.fill(value);
         }
         if let Some(targets) = self.target_mhz_by_channel {
-            for (dst, src) in config.target_mhz_by_channel.iter_mut().zip(targets) {
+            for (dst, src) in next.target_mhz_by_channel.iter_mut().zip(targets) {
                 *dst = src;
             }
         }
         if let Some(value) = self.waveform_view_mode {
-            config.waveform_view_mode = value;
+            next.waveform_view_mode = value;
         }
         if let Some(phases) = self.phase_deg_by_channel {
-            for (dst, src) in config.phase_deg_by_channel.iter_mut().zip(phases) {
+            for (dst, src) in next.phase_deg_by_channel.iter_mut().zip(phases) {
                 *dst = src;
             }
         }
         if let Some(value) = self.channel_mask {
-            config.channel_mask = value;
+            next.channel_mask = value;
         }
         if let Some(value) = self.time_window_us {
-            config.time_window_us = value;
+            next.time_window_us = value;
         }
         if let Some(value) = self.display_points {
-            config.display_points = value;
+            next.display_points = value;
         }
         if let Some(value) = self.vertical_scale {
-            config.vertical_scale = value;
+            next.vertical_scale = value;
         }
         if let Some(value) = self.paused.or(self.pause).or(self.freeze) {
-            config.paused = value;
+            next.paused = value;
         }
-        sanitize_config(config);
+        validate_stage33_frequency_config(&next)?;
+        sanitize_config(&mut next);
+        *config = next;
+        Ok(())
     }
 }
 
-fn sanitize_config(config: &mut DisplayConfig) {
-    if BandwidthMode::from_mhz(config.bandwidth_mhz).is_none() {
-        config.bandwidth_mhz = 160;
+fn validate_stage33_frequency_config(config: &DisplayConfig) -> Result<(), String> {
+    let (center_min_mhz, center_max_mhz, half_band_mhz) = match config.sample_rate_msps {
+        160 => (80.0, 1840.0, 80.0),
+        320 => (160.0, 1760.0, 160.0),
+        _ => return Err("sample_rate_msps must be 160 or 320".to_string()),
+    };
+    if !matches!(
+        config.output_mode.as_str(),
+        "time_only" | "spec_only" | "time_spec"
+    ) {
+        return Err("output_mode must be time_only, spec_only, or time_spec".to_string());
     }
-    if !matches!(config.output_mode.as_str(), "time_only" | "spec_only" | "time_spec") {
+    if config.sample_rate_msps == 320 && config.output_mode == "time_spec" {
+        return Err("Stage 33 rejects time_spec at 320 MS/s".to_string());
+    }
+    if !config.center_mhz.is_finite()
+        || !(center_min_mhz..=center_max_mhz).contains(&config.center_mhz)
+    {
+        return Err(format!(
+            "center_mhz must be within {center_min_mhz:.0}..{center_max_mhz:.0} MHz for {} MS/s",
+            config.sample_rate_msps
+        ));
+    }
+    let validate_signal = |name: &str, value: f64| -> Result<(), String> {
+        if !value.is_finite() || !(1.0..1920.0).contains(&value) {
+            return Err(format!(
+                "{name} must be within 1..1920 MHz (upper bound exclusive)"
+            ));
+        }
+        if (value - config.center_mhz).abs() > half_band_mhz {
+            return Err(format!(
+                "{name} must be within center +/-{half_band_mhz:.0} MHz"
+            ));
+        }
+        Ok(())
+    };
+    validate_signal("expected_mhz", config.expected_mhz)?;
+    validate_signal("dac_mhz", config.dac_mhz)?;
+    for (channel, target) in config.target_mhz_by_channel.iter().copied().enumerate() {
+        validate_signal(&format!("target_mhz_by_channel[{channel}]"), target)?;
+    }
+    Ok(())
+}
+
+fn sanitize_config(config: &mut DisplayConfig) {
+    if SampleRateMode::from_mhz(config.sample_rate_msps).is_none() {
+        config.sample_rate_msps = 160;
+    }
+    if !matches!(
+        config.output_mode.as_str(),
+        "time_only" | "spec_only" | "time_spec"
+    ) {
         config.output_mode = "time_spec".to_string();
     }
-    if config.bandwidth_mhz == 320 && config.output_mode == "time_spec" {
+    if config.sample_rate_msps == 320 && config.output_mode == "time_spec" {
         config.output_mode = "time_only".to_string();
     }
+    let (center_min_mhz, center_max_mhz, half_band_mhz) = if config.sample_rate_msps == 320 {
+        (160.0, 1760.0, 160.0)
+    } else {
+        (80.0, 1840.0, 80.0)
+    };
+    if !config.center_mhz.is_finite()
+        || !(center_min_mhz..=center_max_mhz).contains(&config.center_mhz)
+    {
+        config.center_mhz = t510_time_rx::DEFAULT_CENTER_MHZ;
+    }
+    let center_mhz = config.center_mhz;
+    let signal_valid = |value: f64| {
+        value.is_finite()
+            && (1.0..1920.0).contains(&value)
+            && (value - center_mhz).abs() <= half_band_mhz
+    };
+    if !signal_valid(config.expected_mhz) {
+        config.expected_mhz = config.center_mhz;
+    }
+    if !signal_valid(config.dac_mhz) {
+        config.dac_mhz = config.expected_mhz;
+    }
     config.display_points = config.display_points.clamp(64, 16384);
-    if !matches!(config.waveform_view_mode.as_str(), "dual" | "samples" | "curve") {
+    if !matches!(
+        config.waveform_view_mode.as_str(),
+        "dual" | "samples" | "curve"
+    ) {
         config.waveform_view_mode = "dual".to_string();
     }
     config.time_window_us = config.time_window_us.clamp(0.02, 25.0);
@@ -1286,14 +1326,20 @@ fn sanitize_config(config: &mut DisplayConfig) {
     }
     let fallback = expected_signal_hz(config) / 1_000_000.0;
     for target in &mut config.target_mhz_by_channel {
-        if !target.is_finite() || !(0.0..=100_000.0).contains(target) {
+        if !target.is_finite()
+            || !(1.0..1920.0).contains(target)
+            || (*target - config.center_mhz).abs() > half_band_mhz
+        {
             *target = fallback;
         }
     }
 }
 
-fn apply_display_config_patch_to_shared(state: &mut SharedState, patch: DisplayConfigPatch) -> (DisplayConfig, u64) {
-    patch.apply_to(&mut state.config);
+fn apply_display_config_patch_to_shared(
+    state: &mut SharedState,
+    patch: DisplayConfigPatch,
+) -> Result<(DisplayConfig, u64), String> {
+    patch.apply_to(&mut state.config)?;
     state.config_generation = state.config_generation.saturating_add(1);
     state.waveform = None;
     state.waveform_binary = None;
@@ -1302,14 +1348,14 @@ fn apply_display_config_patch_to_shared(state: &mut SharedState, patch: DisplayC
     state.spectrum_binary = None;
     state.spectrum_updated = None;
     state.spectrum_preview = SpecPreviewCapture::default();
-    let selected = state.config.bandwidth_mode().mhz();
-    state.stats.selected_bandwidth_mhz = selected;
+    let selected = state.config.sample_rate_mode().mhz();
+    state.stats.selected_sample_rate_msps = selected;
     state.stats.selected_detected_mismatch = state
         .stats
-        .detected_bandwidth_mhz
+        .detected_sample_rate_msps
         .map(|mhz| mhz != selected)
         .unwrap_or(false);
-    (state.config.clone(), state.config_generation)
+    Ok((state.config.clone(), state.config_generation))
 }
 
 fn preview_age_ms(updated: Option<Instant>) -> Option<u64> {
@@ -1327,11 +1373,12 @@ fn expected_preview_pps(config: &DisplayConfig, stats: &ReceiverStats) -> f64 {
         return stats.expected_packets_per_sec;
     }
     let time_count = stats.last_time_count.unwrap_or(DEFAULT_TIME_COUNT).max(1) as f64;
-    config.bandwidth_mode().sample_rate_hz() / (time_count * TIME_SUBSAMPLES_PER_BEAT as f64)
+    config.sample_rate_mode().sample_rate_hz() / (time_count * TIME_SUBSAMPLES_PER_BEAT as f64)
 }
 
 fn preview_rate_gate_pps(config: &DisplayConfig, stats: &ReceiverStats) -> f64 {
-    (expected_preview_pps(config, stats) * PREVIEW_LIVE_MIN_RATE_FRACTION).max(PREVIEW_LIVE_MIN_PPS_FLOOR)
+    (expected_preview_pps(config, stats) * PREVIEW_LIVE_MIN_RATE_FRACTION)
+        .max(PREVIEW_LIVE_MIN_PPS_FLOOR)
 }
 
 fn waveform_rate_live(config: &DisplayConfig, stats: &ReceiverStats) -> bool {
@@ -1446,11 +1493,17 @@ impl MmapOptions {
         }
         let page_size = page_size as usize;
         let frame_size = align_up((args.frame_kb.max(1)) * 1024, 16);
-        let min_frame_size = align_up(mem::size_of::<Tpacket3Hdr>() + mem::size_of::<libc::sockaddr_ll>() + 9000, 16);
+        let min_frame_size = align_up(
+            mem::size_of::<Tpacket3Hdr>() + mem::size_of::<libc::sockaddr_ll>() + 9000,
+            16,
+        );
         if frame_size < min_frame_size {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("--frame-kb too small; need at least {} KiB for jumbo TIME frames", div_ceil(min_frame_size, 1024)),
+                format!(
+                    "--frame-kb too small; need at least {} KiB for jumbo TIME frames",
+                    div_ceil(min_frame_size, 1024)
+                ),
             ));
         }
         let block_size = align_up(args.block_mb.max(1) * MIB, page_size);
@@ -1466,9 +1519,9 @@ impl MmapOptions {
             (args.ring_mb.max(args.block_mb) / args.block_mb.max(1)).max(1)
         };
         let frame_count = (block_size / frame_size) * block_count;
-        let ring_bytes = block_size
-            .checked_mul(block_count)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "ring size overflow"))?;
+        let ring_bytes = block_size.checked_mul(block_count).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "ring size overflow")
+        })?;
         Ok(Self {
             block_size,
             block_count,
@@ -1511,7 +1564,12 @@ struct PacketFanoutConfig {
 }
 
 impl MmapPacketSocket {
-    fn open(interface: &str, options: MmapOptions, dst_port_base: u16, flow_count: usize) -> std::io::Result<Self> {
+    fn open(
+        interface: &str,
+        options: MmapOptions,
+        dst_port_base: u16,
+        flow_count: usize,
+    ) -> std::io::Result<Self> {
         Self::open_with_fanout(interface, options, dst_port_base, flow_count, None)
     }
 
@@ -1603,7 +1661,8 @@ impl MmapPacketSocket {
                 return Err(err);
             }
             if config.mode == FanoutMode::Port {
-                if let Err(err) = set_packet_fanout_port_bpf(fd, dst_port_base, config.worker_count) {
+                if let Err(err) = set_packet_fanout_port_bpf(fd, dst_port_base, config.worker_count)
+                {
                     unsafe {
                         libc::munmap(mmap_ptr, options.ring_bytes);
                         libc::close(fd);
@@ -1642,7 +1701,10 @@ impl MmapPacketSocket {
             if status & TP_STATUS_USER == 0 {
                 if packets == 0 {
                     if !self.poll_once()? {
-                        return Ok(MmapBatchStats { packets: 0, blocks: 0 });
+                        return Ok(MmapBatchStats {
+                            packets: 0,
+                            blocks: 0,
+                        });
                     }
                     continue;
                 }
@@ -1721,9 +1783,9 @@ impl MmapPacketSocket {
                 stats.ring_drops = stats
                     .ring_drops
                     .saturating_add(packet_stats.tp_drops as u64);
-            stats.ring_freeze_q_count = stats
-                .ring_freeze_q_count
-                .saturating_add(packet_stats.tp_freeze_q_cnt as u64);
+                stats.ring_freeze_q_count = stats
+                    .ring_freeze_q_count
+                    .saturating_add(packet_stats.tp_freeze_q_cnt as u64);
             }
             Err(err) => {
                 stats.last_error = Some(format!("PACKET_STATISTICS failed: {err}"));
@@ -1738,11 +1800,15 @@ impl MmapPacketSocket {
         }
         match self.packet_statistics() {
             Ok(packet_stats) => {
-            stats.kernel_drops = stats.kernel_drops.saturating_add(packet_stats.tp_drops as u64);
-            stats.ring_drops = stats.ring_drops.saturating_add(packet_stats.tp_drops as u64);
-            stats.ring_freeze_q_count = stats
-                .ring_freeze_q_count
-                .saturating_add(packet_stats.tp_freeze_q_cnt as u64);
+                stats.kernel_drops = stats
+                    .kernel_drops
+                    .saturating_add(packet_stats.tp_drops as u64);
+                stats.ring_drops = stats
+                    .ring_drops
+                    .saturating_add(packet_stats.tp_drops as u64);
+                stats.ring_freeze_q_count = stats
+                    .ring_freeze_q_count
+                    .saturating_add(packet_stats.tp_freeze_q_cnt as u64);
             }
             Err(err) => {
                 stats.last_error = Some(format!("PACKET_STATISTICS failed: {err}"));
@@ -1829,14 +1895,8 @@ impl PacketSocket {
     }
 
     fn recv<'a>(&self, buf: &'a mut [u8]) -> std::io::Result<&'a [u8]> {
-        let len = unsafe {
-            libc::recv(
-                self.fd,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-                0,
-            )
-        };
+        let len =
+            unsafe { libc::recv(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
         if len < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -1854,7 +1914,10 @@ impl Drop for PacketSocket {
 
 fn interface_index(interface: &str) -> std::io::Result<u32> {
     let ifname = CString::new(interface).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "interface name contains NUL")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "interface name contains NUL",
+        )
     })?;
     let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) };
     if ifindex == 0 {
@@ -1923,7 +1986,7 @@ fn set_packet_fanout(fd: RawFd, config: PacketFanoutConfig) -> std::io::Result<(
 }
 
 fn bpf_fanout_by_dst_port(dst_port_base: u16, worker_count: usize) -> [libc::sock_filter; 4] {
-    let worker_count = worker_count.clamp(1, MAX_WORKER_COUNT_27H) as u32;
+    let worker_count = worker_count.clamp(1, MAX_WORKER_COUNT) as u32;
     [
         // PACKET_FANOUT_DATA CBPF runs with skb data at the network header.
         // For IPv4 without options, UDP dst port is IP header offset 20 + 2.
@@ -1934,8 +1997,12 @@ fn bpf_fanout_by_dst_port(dst_port_base: u16, worker_count: usize) -> [libc::soc
     ]
 }
 
-fn set_packet_fanout_port_bpf(fd: RawFd, dst_port_base: u16, worker_count: usize) -> std::io::Result<()> {
-    let worker_count = worker_count.clamp(1, MAX_WORKER_COUNT_27H);
+fn set_packet_fanout_port_bpf(
+    fd: RawFd,
+    dst_port_base: u16,
+    worker_count: usize,
+) -> std::io::Result<()> {
+    let worker_count = worker_count.clamp(1, MAX_WORKER_COUNT);
     let mut filter = bpf_fanout_by_dst_port(dst_port_base, worker_count);
     let mut prog = libc::sock_fprog {
         len: filter.len() as u16,
@@ -1990,7 +2057,7 @@ fn bpf_jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
 }
 
 fn bpf_udp_port_range_filter(dst_port_base: u16, flow_count: usize) -> [libc::sock_filter; 9] {
-    let count = flow_count.clamp(1, MAX_FLOW_COUNT_27H) as u16;
+    let count = flow_count.clamp(1, MAX_FLOW_COUNT) as u16;
     let dst_port_end = dst_port_base.saturating_add(count - 1);
     [
         bpf_stmt(BPF_LD | BPF_H | BPF_ABS, 12),
@@ -2005,7 +2072,11 @@ fn bpf_udp_port_range_filter(dst_port_base: u16, flow_count: usize) -> [libc::so
     ]
 }
 
-fn attach_udp_port_range_filter(fd: RawFd, dst_port_base: u16, flow_count: usize) -> std::io::Result<()> {
+fn attach_udp_port_range_filter(
+    fd: RawFd,
+    dst_port_base: u16,
+    flow_count: usize,
+) -> std::io::Result<()> {
     let mut filter = bpf_udp_port_range_filter(dst_port_base, flow_count);
     let mut prog = libc::sock_fprog {
         len: filter.len() as u16,
@@ -2056,11 +2127,14 @@ impl NicStatsReader {
         };
         if let Some(prev) = self.last {
             let seconds = elapsed.as_secs_f64().max(1e-9);
-            stats.nic_rx_packets_per_sec = now.rx_packets.saturating_sub(prev.rx_packets) as f64 / seconds;
-            stats.nic_rx_gbps = now.rx_bytes.saturating_sub(prev.rx_bytes) as f64 * 8.0 / seconds / 1.0e9;
+            stats.nic_rx_packets_per_sec =
+                now.rx_packets.saturating_sub(prev.rx_packets) as f64 / seconds;
+            stats.nic_rx_gbps =
+                now.rx_bytes.saturating_sub(prev.rx_bytes) as f64 * 8.0 / seconds / 1.0e9;
             stats.nic_rx_dropped_delta = now.rx_dropped.saturating_sub(prev.rx_dropped);
             stats.nic_rx_errors_delta = now.rx_errors.saturating_sub(prev.rx_errors);
-            stats.nic_rx_missed_errors_delta = now.rx_missed_errors.saturating_sub(prev.rx_missed_errors);
+            stats.nic_rx_missed_errors_delta =
+                now.rx_missed_errors.saturating_sub(prev.rx_missed_errors);
             stats.nic_rx_crc_errors_delta = now.rx_crc_errors.saturating_sub(prev.rx_crc_errors);
         }
         self.last = Some(now);
@@ -2095,7 +2169,7 @@ enum InputKind {
 struct PacketCopy {
     header: T510Header,
     payload: Vec<u8>,
-    detected_bandwidth: Option<BandwidthMode>,
+    detected_sample_rate: Option<SampleRateMode>,
     gap_before: bool,
 }
 
@@ -2125,9 +2199,9 @@ impl ReorderTracker {
     fn ingest(
         &mut self,
         header: T510Header,
-        selected: BandwidthMode,
+        selected: SampleRateMode,
         stats: &mut ReceiverStats,
-    ) -> (Option<BandwidthMode>, bool) {
+    ) -> (Option<SampleRateMode>, bool) {
         if let Some(expected) = self.expected_seq {
             if seq_is_before(header.seq_no, expected) {
                 return (None, false);
@@ -2158,7 +2232,9 @@ impl ReorderTracker {
             let distance = first_pending.wrapping_sub(expected);
             if distance > self.window {
                 stats.seq_gaps = stats.seq_gaps.saturating_add(1);
-                stats.app_drops = stats.app_drops.saturating_add(u64::from(distance).min(1_000_000));
+                stats.app_drops = stats
+                    .app_drops
+                    .saturating_add(u64::from(distance).min(1_000_000));
                 gap_before = true;
                 self.expected_seq = Some(first_pending);
                 continue;
@@ -2172,9 +2248,9 @@ impl ReorderTracker {
     fn accept_in_order(
         &mut self,
         header: T510Header,
-        selected: BandwidthMode,
+        selected: SampleRateMode,
         stats: &mut ReceiverStats,
-    ) -> (Option<BandwidthMode>, bool) {
+    ) -> (Option<SampleRateMode>, bool) {
         let mut detected = None;
         let mut gap = false;
         if let Some(prev) = self.last_accepted {
@@ -2183,7 +2259,7 @@ impl ReorderTracker {
                 gap = true;
             }
             let delta = header.sample0.wrapping_sub(prev.sample0);
-            detected = infer_bandwidth_from_sample0_delta(&header, delta);
+            detected = infer_sample_rate_from_sample0_delta(&header, delta);
             if delta != expected_sample0_delta(&header, selected) {
                 stats.sample0_gaps = stats.sample0_gaps.saturating_add(1);
                 gap = true;
@@ -2238,46 +2314,46 @@ fn estimate_time_raw_baseband_hz(
             for sub in 0..TIME_SUBSAMPLES_PER_BEAT {
                 let logical_idx = beat * TIME_SUBSAMPLES_PER_BEAT + sub;
                 let sample_index = packet.header.sample0 + logical_idx as u64 * decim;
-                    if (config.channel_mask & (1u16 << channel)) == 0 {
-                        continue;
-                    }
-                    let Ok(offset) = time_payload_complex_offset(beat, sub, channel) else {
-                        continue;
-                    };
-                    if offset + 4 > packet.payload.len() {
-                        continue;
-                    }
+                if (config.channel_mask & (1u16 << channel)) == 0 {
+                    continue;
+                }
+                let Ok(offset) = time_payload_complex_offset(beat, sub, channel) else {
+                    continue;
+                };
+                if offset + 4 > packet.payload.len() {
+                    continue;
+                }
                 let i =
                     i16::from_le_bytes([packet.payload[offset], packet.payload[offset + 1]]) as f64;
                 let q = i16::from_le_bytes([packet.payload[offset + 2], packet.payload[offset + 3]])
                     as f64;
-                    let power = i * i + q * q;
-                    if power < 16.0 {
-                        prev[channel] = Some((sample_index, i, q));
-                        continue;
-                    }
-                    if let Some((prev_sample, prev_i, prev_q)) = prev[channel] {
-                        let delta = sample_index.wrapping_sub(prev_sample);
-                        if delta == decim {
-                            let re = i * prev_i + q * prev_q;
-                            let im = q * prev_i - i * prev_q;
-                            let weight = (power * (prev_i * prev_i + prev_q * prev_q)).sqrt();
-                            if weight > 0.0 {
-                                let angle = im.atan2(re);
-                                let hz = angle / (2.0 * std::f64::consts::PI)
-                                    * (RAW_SAMPLE_RATE_HZ / delta as f64);
-                                if hz.is_finite() {
-                                    weighted_hz_sum += hz * weight;
-                                    weight_sum += weight;
-                                    pair_count += 1;
-                                }
+                let power = i * i + q * q;
+                if power < 16.0 {
+                    prev[channel] = Some((sample_index, i, q));
+                    continue;
+                }
+                if let Some((prev_sample, prev_i, prev_q)) = prev[channel] {
+                    let delta = sample_index.wrapping_sub(prev_sample);
+                    if delta == decim {
+                        let re = i * prev_i + q * prev_q;
+                        let im = q * prev_i - i * prev_q;
+                        let weight = (power * (prev_i * prev_i + prev_q * prev_q)).sqrt();
+                        if weight > 0.0 {
+                            let angle = im.atan2(re);
+                            let hz = angle / (2.0 * std::f64::consts::PI)
+                                * (RAW_SAMPLE_RATE_HZ / delta as f64);
+                            if hz.is_finite() {
+                                weighted_hz_sum += hz * weight;
+                                weight_sum += weight;
+                                pair_count += 1;
                             }
                         }
                     }
-                    prev[channel] = Some((sample_index, i, q));
                 }
+                prev[channel] = Some((sample_index, i, q));
             }
         }
+    }
 
     if pair_count >= 4 && weight_sum > 0.0 {
         Some(weighted_hz_sum / weight_sum)
@@ -2307,7 +2383,13 @@ fn rf_equivalent_sample(i: f64, q: f64, sample_index: u64, center_hz: f64, mixer
     rf_equivalent_at_sample(i, q, sample_index as f64, center_hz, mixer_sign)
 }
 
-fn rf_equivalent_at_sample(i: f64, q: f64, sample_index: f64, center_hz: f64, mixer_sign: f64) -> f64 {
+fn rf_equivalent_at_sample(
+    i: f64,
+    q: f64,
+    sample_index: f64,
+    center_hz: f64,
+    mixer_sign: f64,
+) -> f64 {
     let theta = 2.0 * std::f64::consts::PI * center_hz * sample_index as f64 / RAW_SAMPLE_RATE_HZ;
     i * theta.cos() - mixer_sign * q * theta.sin()
 }
@@ -2396,7 +2478,7 @@ impl DisplayCapture {
         header: T510Header,
         udp_payload: &[u8],
         config: &DisplayConfig,
-        detected_bandwidth: Option<BandwidthMode>,
+        detected_sample_rate: Option<SampleRateMode>,
         gap_before: bool,
         seq_stride: u32,
     ) -> Option<Vec<PacketCopy>> {
@@ -2413,20 +2495,22 @@ impl DisplayCapture {
         self.packets
             .entry(header.seq_no)
             .or_insert_with(|| PacketCopy {
-            header,
-            payload: udp_payload.to_vec(),
-            detected_bandwidth,
-            gap_before,
-        });
+                header,
+                payload: udp_payload.to_vec(),
+                detected_sample_rate,
+                gap_before,
+            });
 
         let samples_per_packet = (header.time_count as usize)
             .saturating_mul(TIME_SUBSAMPLES_PER_BEAT)
             .max(1);
-        let bandwidth = detected_bandwidth.unwrap_or_else(|| config.bandwidth_mode());
-        let window_samples = (config.time_window_us * bandwidth.sample_rate_hz() / 1_000_000.0)
+        let sample_rate = detected_sample_rate.unwrap_or_else(|| config.sample_rate_mode());
+        let window_samples = (config.time_window_us * sample_rate.sample_rate_hz() / 1_000_000.0)
             .ceil()
             .max(2.0) as usize;
-        let target_samples = window_samples.saturating_add(1).clamp(2, self.max_points.max(2));
+        let target_samples = window_samples
+            .saturating_add(1)
+            .clamp(2, self.max_points.max(2));
         let needed_packets = div_ceil(target_samples, samples_per_packet).clamp(1, 128);
         let mut seq = start;
         let seq_stride = seq_stride.max(1);
@@ -2439,7 +2523,9 @@ impl DisplayCapture {
                 break;
             }
         }
-        if !out.is_empty() && (out.len() >= needed_packets || self.packets.len() >= self.max_hold_packets) {
+        if !out.is_empty()
+            && (out.len() >= needed_packets || self.packets.len() >= self.max_hold_packets)
+        {
             self.active = false;
             self.start_seq = None;
             self.packets.clear();
@@ -2449,18 +2535,23 @@ impl DisplayCapture {
     }
 }
 
-fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -> Result<WaveformSnapshot, String> {
-    let first = packets.first().ok_or_else(|| "no packets available for waveform".to_string())?;
-    let selected_bandwidth = config.bandwidth_mode();
-    let bandwidth = packets
+fn build_waveform_from_packets(
+    packets: &[PacketCopy],
+    config: &DisplayConfig,
+) -> Result<WaveformSnapshot, String> {
+    let first = packets
+        .first()
+        .ok_or_else(|| "no packets available for waveform".to_string())?;
+    let selected_sample_rate = config.sample_rate_mode();
+    let sample_rate = packets
         .iter()
         .rev()
-        .find_map(|packet| packet.detected_bandwidth)
-        .unwrap_or(selected_bandwidth);
-    let decim = bandwidth.decimation();
+        .find_map(|packet| packet.detected_sample_rate)
+        .unwrap_or(selected_sample_rate);
+    let decim = sample_rate.decimation();
     let center_hz = config.center_mhz * 1_000_000.0;
     let window_us = config.time_window_us.max(0.0);
-    let target_samples = (window_us * bandwidth.sample_rate_hz() / 1_000_000.0)
+    let target_samples = (window_us * sample_rate.sample_rate_hz() / 1_000_000.0)
         .ceil()
         .max(2.0) as usize;
     let target_samples = target_samples.saturating_add(1).clamp(2, 16384);
@@ -2486,8 +2577,12 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
                     if offset + 4 > packet.payload.len() {
                         return Err("truncated payload while building waveform".to_string());
                     }
-                    let i = i16::from_le_bytes([packet.payload[offset], packet.payload[offset + 1]]);
-                    let q = i16::from_le_bytes([packet.payload[offset + 2], packet.payload[offset + 3]]);
+                    let i =
+                        i16::from_le_bytes([packet.payload[offset], packet.payload[offset + 1]]);
+                    let q = i16::from_le_bytes([
+                        packet.payload[offset + 2],
+                        packet.payload[offset + 3],
+                    ]);
                     let abs_i = i.saturating_abs();
                     let abs_q = q.saturating_abs();
                     max_abs = max_abs.max(abs_i).max(abs_q);
@@ -2510,7 +2605,8 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
         let mut rf_values = Vec::with_capacity(curve_points);
         let scale = config.vertical_scale.max(1.0);
         for (sample_index, i, q) in raw.iter() {
-            let t_us = sample_index.saturating_sub(first_sample0) as f64 / RAW_SAMPLE_RATE_HZ * 1_000_000.0;
+            let t_us = sample_index.saturating_sub(first_sample0) as f64 / RAW_SAMPLE_RATE_HZ
+                * 1_000_000.0;
             let rf = rf_equivalent_sample(*i, *q, *sample_index, center_hz, mixer_sign);
             x_us.push(t_us as f32);
             i_values.push((*i / scale) as f32);
@@ -2559,10 +2655,14 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
         sample0: first_sample0,
         seq_no: first.header.seq_no,
         frame_id: first.header.frame_id,
-        selected_bandwidth_mhz: selected_bandwidth.mhz(),
-        detected_bandwidth_mhz: packets.iter().rev().find_map(|packet| packet.detected_bandwidth).map(|mode| mode.mhz()),
+        selected_sample_rate_msps: selected_sample_rate.mhz(),
+        detected_sample_rate_msps: packets
+            .iter()
+            .rev()
+            .find_map(|packet| packet.detected_sample_rate)
+            .map(|mode| mode.mhz()),
         decimation: decim,
-        sample_rate_hz: bandwidth.sample_rate_hz(),
+        sample_rate_hz: sample_rate.sample_rate_hz(),
         requested_window_us: window_us,
         captured_window_us: channels
             .first()
@@ -2573,8 +2673,11 @@ fn build_waveform_from_packets(packets: &[PacketCopy], config: &DisplayConfig) -
         expected_mhz: expected_hz / 1_000_000.0,
         dac_mhz: config.dac_mhz,
         expected_baseband_mhz: expected_baseband_hz / 1_000_000.0,
-        rf_samples_per_cycle: samples_per_cycle(bandwidth.sample_rate_hz(), expected_hz),
-        baseband_samples_per_cycle: samples_per_cycle(bandwidth.sample_rate_hz(), expected_baseband_hz),
+        rf_samples_per_cycle: samples_per_cycle(sample_rate.sample_rate_hz(), expected_hz),
+        baseband_samples_per_cycle: samples_per_cycle(
+            sample_rate.sample_rate_hz(),
+            expected_baseband_hz,
+        ),
         rf_window_cycles: expected_hz.abs() * config.time_window_us.max(0.0) * 1.0e-6,
         gap_before: packets.iter().any(|packet| packet.gap_before),
         channels,
@@ -2618,10 +2721,14 @@ fn encode_waveform_binary(snapshot: &WaveformSnapshot, seq_end: u32) -> Vec<u8> 
     push_u64(&mut out, snapshot.sample0);
     push_u32(&mut out, snapshot.seq_no);
     push_u32(&mut out, seq_end);
-    push_u32(&mut out, snapshot.selected_bandwidth_mhz);
-    push_u32(&mut out, snapshot.detected_bandwidth_mhz.unwrap_or(0));
+    push_u32(&mut out, snapshot.selected_sample_rate_msps);
+    push_u32(&mut out, snapshot.detected_sample_rate_msps.unwrap_or(0));
     let flags = (snapshot.gap_before as u32)
-        | ((snapshot.detected_bandwidth_mhz.map(|mhz| mhz != snapshot.selected_bandwidth_mhz).unwrap_or(false) as u32) << 1);
+        | ((snapshot
+            .detected_sample_rate_msps
+            .map(|mhz| mhz != snapshot.selected_sample_rate_msps)
+            .unwrap_or(false) as u32)
+            << 1);
     push_u32(&mut out, flags);
     push_u32(&mut out, channel_mask);
     push_u32(&mut out, measured_points_per_channel);
@@ -2629,10 +2736,7 @@ fn encode_waveform_binary(snapshot: &WaveformSnapshot, seq_end: u32) -> Vec<u8> 
     push_u32(&mut out, snapshot.decimation as u32);
     push_u32(&mut out, rf_points_per_channel);
     push_f64(&mut out, snapshot.sample_rate_hz);
-    push_f64(
-        &mut out,
-        snapshot.requested_window_us,
-    );
+    push_f64(&mut out, snapshot.requested_window_us);
     push_f64(&mut out, snapshot.center_mhz);
     push_f64(&mut out, snapshot.expected_mhz);
     push_f64(&mut out, snapshot.dac_mhz);
@@ -2645,7 +2749,11 @@ fn encode_waveform_binary(snapshot: &WaveformSnapshot, seq_end: u32) -> Vec<u8> 
         out.push(0);
     }
     for channel in &snapshot.channels {
-        for value in channel.x_us.iter().take(measured_points_per_channel as usize) {
+        for value in channel
+            .x_us
+            .iter()
+            .take(measured_points_per_channel as usize)
+        {
             out.extend_from_slice(&value.to_le_bytes());
         }
         for value in channel.i.iter().take(measured_points_per_channel as usize) {
@@ -2654,10 +2762,18 @@ fn encode_waveform_binary(snapshot: &WaveformSnapshot, seq_end: u32) -> Vec<u8> 
         for value in channel.q.iter().take(measured_points_per_channel as usize) {
             out.extend_from_slice(&value.to_le_bytes());
         }
-        for value in channel.mag.iter().take(measured_points_per_channel as usize) {
+        for value in channel
+            .mag
+            .iter()
+            .take(measured_points_per_channel as usize)
+        {
             out.extend_from_slice(&value.to_le_bytes());
         }
-        for value in channel.sample_rf.iter().take(measured_points_per_channel as usize) {
+        for value in channel
+            .sample_rf
+            .iter()
+            .take(measured_points_per_channel as usize)
+        {
             out.extend_from_slice(&value.to_le_bytes());
         }
         for value in channel.rf_x_us.iter().take(rf_points_per_channel as usize) {
@@ -2675,7 +2791,12 @@ fn encode_spectrum_binary(snapshot: &SpectrumSnapshot) -> Vec<u8> {
     let bins_per_lane = snapshot
         .lanes
         .iter()
-        .map(|lane| lane.amplitude.len().min(lane.phase_rad.len()).min(lane.power_db.len()))
+        .map(|lane| {
+            lane.amplitude
+                .len()
+                .min(lane.phase_rad.len())
+                .min(lane.power_db.len())
+        })
         .min()
         .unwrap_or(0) as u32;
     let mut out = Vec::with_capacity(128 + lane_count as usize * bins_per_lane as usize * 12);
@@ -2745,7 +2866,6 @@ struct ReceiverRuntime {
     flow_count: usize,
     time_flow_count: usize,
     spec_flow_count: usize,
-    spec_layout: SpecLayout,
     shared: Arc<Mutex<SharedState>>,
     stats: ReceiverStats,
     reorder: ReorderTracker,
@@ -2786,7 +2906,6 @@ impl ReceiverRuntime {
             flow_count: args.flow_count_clamped(),
             time_flow_count: args.time_flow_count_clamped(),
             spec_flow_count: args.spec_flow_count_clamped(),
-            spec_layout: args.spec_layout,
             shared,
             stats: ReceiverStats::new(args),
             reorder: ReorderTracker::new(args.reorder_window),
@@ -2818,9 +2937,14 @@ impl ReceiverRuntime {
 
     fn process_input(&mut self, frame_or_payload: &[u8], input_kind: InputKind) {
         self.stats.total_packets = self.stats.total_packets.saturating_add(1);
-        self.stats.total_bytes = self.stats.total_bytes.saturating_add(frame_or_payload.len() as u64);
+        self.stats.total_bytes = self
+            .stats
+            .total_bytes
+            .saturating_add(frame_or_payload.len() as u64);
         self.rate_packets = self.rate_packets.saturating_add(1);
-        self.rate_bytes = self.rate_bytes.saturating_add(frame_or_payload.len() as u64);
+        self.rate_bytes = self
+            .rate_bytes
+            .saturating_add(frame_or_payload.len() as u64);
 
         self.refresh_config_if_due();
 
@@ -2875,22 +2999,6 @@ impl ReceiverRuntime {
                     self.publish_if_due();
                     return;
                 }
-                if !self.spec_layout.matches(&header) {
-                    self.stats.parse_errors = self.stats.parse_errors.saturating_add(1);
-                    let message = format!(
-                        "SPEC layout {:?} rejected header block_count={} chan_count={} time_count={} taps={} flags=0x{:08x}",
-                        self.spec_layout,
-                        header.block_count,
-                        header.chan_count,
-                        header.time_count,
-                        header.pfb_taps,
-                        header.spec_status_flags
-                    );
-                    self.stats.last_error = Some(message.clone());
-                    record_spec_preview_error(&self.shared, Some(&header), message);
-                    self.publish_if_due();
-                    return;
-                }
                 self.process_spec_packet(header, udp_payload, src_port, dst_port);
             }
             other => {
@@ -2902,37 +3010,52 @@ impl ReceiverRuntime {
         self.publish_if_due();
     }
 
-    fn process_time_packet(&mut self, header: T510Header, udp_payload: &[u8], src_port: u16, dst_port: u16) {
+    fn process_time_packet(
+        &mut self,
+        header: T510Header,
+        udp_payload: &[u8],
+        src_port: u16,
+        dst_port: u16,
+    ) {
         self.stats.time_packets = self.stats.time_packets.saturating_add(1);
-        self.stats.time_bytes = self.stats.time_bytes.saturating_add(udp_payload.len() as u64);
+        self.stats.time_bytes = self
+            .stats
+            .time_bytes
+            .saturating_add(udp_payload.len() as u64);
         self.rate_time_packets = self.rate_time_packets.saturating_add(1);
-        self.rate_time_bytes = self.rate_time_bytes.saturating_add(udp_payload.len() as u64);
+        self.rate_time_bytes = self
+            .rate_time_bytes
+            .saturating_add(udp_payload.len() as u64);
         self.stats.last_board_id = Some(header.board_id);
         self.stats.last_time_count = Some(header.time_count);
 
-        let selected = self.config.bandwidth_mode();
+        let selected = self.config.sample_rate_mode();
         let flow_id = dst_port.saturating_sub(self.dst_port_base) as usize;
         if flow_id < self.flow_count {
             self.update_flow_stats(flow_id, header, udp_payload.len() as u64, src_port);
         }
         let (detected, gap_before) = self.reorder.ingest(header, selected, &mut self.stats);
-        self.stats.selected_bandwidth_mhz = selected.mhz();
+        self.stats.selected_sample_rate_msps = selected.mhz();
         if let Some(mode) = detected {
-            self.stats.detected_bandwidth_mhz = Some(mode.mhz());
+            self.stats.detected_sample_rate_msps = Some(mode.mhz());
         } else {
-            self.stats.detected_bandwidth_mhz = per_flow_detected_consensus(&self.stats.per_flow);
+            self.stats.detected_sample_rate_msps =
+                per_flow_detected_consensus(&self.stats.per_flow);
         }
         self.stats.selected_detected_mismatch = self
             .stats
-            .detected_bandwidth_mhz
-            .and_then(BandwidthMode::from_mhz)
+            .detected_sample_rate_msps
+            .and_then(SampleRateMode::from_mhz)
             .map(|mode| mode.mhz() != selected.mhz())
             .unwrap_or(false);
 
         let display_enabled = self.config.needs_time()
             && self.stats.waveform_websocket_clients > 0
             && !self.config.paused;
-        if display_enabled && self.last_waveform.elapsed() >= self.waveform_interval && !self.display_capture.active {
+        if display_enabled
+            && self.last_waveform.elapsed() >= self.waveform_interval
+            && !self.display_capture.active
+        {
             self.display_capture.arm();
         }
         if !display_enabled && self.display_capture.active {
@@ -2942,14 +3065,14 @@ impl ReceiverRuntime {
         }
         if display_enabled {
             if let Some(packets) = self.display_capture.ingest(
-                    header,
-                    udp_payload,
-                    &self.config,
+                header,
+                udp_payload,
+                &self.config,
                 self.stats
-                    .detected_bandwidth_mhz
-                    .and_then(BandwidthMode::from_mhz),
-                    gap_before,
-                    1,
+                    .detected_sample_rate_msps
+                    .and_then(SampleRateMode::from_mhz),
+                gap_before,
+                1,
             ) {
                 match build_waveform_from_packets(&packets, &self.config) {
                     Ok(waveform) => {
@@ -2976,11 +3099,22 @@ impl ReceiverRuntime {
         }
     }
 
-    fn process_spec_packet(&mut self, header: T510Header, udp_payload: &[u8], src_port: u16, dst_port: u16) {
+    fn process_spec_packet(
+        &mut self,
+        header: T510Header,
+        udp_payload: &[u8],
+        src_port: u16,
+        dst_port: u16,
+    ) {
         self.stats.spec_packets = self.stats.spec_packets.saturating_add(1);
-        self.stats.spec_bytes = self.stats.spec_bytes.saturating_add(udp_payload.len() as u64);
+        self.stats.spec_bytes = self
+            .stats
+            .spec_bytes
+            .saturating_add(udp_payload.len() as u64);
         self.rate_spec_packets = self.rate_spec_packets.saturating_add(1);
-        self.rate_spec_bytes = self.rate_spec_bytes.saturating_add(udp_payload.len() as u64);
+        self.rate_spec_bytes = self
+            .rate_spec_bytes
+            .saturating_add(udp_payload.len() as u64);
         self.stats.last_board_id = Some(header.board_id);
         self.stats.last_spec_seq_no = Some(header.seq_no);
         self.stats.last_spec_frame_id = Some(header.frame_id);
@@ -3026,11 +3160,11 @@ impl ReceiverRuntime {
                                 self.stats.spectrum_updates.saturating_add(1);
                             self.rate_spectrum_updates =
                                 self.rate_spectrum_updates.saturating_add(1);
-                        let binary = encode_spectrum_binary(&spectrum);
-                        guard.spectrum = Some(spectrum);
-                        guard.spectrum_binary = Some(binary);
-                        guard.spectrum_updated = Some(Instant::now());
-                        self.last_spectrum = Instant::now();
+                            let binary = encode_spectrum_binary(&spectrum);
+                            guard.spectrum = Some(spectrum);
+                            guard.spectrum_binary = Some(binary);
+                            guard.spectrum_updated = Some(Instant::now());
+                            self.last_spectrum = Instant::now();
                         }
                     }
                 }
@@ -3042,7 +3176,13 @@ impl ReceiverRuntime {
         }
     }
 
-    fn update_flow_stats(&mut self, flow_id: usize, header: T510Header, payload_len: u64, src_port: u16) {
+    fn update_flow_stats(
+        &mut self,
+        flow_id: usize,
+        header: T510Header,
+        payload_len: u64,
+        src_port: u16,
+    ) {
         if let Some(flow) = self.stats.per_flow.get_mut(flow_id) {
             flow.src_port = src_port;
             flow.time_packets = flow.time_packets.saturating_add(1);
@@ -3056,10 +3196,13 @@ impl ReceiverRuntime {
                     flow.frame_gaps = flow.frame_gaps.saturating_add(1);
                 }
                 let sample_delta = header.sample0.wrapping_sub(prev.sample0);
-                let single_delta = expected_sample0_delta(&header, self.config.bandwidth_mode());
+                let single_delta = expected_sample0_delta(&header, self.config.sample_rate_mode());
                 if self.time_flow_count > 0 && sample_delta % self.time_flow_count as u64 == 0 {
-                    if let Some(mode) = infer_bandwidth_from_sample0_delta(&header, sample_delta / self.time_flow_count as u64) {
-                        flow.detected_bandwidth_mhz = Some(mode.mhz());
+                    if let Some(mode) = infer_sample_rate_from_sample0_delta(
+                        &header,
+                        sample_delta / self.time_flow_count as u64,
+                    ) {
+                        flow.detected_sample_rate_msps = Some(mode.mhz());
                     }
                 }
                 if sample_delta != single_delta.saturating_mul(self.time_flow_count as u64) {
@@ -3081,7 +3224,13 @@ impl ReceiverRuntime {
         }
     }
 
-    fn update_spec_flow_stats(&mut self, flow_id: usize, header: T510Header, payload_len: u64, src_port: u16) -> bool {
+    fn update_spec_flow_stats(
+        &mut self,
+        flow_id: usize,
+        header: T510Header,
+        payload_len: u64,
+        src_port: u16,
+    ) -> bool {
         let mut gap = false;
         if let Some(flow) = self.stats.per_flow.get_mut(flow_id) {
             flow.src_port = src_port;
@@ -3150,7 +3299,7 @@ impl ReceiverRuntime {
                     for flow in &mut self.stats.per_flow {
                         flow.clear_continuity();
                     }
-                    self.stats.detected_bandwidth_mhz = None;
+                    self.stats.detected_sample_rate_msps = None;
                     self.display_capture.arm();
                     let now = Instant::now();
                     self.last_waveform = now.checked_sub(self.waveform_interval).unwrap_or(now);
@@ -3183,18 +3332,27 @@ impl ReceiverRuntime {
         let elapsed = self.last_rate.elapsed();
         if elapsed >= Duration::from_secs(1) {
             let seconds = elapsed.as_secs_f64();
-            let mode = self.config.bandwidth_mode();
-            self.stats.selected_bandwidth_mhz = mode.mhz();
-            self.stats.active_time_flow_count = if self.config.needs_time() { self.time_flow_count } else { 0 };
-            self.stats.active_spec_flow_count = if self.config.needs_spec() { self.spec_flow_count } else { 0 };
+            let mode = self.config.sample_rate_mode();
+            self.stats.selected_sample_rate_msps = mode.mhz();
+            self.stats.active_time_flow_count = if self.config.needs_time() {
+                self.time_flow_count
+            } else {
+                0
+            };
+            self.stats.active_spec_flow_count = if self.config.needs_spec() {
+                self.spec_flow_count
+            } else {
+                0
+            };
             self.stats.active_flow_count = self
                 .stats
                 .active_time_flow_count
                 .saturating_add(self.stats.active_spec_flow_count);
-            self.stats.detected_bandwidth_mhz = per_flow_detected_consensus(&self.stats.per_flow);
+            self.stats.detected_sample_rate_msps =
+                per_flow_detected_consensus(&self.stats.per_flow);
             self.stats.selected_detected_mismatch = self
                 .stats
-                .detected_bandwidth_mhz
+                .detected_sample_rate_msps
                 .map(|mhz| mhz != mode.mhz())
                 .unwrap_or(false);
             self.stats.packets_per_sec = self.rate_packets as f64 / seconds;
@@ -3213,17 +3371,30 @@ impl ReceiverRuntime {
                     flow.gbps = bytes as f64 * 8.0 / seconds / 1.0e9;
                 }
             }
-            let time_count = self.stats.last_time_count.unwrap_or(DEFAULT_TIME_COUNT).max(1) as f64;
+            let time_count = self
+                .stats
+                .last_time_count
+                .unwrap_or(DEFAULT_TIME_COUNT)
+                .max(1) as f64;
             self.stats.expected_packets_per_sec =
                 (RAW_SAMPLE_RATE_HZ / mode.decimation() as f64) / (time_count * 4.0);
-            let expected_streams = self.config.needs_time() as u8 as f64
-                + self.config.needs_spec() as u8 as f64;
-            self.stats.expected_time_gbps =
-                if self.config.needs_time() { self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
-            self.stats.expected_spec_gbps =
-                if self.config.needs_spec() { self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
-            self.stats.expected_fpga_gbps =
-                self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 * expected_streams / 1.0e9;
+            let expected_streams =
+                self.config.needs_time() as u8 as f64 + self.config.needs_spec() as u8 as f64;
+            self.stats.expected_time_gbps = if self.config.needs_time() {
+                self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9
+            } else {
+                0.0
+            };
+            self.stats.expected_spec_gbps = if self.config.needs_spec() {
+                self.stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9
+            } else {
+                0.0
+            };
+            self.stats.expected_fpga_gbps = self.stats.expected_packets_per_sec
+                * TIME_UDP_PAYLOAD_BYTES as f64
+                * 8.0
+                * expected_streams
+                / 1.0e9;
             let denom = self.stats.time_packets.saturating_add(self.stats.app_drops);
             self.stats.loss_percent = if denom == 0 {
                 0.0
@@ -3271,7 +3442,6 @@ struct FanoutWorkerConfig {
     flow_count: usize,
     time_flow_count: usize,
     spec_flow_count: usize,
-    spec_layout: SpecLayout,
     options: MmapOptions,
     fanout: PacketFanoutConfig,
     pin_workers: PinWorkers,
@@ -3289,7 +3459,6 @@ struct FanoutWorkerRuntime {
     flow_count: usize,
     time_flow_count: usize,
     spec_flow_count: usize,
-    spec_layout: SpecLayout,
     shared: Arc<Mutex<SharedState>>,
     tx: mpsc::Sender<FanoutWorkerReport>,
     display_owner: Arc<AtomicUsize>,
@@ -3347,7 +3516,6 @@ impl FanoutWorkerRuntime {
             flow_count: config.flow_count,
             time_flow_count: config.time_flow_count,
             spec_flow_count: config.spec_flow_count,
-            spec_layout: config.spec_layout,
             shared: config.shared.clone(),
             tx: config.tx.clone(),
             spectrum_gate: config.spectrum_gate.clone(),
@@ -3446,22 +3614,6 @@ impl FanoutWorkerRuntime {
                     self.publish_if_due();
                     return;
                 }
-                if !self.spec_layout.matches(&header) {
-                    self.stats.parse_errors = self.stats.parse_errors.saturating_add(1);
-                    let message = format!(
-                        "SPEC layout {:?} rejected header block_count={} chan_count={} time_count={} taps={} flags=0x{:08x}",
-                        self.spec_layout,
-                        header.block_count,
-                        header.chan_count,
-                        header.time_count,
-                        header.pfb_taps,
-                        header.spec_status_flags
-                    );
-                    self.stats.last_error = Some(message.clone());
-                    record_spec_preview_error(&self.shared, Some(&header), message);
-                    self.publish_if_due();
-                    return;
-                }
                 self.process_spec_packet(header, view.payload, view.src_port, view.dst_port);
             }
             other => {
@@ -3473,11 +3625,22 @@ impl FanoutWorkerRuntime {
         self.publish_if_due();
     }
 
-    fn process_time_packet(&mut self, header: T510Header, udp_payload: &[u8], src_port: u16, dst_port: u16) {
+    fn process_time_packet(
+        &mut self,
+        header: T510Header,
+        udp_payload: &[u8],
+        src_port: u16,
+        dst_port: u16,
+    ) {
         self.stats.time_packets = self.stats.time_packets.saturating_add(1);
-        self.stats.time_bytes = self.stats.time_bytes.saturating_add(udp_payload.len() as u64);
+        self.stats.time_bytes = self
+            .stats
+            .time_bytes
+            .saturating_add(udp_payload.len() as u64);
         self.rate_time_packets = self.rate_time_packets.saturating_add(1);
-        self.rate_time_bytes = self.rate_time_bytes.saturating_add(udp_payload.len() as u64);
+        self.rate_time_bytes = self
+            .rate_time_bytes
+            .saturating_add(udp_payload.len() as u64);
         self.stats.last_board_id = Some(header.board_id);
         self.stats.last_seq_no = Some(header.seq_no);
         self.stats.last_frame_id = Some(header.frame_id);
@@ -3485,23 +3648,32 @@ impl FanoutWorkerRuntime {
         self.stats.last_time_count = Some(header.time_count);
 
         let flow_id = dst_port.saturating_sub(self.dst_port_base) as usize;
-        let selected = self.config.bandwidth_mode();
+        let selected = self.config.sample_rate_mode();
         let mut detected = None;
         let mut gap_before = false;
         if flow_id < self.flow_count {
-            let (flow_detected, flow_gap) =
-                self.update_flow_stats(flow_id, header, udp_payload.len() as u64, src_port, selected);
+            let (flow_detected, flow_gap) = self.update_flow_stats(
+                flow_id,
+                header,
+                udp_payload.len() as u64,
+                src_port,
+                selected,
+            );
             detected = flow_detected;
             gap_before = flow_gap;
         }
         if let Some(mode) = detected {
-            self.stats.detected_bandwidth_mhz = Some(mode.mhz());
+            self.stats.detected_sample_rate_msps = Some(mode.mhz());
         } else {
-            self.stats.detected_bandwidth_mhz = per_flow_detected_consensus(&self.per_flow);
+            self.stats.detected_sample_rate_msps = per_flow_detected_consensus(&self.per_flow);
         }
 
-        let display_enabled = self.config.needs_time() && !self.config.paused && self.is_display_owner();
-        if display_enabled && self.last_waveform.elapsed() >= self.waveform_interval && !self.display_capture.active {
+        let display_enabled =
+            self.config.needs_time() && !self.config.paused && self.is_display_owner();
+        if display_enabled
+            && self.last_waveform.elapsed() >= self.waveform_interval
+            && !self.display_capture.active
+        {
             self.display_capture.arm();
         }
         if !display_enabled && self.display_capture.active {
@@ -3521,7 +3693,10 @@ impl FanoutWorkerRuntime {
                 match build_waveform_from_packets(&packets, &self.config) {
                     Ok(waveform) => {
                         self.rate_waveform_updates = self.rate_waveform_updates.saturating_add(1);
-                        let seq_end = packets.last().map(|packet| packet.header.seq_no).unwrap_or(waveform.seq_no);
+                        let seq_end = packets
+                            .last()
+                            .map(|packet| packet.header.seq_no)
+                            .unwrap_or(waveform.seq_no);
                         let binary = encode_waveform_binary(&waveform, seq_end);
                         if let Ok(mut guard) = self.shared.lock() {
                             guard.waveform = Some(waveform);
@@ -3538,11 +3713,22 @@ impl FanoutWorkerRuntime {
         }
     }
 
-    fn process_spec_packet(&mut self, header: T510Header, udp_payload: &[u8], src_port: u16, dst_port: u16) {
+    fn process_spec_packet(
+        &mut self,
+        header: T510Header,
+        udp_payload: &[u8],
+        src_port: u16,
+        dst_port: u16,
+    ) {
         self.stats.spec_packets = self.stats.spec_packets.saturating_add(1);
-        self.stats.spec_bytes = self.stats.spec_bytes.saturating_add(udp_payload.len() as u64);
+        self.stats.spec_bytes = self
+            .stats
+            .spec_bytes
+            .saturating_add(udp_payload.len() as u64);
         self.rate_spec_packets = self.rate_spec_packets.saturating_add(1);
-        self.rate_spec_bytes = self.rate_spec_bytes.saturating_add(udp_payload.len() as u64);
+        self.rate_spec_bytes = self
+            .rate_spec_bytes
+            .saturating_add(udp_payload.len() as u64);
         self.stats.last_board_id = Some(header.board_id);
         self.stats.last_spec_seq_no = Some(header.seq_no);
         self.stats.last_spec_frame_id = Some(header.frame_id);
@@ -3558,13 +3744,26 @@ impl FanoutWorkerRuntime {
         };
 
         let display_enabled = spectrum_preview_enabled(&self.config);
-        let should_decode = display_enabled && self.spectrum_gate.should_decode(&header, self.spectrum_interval);
+        let should_decode = display_enabled
+            && self
+                .spectrum_gate
+                .should_decode(&header, self.spectrum_interval);
         if should_decode {
-            match t510_time_rx::decode_spectrum_snapshot(udp_payload, &header, src_port, dst_port, gap_before) {
+            match t510_time_rx::decode_spectrum_snapshot(
+                udp_payload,
+                &header,
+                src_port,
+                dst_port,
+                gap_before,
+            ) {
                 Ok(block) => {
                     if let Ok(mut guard) = self.shared.lock() {
-                        if let Some(spectrum) = guard.spectrum_preview.ingest(&block, self.spectrum_interval) {
-                            self.rate_spectrum_updates = self.rate_spectrum_updates.saturating_add(1);
+                        if let Some(spectrum) = guard
+                            .spectrum_preview
+                            .ingest(&block, self.spectrum_interval)
+                        {
+                            self.rate_spectrum_updates =
+                                self.rate_spectrum_updates.saturating_add(1);
                             self.spectrum_gate.mark_complete();
                             let binary = encode_spectrum_binary(&spectrum);
                             guard.spectrum = Some(spectrum);
@@ -3588,8 +3787,8 @@ impl FanoutWorkerRuntime {
         header: T510Header,
         payload_len: u64,
         src_port: u16,
-        selected: BandwidthMode,
-    ) -> (Option<BandwidthMode>, bool) {
+        selected: SampleRateMode,
+    ) -> (Option<SampleRateMode>, bool) {
         let mut detected = None;
         let mut gap = false;
         if let Some(flow) = self.per_flow.get_mut(flow_id) {
@@ -3603,10 +3802,9 @@ impl FanoutWorkerRuntime {
                     flow.seq_gaps = flow.seq_gaps.saturating_add(1);
                     self.stats.seq_gaps = self.stats.seq_gaps.saturating_add(1);
                     if seq_delta > expected_seq_delta && expected_seq_delta > 0 {
-                        self.stats.app_drops = self
-                            .stats
-                            .app_drops
-                            .saturating_add((seq_delta / expected_seq_delta).saturating_sub(1) as u64);
+                        self.stats.app_drops = self.stats.app_drops.saturating_add(
+                            (seq_delta / expected_seq_delta).saturating_sub(1) as u64,
+                        );
                     } else {
                         self.stats.app_drops = self.stats.app_drops.saturating_add(1);
                     }
@@ -3619,13 +3817,16 @@ impl FanoutWorkerRuntime {
                 }
                 let sample_delta = header.sample0.wrapping_sub(prev.sample0);
                 if self.time_flow_count > 0 && sample_delta % self.time_flow_count as u64 == 0 {
-                    detected = infer_bandwidth_from_sample0_delta(&header, sample_delta / self.time_flow_count as u64);
+                    detected = infer_sample_rate_from_sample0_delta(
+                        &header,
+                        sample_delta / self.time_flow_count as u64,
+                    );
                     if let Some(mode) = detected {
-                        flow.detected_bandwidth_mhz = Some(mode.mhz());
+                        flow.detected_sample_rate_msps = Some(mode.mhz());
                     }
                 }
-                let expected_sample_delta =
-                    expected_sample0_delta(&header, selected).saturating_mul(self.time_flow_count as u64);
+                let expected_sample_delta = expected_sample0_delta(&header, selected)
+                    .saturating_mul(self.time_flow_count as u64);
                 if sample_delta != expected_sample_delta {
                     flow.sample0_gaps = flow.sample0_gaps.saturating_add(1);
                     self.stats.sample0_gaps = self.stats.sample0_gaps.saturating_add(1);
@@ -3648,7 +3849,13 @@ impl FanoutWorkerRuntime {
         (detected, gap)
     }
 
-    fn update_spec_flow_stats(&mut self, flow_id: usize, header: T510Header, payload_len: u64, src_port: u16) -> bool {
+    fn update_spec_flow_stats(
+        &mut self,
+        flow_id: usize,
+        header: T510Header,
+        payload_len: u64,
+        src_port: u16,
+    ) -> bool {
         let mut gap = false;
         if let Some(flow) = self.per_flow.get_mut(flow_id) {
             flow.src_port = src_port;
@@ -3703,7 +3910,7 @@ impl FanoutWorkerRuntime {
                     for flow in &mut self.per_flow {
                         flow.clear_continuity();
                     }
-                    self.stats.detected_bandwidth_mhz = None;
+                    self.stats.detected_sample_rate_msps = None;
                     self.display_capture.arm();
                     if self.worker_id == 0 {
                         self.spectrum_gate.reset();
@@ -3767,7 +3974,7 @@ impl FanoutWorkerRuntime {
                     flow.gbps = bytes as f64 * 8.0 / seconds / 1.0e9;
                 }
             }
-            self.stats.detected_bandwidth_mhz = per_flow_detected_consensus(&self.per_flow);
+            self.stats.detected_sample_rate_msps = per_flow_detected_consensus(&self.per_flow);
             self.stats.waveform_updates = self
                 .stats
                 .waveform_updates
@@ -3815,7 +4022,8 @@ fn run_fanout_worker(config: FanoutWorkerConfig) {
     let mut runtime = FanoutWorkerRuntime::new(&config);
     if config.pin_workers == PinWorkers::Auto {
         if let Err(err) = pin_current_thread(config.worker_id) {
-            runtime.stats.last_error = Some(format!("worker {} CPU pin failed: {err}", config.worker_id));
+            runtime.stats.last_error =
+                Some(format!("worker {} CPU pin failed: {err}", config.worker_id));
         }
     }
     let mut socket = match MmapPacketSocket::open_with_fanout(
@@ -3827,7 +4035,10 @@ fn run_fanout_worker(config: FanoutWorkerConfig) {
     ) {
         Ok(socket) => socket,
         Err(err) => {
-            runtime.stats.last_error = Some(format!("worker {} fanout socket open failed: {err}", config.worker_id));
+            runtime.stats.last_error = Some(format!(
+                "worker {} fanout socket open failed: {err}",
+                config.worker_id
+            ));
             runtime.force_report();
             return;
         }
@@ -3837,7 +4048,10 @@ fn run_fanout_worker(config: FanoutWorkerConfig) {
         let batch = match socket.drain(|frame| runtime.process_frame(frame)) {
             Ok(batch) => batch,
             Err(err) => {
-                runtime.stats.last_error = Some(format!("worker {} mmap drain failed: {err}", config.worker_id));
+                runtime.stats.last_error = Some(format!(
+                    "worker {} mmap drain failed: {err}",
+                    config.worker_id
+                ));
                 runtime.force_report();
                 return;
             }
@@ -3864,8 +4078,8 @@ fn merge_flow_stats(dst: &mut FlowStats, src: &FlowStats) {
     dst.sample0_gaps = dst.sample0_gaps.saturating_add(src.sample0_gaps);
     dst.spec_seq_gaps = dst.spec_seq_gaps.saturating_add(src.spec_seq_gaps);
     dst.spec_frame_gaps = dst.spec_frame_gaps.saturating_add(src.spec_frame_gaps);
-    if src_active || (dst_was_inactive && src.detected_bandwidth_mhz.is_some()) {
-        dst.detected_bandwidth_mhz = src.detected_bandwidth_mhz;
+    if src_active || (dst_was_inactive && src.detected_sample_rate_msps.is_some()) {
+        dst.detected_sample_rate_msps = src.detected_sample_rate_msps;
     }
     if src.last_seq_no.is_some() && (src_active || dst_was_inactive) {
         dst.last_seq_no = src.last_seq_no;
@@ -3873,7 +4087,9 @@ fn merge_flow_stats(dst: &mut FlowStats, src: &FlowStats) {
         dst.last_sample0 = src.last_sample0;
         dst.src_port = src.src_port;
     }
-    if src.last_spec_seq_no.is_some() && (src_active || dst_was_inactive || dst.last_spec_seq_no.is_none()) {
+    if src.last_spec_seq_no.is_some()
+        && (src_active || dst_was_inactive || dst.last_spec_seq_no.is_none())
+    {
         dst.last_spec_seq_no = src.last_spec_seq_no;
         dst.last_spec_frame_id = src.last_spec_frame_id;
         dst.last_spec_sample0 = src.last_spec_sample0;
@@ -3881,9 +4097,7 @@ fn merge_flow_stats(dst: &mut FlowStats, src: &FlowStats) {
         dst.last_spec_chan_count = src.last_spec_chan_count;
         dst.src_port = src.src_port;
     }
-    if src.last_spec_gap_seq_no.is_some()
-        && (src_active || dst.last_spec_gap_seq_no.is_none())
-    {
+    if src.last_spec_gap_seq_no.is_some() && (src_active || dst.last_spec_gap_seq_no.is_none()) {
         dst.last_spec_gap_prev_seq_no = src.last_spec_gap_prev_seq_no;
         dst.last_spec_gap_seq_no = src.last_spec_gap_seq_no;
         dst.last_spec_gap_seq_delta = src.last_spec_gap_seq_delta;
@@ -3945,14 +4159,22 @@ fn aggregate_fanout_stats(
     stats.last_spec_sample0 = None;
     stats.last_spec_chan0 = None;
     stats.last_spec_chan_count = None;
-    stats.detected_bandwidth_mhz = None;
+    stats.detected_sample_rate_msps = None;
     stats.last_error = None;
     stats.websocket_clients = websocket_clients;
     stats.waveform_websocket_clients = waveform_websocket_clients;
     stats.spectrum_websocket_clients = spectrum_websocket_clients;
-    stats.selected_bandwidth_mhz = config.bandwidth_mode().mhz();
-    stats.active_time_flow_count = if config.needs_time() { stats.time_flow_count } else { 0 };
-    stats.active_spec_flow_count = if config.needs_spec() { stats.spec_flow_count } else { 0 };
+    stats.selected_sample_rate_msps = config.sample_rate_mode().mhz();
+    stats.active_time_flow_count = if config.needs_time() {
+        stats.time_flow_count
+    } else {
+        0
+    };
+    stats.active_spec_flow_count = if config.needs_spec() {
+        stats.spec_flow_count
+    } else {
+        0
+    };
     stats.active_flow_count = stats
         .active_time_flow_count
         .saturating_add(stats.active_spec_flow_count);
@@ -3984,7 +4206,9 @@ fn aggregate_fanout_stats(
         stats.time_bytes = stats.time_bytes.saturating_add(worker.time_bytes);
         stats.spec_bytes = stats.spec_bytes.saturating_add(worker.spec_bytes);
         stats.parse_errors = stats.parse_errors.saturating_add(worker.parse_errors);
-        stats.filtered_packets = stats.filtered_packets.saturating_add(worker.filtered_packets);
+        stats.filtered_packets = stats
+            .filtered_packets
+            .saturating_add(worker.filtered_packets);
         stats.kernel_drops = stats.kernel_drops.saturating_add(worker.kernel_drops);
         stats.ring_drops = stats.ring_drops.saturating_add(worker.ring_drops);
         stats.worker_ring_drops = stats.worker_ring_drops.saturating_add(worker.ring_drops);
@@ -3994,8 +4218,12 @@ fn aggregate_fanout_stats(
         stats.sample0_gaps = stats.sample0_gaps.saturating_add(worker.sample0_gaps);
         stats.spec_seq_gaps = stats.spec_seq_gaps.saturating_add(worker.spec_seq_gaps);
         stats.spec_frame_gaps = stats.spec_frame_gaps.saturating_add(worker.spec_frame_gaps);
-        stats.waveform_updates = stats.waveform_updates.saturating_add(worker.waveform_updates);
-        stats.spectrum_updates = stats.spectrum_updates.saturating_add(worker.spectrum_updates);
+        stats.waveform_updates = stats
+            .waveform_updates
+            .saturating_add(worker.waveform_updates);
+        stats.spectrum_updates = stats
+            .spectrum_updates
+            .saturating_add(worker.spectrum_updates);
         stats.packets_per_sec += worker.packets_per_sec;
         stats.gbps += worker.gbps;
         stats.rx_processed_packets_per_sec += worker.rx_processed_packets_per_sec;
@@ -4004,10 +4232,15 @@ fn aggregate_fanout_stats(
         stats.spec_processed_gbps += worker.spec_processed_gbps;
         stats.display_update_hz += worker.display_update_hz;
         stats.spectrum_update_hz += worker.spectrum_update_hz;
-        stats.ring_fill_blocks = stats.ring_fill_blocks.saturating_add(worker.ring_fill_blocks);
+        stats.ring_fill_blocks = stats
+            .ring_fill_blocks
+            .saturating_add(worker.ring_fill_blocks);
         stats.ring_fill_percent = stats.ring_fill_percent.max(worker.ring_fill_percent);
-        stats.ring_freeze_q_count = stats.ring_freeze_q_count.saturating_add(worker.ring_freeze_q_count);
-        if worker.rx_processed_packets_per_sec > 0.5 || worker.spec_processed_packets_per_sec > 0.5 {
+        stats.ring_freeze_q_count = stats
+            .ring_freeze_q_count
+            .saturating_add(worker.ring_freeze_q_count);
+        if worker.rx_processed_packets_per_sec > 0.5 || worker.spec_processed_packets_per_sec > 0.5
+        {
             stats.active_worker_count = stats.active_worker_count.saturating_add(1);
         }
         if worker.last_board_id.is_some() {
@@ -4038,22 +4271,29 @@ fn aggregate_fanout_stats(
             }
         }
     }
-    stats.detected_bandwidth_mhz = per_flow_detected_consensus(&stats.per_flow);
+    stats.detected_sample_rate_msps = per_flow_detected_consensus(&stats.per_flow);
     stats.selected_detected_mismatch = stats
-        .detected_bandwidth_mhz
-        .map(|mhz| mhz != stats.selected_bandwidth_mhz)
+        .detected_sample_rate_msps
+        .map(|mhz| mhz != stats.selected_sample_rate_msps)
         .unwrap_or(false);
     let time_count = stats.last_time_count.unwrap_or(DEFAULT_TIME_COUNT).max(1) as f64;
-    let mode = config.bandwidth_mode();
+    let mode = config.sample_rate_mode();
     stats.expected_packets_per_sec =
         (RAW_SAMPLE_RATE_HZ / mode.decimation() as f64) / (time_count * 4.0);
     let expected_streams = config.needs_time() as u8 as f64 + config.needs_spec() as u8 as f64;
-    stats.expected_time_gbps =
-        if config.needs_time() { stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
-    stats.expected_spec_gbps =
-        if config.needs_spec() { stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9 } else { 0.0 };
+    stats.expected_time_gbps = if config.needs_time() {
+        stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9
+    } else {
+        0.0
+    };
+    stats.expected_spec_gbps = if config.needs_spec() {
+        stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 / 1.0e9
+    } else {
+        0.0
+    };
     stats.expected_fpga_gbps =
-        stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 * expected_streams / 1.0e9;
+        stats.expected_packets_per_sec * TIME_UDP_PAYLOAD_BYTES as f64 * 8.0 * expected_streams
+            / 1.0e9;
     let denom = stats.time_packets.saturating_add(stats.app_drops);
     stats.loss_percent = if denom == 0 {
         0.0
@@ -4086,7 +4326,6 @@ fn run_fanout_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::
             flow_count,
             time_flow_count,
             spec_flow_count,
-            spec_layout: args.spec_layout,
             options,
             fanout,
             pin_workers: args.pin_workers,
@@ -4282,7 +4521,8 @@ fn run_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::Result<
             socket.apply_ring_config_to_stats(&mut runtime.stats);
             runtime.publish_if_due();
             loop {
-                let batch = socket.drain(|frame| runtime.process_input(frame, InputKind::Ethernet))?;
+                let batch =
+                    socket.drain(|frame| runtime.process_input(frame, InputKind::Ethernet))?;
                 runtime.update_ring_backlog(&batch, socket.options.block_count);
                 socket.poll_kernel_stats_if_due(&mut runtime.stats);
                 if batch.packets == 0 {
@@ -4291,7 +4531,11 @@ fn run_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::Result<
             }
         }
         Backend::Packet => {
-            let socket = PacketSocket::open(&args.interface, args.dst_port_base(), args.flow_count_clamped())?;
+            let socket = PacketSocket::open(
+                &args.interface,
+                args.dst_port_base(),
+                args.flow_count_clamped(),
+            )?;
             let mut buf = vec![0u8; 16 * 1024];
             loop {
                 let frame = socket.recv(&mut buf)?;
@@ -4309,7 +4553,11 @@ fn run_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::Result<
     }
 }
 
-fn handle_http(mut stream: TcpStream, shared: Arc<Mutex<SharedState>>, web_fps: u32) -> std::io::Result<()> {
+fn handle_http(
+    mut stream: TcpStream,
+    shared: Arc<Mutex<SharedState>>,
+    web_fps: u32,
+) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_millis(200)))?;
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
@@ -4337,7 +4585,12 @@ fn handle_http(mut stream: TcpStream, shared: Arc<Mutex<SharedState>>, web_fps: 
     let request = String::from_utf8_lossy(&buf);
     let first = request.lines().next().unwrap_or_default();
     if first.starts_with("GET / ") || first.starts_with("GET /index.html ") {
-        write_response(&mut stream, "200 OK", "text/html; charset=utf-8", HTML.as_bytes())
+        write_response(
+            &mut stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            HTML.as_bytes(),
+        )
     } else if first.starts_with("GET /static/gridstack-all.js ") {
         write_response(
             &mut stream,
@@ -4359,12 +4612,12 @@ fn handle_http(mut stream: TcpStream, shared: Arc<Mutex<SharedState>>, web_fps: 
             "text/javascript; charset=utf-8",
             ECHARTS_JS.as_bytes(),
         )
-    } else if first.starts_with("GET /static/stage29_math.js ") {
+    } else if first.starts_with("GET /static/t510_math.js ") {
         write_response(
             &mut stream,
             "200 OK",
             "text/javascript; charset=utf-8",
-            STAGE29_MATH_JS.as_bytes(),
+            T510_MATH_JS.as_bytes(),
         )
     } else if first.starts_with("GET /ws/waveform ") {
         handle_waveform_ws(stream, &request, shared, web_fps)
@@ -4376,7 +4629,8 @@ fn handle_http(mut stream: TcpStream, shared: Arc<Mutex<SharedState>>, web_fps: 
             clear_stale_previews(&mut guard);
             let waveform_age_ms = preview_age_ms(guard.waveform_updated);
             let spectrum_age_ms = preview_age_ms(guard.spectrum_updated);
-            let waveform_live = preview_live(guard.waveform_updated) && waveform_rate_live(&guard.config, &guard.stats);
+            let waveform_live = preview_live(guard.waveform_updated)
+                && waveform_rate_live(&guard.config, &guard.stats);
             let spectrum_live = preview_live(guard.spectrum_updated);
             ApiState {
                 config: guard.config.clone(),
@@ -4395,24 +4649,43 @@ fn handle_http(mut stream: TcpStream, shared: Arc<Mutex<SharedState>>, web_fps: 
         let body = request_body(&buf);
         match serde_json::from_slice::<DisplayConfigPatch>(body) {
             Ok(patch) => {
-                let (config, generation) = {
+                let applied = {
                     let mut guard = shared.lock().unwrap();
                     apply_display_config_patch_to_shared(&mut guard, patch)
                 };
-                let body = serde_json::json!({
-                    "ok": true,
-                    "config": config,
-                    "config_generation": generation
-                })
-                .to_string();
-                write_response(&mut stream, "200 OK", "application/json", body.as_bytes())
+                match applied {
+                    Ok((config, generation)) => {
+                        let body = serde_json::json!({
+                            "ok": true,
+                            "config": config,
+                            "config_generation": generation
+                        })
+                        .to_string();
+                        write_response(&mut stream, "200 OK", "application/json", body.as_bytes())
+                    }
+                    Err(err) => {
+                        let body = serde_json::json!({"ok": false, "error": err}).to_string();
+                        write_response(
+                            &mut stream,
+                            "400 Bad Request",
+                            "application/json",
+                            body.as_bytes(),
+                        )
+                    }
+                }
             }
             Err(err) => {
                 let body = format!(r#"{{"ok":false,"error":"{}"}}"#, err);
-                write_response(&mut stream, "400 Bad Request", "application/json", body.as_bytes())
+                write_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    body.as_bytes(),
+                )
             }
         }
-    } else if first.starts_with("OPTIONS /api/config ") || first.starts_with("OPTIONS /api/state ") {
+    } else if first.starts_with("OPTIONS /api/config ") || first.starts_with("OPTIONS /api/state ")
+    {
         write_response(&mut stream, "204 No Content", "text/plain", b"")
     } else {
         write_response(&mut stream, "404 Not Found", "text/plain", b"not found")
@@ -4426,7 +4699,12 @@ fn handle_waveform_ws(
     web_fps: u32,
 ) -> std::io::Result<()> {
     let Some(key) = websocket_key(request) else {
-        return write_response(&mut stream, "400 Bad Request", "text/plain", b"missing websocket key");
+        return write_response(
+            &mut stream,
+            "400 Bad Request",
+            "text/plain",
+            b"missing websocket key",
+        );
     };
     let accept = websocket_accept(&key);
     write!(
@@ -4438,7 +4716,8 @@ fn handle_waveform_ws(
     stream.set_write_timeout(Some(Duration::from_millis(250)))?;
     if let Ok(mut guard) = shared.lock() {
         guard.stats.websocket_clients = guard.stats.websocket_clients.saturating_add(1);
-        guard.stats.waveform_websocket_clients = guard.stats.waveform_websocket_clients.saturating_add(1);
+        guard.stats.waveform_websocket_clients =
+            guard.stats.waveform_websocket_clients.saturating_add(1);
     }
     let interval = Duration::from_secs_f64(1.0 / web_fps.clamp(1, 240) as f64);
     let result = loop {
@@ -4456,7 +4735,8 @@ fn handle_waveform_ws(
     };
     if let Ok(mut guard) = shared.lock() {
         guard.stats.websocket_clients = guard.stats.websocket_clients.saturating_sub(1);
-        guard.stats.waveform_websocket_clients = guard.stats.waveform_websocket_clients.saturating_sub(1);
+        guard.stats.waveform_websocket_clients =
+            guard.stats.waveform_websocket_clients.saturating_sub(1);
     }
     result
 }
@@ -4468,7 +4748,12 @@ fn handle_spectrum_ws(
     web_fps: u32,
 ) -> std::io::Result<()> {
     let Some(key) = websocket_key(request) else {
-        return write_response(&mut stream, "400 Bad Request", "text/plain", b"missing websocket key");
+        return write_response(
+            &mut stream,
+            "400 Bad Request",
+            "text/plain",
+            b"missing websocket key",
+        );
     };
     let accept = websocket_accept(&key);
     write!(
@@ -4480,7 +4765,8 @@ fn handle_spectrum_ws(
     stream.set_write_timeout(Some(Duration::from_millis(250)))?;
     if let Ok(mut guard) = shared.lock() {
         guard.stats.websocket_clients = guard.stats.websocket_clients.saturating_add(1);
-        guard.stats.spectrum_websocket_clients = guard.stats.spectrum_websocket_clients.saturating_add(1);
+        guard.stats.spectrum_websocket_clients =
+            guard.stats.spectrum_websocket_clients.saturating_add(1);
     }
     let interval = Duration::from_secs_f64(1.0 / web_fps.clamp(1, 240) as f64);
     let result = loop {
@@ -4498,7 +4784,8 @@ fn handle_spectrum_ws(
     };
     if let Ok(mut guard) = shared.lock() {
         guard.stats.websocket_clients = guard.stats.websocket_clients.saturating_sub(1);
-        guard.stats.spectrum_websocket_clients = guard.stats.spectrum_websocket_clients.saturating_sub(1);
+        guard.stats.spectrum_websocket_clients =
+            guard.stats.spectrum_websocket_clients.saturating_sub(1);
     }
     result
 }
@@ -4569,7 +4856,12 @@ fn request_body(buf: &[u8]) -> &[u8] {
     }
 }
 
-fn write_response(stream: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) -> std::io::Result<()> {
+fn write_response(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
     write!(
         stream,
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nConnection: close\r\n\r\n",
@@ -4608,21 +4900,20 @@ mod tests {
             port: 4300,
             dst_port_base: Some(4300),
             src_port_base: 4000,
-            flow_count: DEFAULT_FLOW_COUNT_27H,
+            flow_count: DEFAULT_FLOW_COUNT,
             time_flow_count: 8,
-            spec_flow_count: DEFAULT_SPEC_FLOW_COUNT_27H,
+            spec_flow_count: DEFAULT_SPEC_FLOW_COUNT,
             reorder_window: 8,
             web_fps: 60,
             waveform_points: 4096,
             waveform_max_points: 16384,
             web: "127.0.0.1:0".to_string(),
-            initial_bandwidth_mhz: 160,
+            initial_sample_rate_msps: 160,
             backend: Backend::Mmap,
             worker_count: 32,
             fanout_group: 0x27d,
             fanout_mode: FanoutMode::Port,
             pin_workers: PinWorkers::Auto,
-            spec_layout: SpecLayout::Stage27h,
             ring_mb: 512,
             block_mb: 4,
             block_count: 0,
@@ -4724,12 +5015,15 @@ mod tests {
         PacketCopy {
             header,
             payload,
-            detected_bandwidth: Some(BandwidthMode::Msps160),
+            detected_sample_rate: Some(SampleRateMode::Msps160),
             gap_before: false,
         }
     }
 
-    fn time_packet_by_channel(header: T510Header, iq_by_channel: &[(i16, i16); TIME_NINPUT]) -> PacketCopy {
+    fn time_packet_by_channel(
+        header: T510Header,
+        iq_by_channel: &[(i16, i16); TIME_NINPUT],
+    ) -> PacketCopy {
         let mut payload = vec![0u8; TIME_UDP_PAYLOAD_BYTES];
         for beat in 0..header.time_count as usize {
             for sub in 0..TIME_SUBSAMPLES_PER_BEAT {
@@ -4743,12 +5037,16 @@ mod tests {
         PacketCopy {
             header,
             payload,
-            detected_bandwidth: Some(BandwidthMode::Msps160),
+            detected_sample_rate: Some(SampleRateMode::Msps160),
             gap_before: false,
         }
     }
 
-    fn time_packet_channel_samples(mut header: T510Header, channel: usize, samples: &[(i16, i16)]) -> PacketCopy {
+    fn time_packet_channel_samples(
+        mut header: T510Header,
+        channel: usize,
+        samples: &[(i16, i16)],
+    ) -> PacketCopy {
         header.time_count = div_ceil(samples.len(), TIME_SUBSAMPLES_PER_BEAT) as u16;
         let mut payload = vec![0u8; TIME_UDP_PAYLOAD_BYTES];
         for (idx, (i, q)) in samples.iter().copied().enumerate() {
@@ -4761,42 +5059,42 @@ mod tests {
         PacketCopy {
             header,
             payload,
-            detected_bandwidth: Some(BandwidthMode::Msps160),
+            detected_sample_rate: Some(SampleRateMode::Msps160),
             gap_before: false,
         }
     }
 
     #[test]
-    fn display_defaults_to_stage32_160msps() {
+    fn display_defaults_to_stage33_160msps() {
         let config = DisplayConfig::default();
-        assert_eq!(config.bandwidth_mhz, 160);
+        assert_eq!(config.sample_rate_msps, 160);
         assert_eq!(config.output_mode, "time_spec");
-        assert_eq!(config.bandwidth_mode(), BandwidthMode::Msps160);
-        assert_eq!(config.center_mhz, 100.0);
-        assert_eq!(config.expected_mhz, 60.010);
-        assert_eq!(config.dac_mhz, 60.010);
-        assert_eq!(config.target_mhz_by_channel, [60.010; TIME_NINPUT]);
+        assert_eq!(config.sample_rate_mode(), SampleRateMode::Msps160);
+        assert_eq!(config.center_mhz, 200.0);
+        assert_eq!(config.expected_mhz, 200.010);
+        assert_eq!(config.dac_mhz, 200.010);
+        assert_eq!(config.target_mhz_by_channel, [200.010; TIME_NINPUT]);
 
         let mut invalid = config.clone();
-        invalid.bandwidth_mhz = 1234;
+        invalid.sample_rate_msps = 1234;
         sanitize_config(&mut invalid);
-        assert_eq!(invalid.bandwidth_mhz, 160);
+        assert_eq!(invalid.sample_rate_msps, 160);
 
         let mut args = test_args();
-        args.initial_bandwidth_mhz = 1234;
+        args.initial_sample_rate_msps = 1234;
         let stats = ReceiverStats::new(&args);
-        assert_eq!(stats.selected_bandwidth_mhz, 160);
+        assert_eq!(stats.selected_sample_rate_msps, 160);
     }
 
     #[test]
-    fn display_patch_supports_legacy_scalar_and_per_channel_targets() {
+    fn display_patch_supports_scalar_and_per_channel_targets() {
         let mut config = DisplayConfig::default();
         DisplayConfigPatch {
-            bandwidth_mhz: None,
+            sample_rate_msps: None,
             output_mode: None,
             center_mhz: None,
-            expected_mhz: Some(70.0),
-            dac_mhz: Some(70.0),
+            expected_mhz: Some(210.0),
+            dac_mhz: Some(210.0),
             target_mhz_by_channel: None,
             waveform_view_mode: None,
             phase_deg_by_channel: None,
@@ -4808,16 +5106,19 @@ mod tests {
             pause: None,
             freeze: None,
         }
-        .apply_to(&mut config);
-        assert_eq!(config.target_mhz_by_channel, [70.0; TIME_NINPUT]);
+        .apply_to(&mut config)
+        .unwrap();
+        assert_eq!(config.target_mhz_by_channel, [210.0; TIME_NINPUT]);
 
         DisplayConfigPatch {
-            bandwidth_mhz: None,
+            sample_rate_msps: None,
             output_mode: None,
             center_mhz: None,
-            expected_mhz: Some(71.0),
-            dac_mhz: Some(71.0),
-            target_mhz_by_channel: Some(vec![60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0, 67.0]),
+            expected_mhz: Some(211.0),
+            dac_mhz: Some(211.0),
+            target_mhz_by_channel: Some(vec![
+                201.0, 202.0, 203.0, 204.0, 205.0, 206.0, 207.0, 208.0,
+            ]),
             waveform_view_mode: None,
             phase_deg_by_channel: None,
             channel_mask: None,
@@ -4828,19 +5129,85 @@ mod tests {
             pause: None,
             freeze: None,
         }
-        .apply_to(&mut config);
+        .apply_to(&mut config)
+        .unwrap();
         assert_eq!(
             config.target_mhz_by_channel,
-            [60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0, 67.0]
+            [201.0, 202.0, 203.0, 204.0, 205.0, 206.0, 207.0, 208.0]
         );
-        assert_eq!(config.target_hz(0), 60_000_000.0);
-        assert_eq!(config.target_hz(7), 67_000_000.0);
+        assert_eq!(config.target_hz(0), 201_000_000.0);
+        assert_eq!(config.target_hz(7), 208_000_000.0);
     }
 
     #[test]
-    fn stage29_web_is_echarts_seven_widget_workspace() {
+    fn display_patch_rejects_stage33_frequency_contract_violations() {
+        let mut config = DisplayConfig::default();
+        let error = DisplayConfigPatch {
+            sample_rate_msps: Some(320),
+            output_mode: Some("time_only".to_string()),
+            center_mhz: Some(100.0),
+            expected_mhz: Some(100.0),
+            dac_mhz: Some(100.0),
+            target_mhz_by_channel: Some(vec![100.0; TIME_NINPUT]),
+            waveform_view_mode: None,
+            phase_deg_by_channel: None,
+            channel_mask: None,
+            time_window_us: None,
+            display_points: None,
+            vertical_scale: None,
+            paused: None,
+            pause: None,
+            freeze: None,
+        }
+        .apply_to(&mut config)
+        .unwrap_err();
+        assert!(error.contains("160..1760"));
+        assert_eq!(config.sample_rate_msps, 160);
+        assert_eq!(config.center_mhz, 200.0);
+
+        let error = DisplayConfigPatch {
+            sample_rate_msps: Some(320),
+            output_mode: Some("time_spec".to_string()),
+            center_mhz: Some(200.0),
+            expected_mhz: Some(200.010),
+            dac_mhz: Some(200.010),
+            target_mhz_by_channel: Some(vec![200.010; TIME_NINPUT]),
+            waveform_view_mode: None,
+            phase_deg_by_channel: None,
+            channel_mask: None,
+            time_window_us: None,
+            display_points: None,
+            vertical_scale: None,
+            paused: None,
+            pause: None,
+            freeze: None,
+        }
+        .apply_to(&mut config)
+        .unwrap_err();
+        assert!(error.contains("rejects time_spec"));
+
+        let mut high = DisplayConfig::default();
+        high.sample_rate_msps = 320;
+        high.output_mode = "time_only".to_string();
+        high.center_mhz = 1760.0;
+        high.expected_mhz = 1919.999;
+        high.dac_mhz = 1919.999;
+        high.target_mhz_by_channel = [1919.999; TIME_NINPUT];
+        assert!(validate_stage33_frequency_config(&high).is_ok());
+        high.dac_mhz = 1920.0;
+        assert!(validate_stage33_frequency_config(&high)
+            .unwrap_err()
+            .contains("upper bound exclusive"));
+        high.dac_mhz = 1599.999;
+        assert!(validate_stage33_frequency_config(&high)
+            .unwrap_err()
+            .contains("center +/-160"));
+    }
+
+    #[test]
+    fn t510_control_web_is_echarts_seven_widget_workspace() {
         assert_eq!(HTML.matches("class=\"grid-stack-item\"").count(), 7);
-        assert!(HTML.contains("t510-stage29-layout-v2"));
+        assert!(HTML.contains("t510-t510_control-layout-v2"));
         assert!(HTML.contains("ResizeObserver"));
         assert!(HTML.contains("Display Controls"));
         assert!(HTML.contains("target_mhz_by_channel"));
@@ -4869,26 +5236,23 @@ mod tests {
     #[test]
     fn web_spectrum_uses_rf_mhz_ticks_and_header_sample_rate() {
         assert!(HTML.contains("RF frequency (MHz)"));
-        assert!(HTML.contains("Stage29Math.rfForBin"));
-        assert!(HTML.contains("Stage29Math.binForRf"));
-        assert!(STAGE29_MATH_JS.contains("+signedBin(index,bins)"));
-        assert!(STAGE29_MATH_JS.contains("Number(rfMhz)-Number(centerMhz)"));
+        assert!(HTML.contains("T510Math.rfForBin"));
+        assert!(HTML.contains("T510Math.binForRf"));
+        assert!(T510_MATH_JS.contains("+signedBin(index,bins)"));
+        assert!(T510_MATH_JS.contains("Number(rfMhz)-Number(centerMhz)"));
 
         let center_mhz = 100.0_f64;
         let nchan = 4096.0_f64;
-        for (sample_rate_hz, half_span_mhz, bin_width_khz) in
-            [
-                (160_000_000.0, 80.0, 39.0625),
-                (320_000_000.0, 160.0, 78.125),
-            ]
-        {
+        for (sample_rate_hz, half_span_mhz, bin_width_khz) in [
+            (160_000_000.0, 80.0, 39.0625),
+            (320_000_000.0, 160.0, 78.125),
+        ] {
             let left = center_mhz - sample_rate_hz / 2.0 / 1.0e6;
             let width = sample_rate_hz / nchan / 1.0e3;
             assert!((left - (center_mhz - half_span_mhz)).abs() < 1.0e-9);
             assert!((width - bin_width_khz).abs() < 1.0e-9);
             let target_mhz = 60.0_f64;
-            let signed_bin =
-                ((target_mhz - center_mhz) * 1.0e6 / (sample_rate_hz / nchan)).round();
+            let signed_bin = ((target_mhz - center_mhz) * 1.0e6 / (sample_rate_hz / nchan)).round();
             let mapped_mhz = center_mhz + signed_bin * sample_rate_hz / nchan / 1.0e6;
             assert!((mapped_mhz - target_mhz).abs() <= sample_rate_hz / nchan / 2.0 / 1.0e6);
             assert!((mapped_mhz - 140.0).abs() > 1.0);
@@ -4916,13 +5280,11 @@ mod tests {
     }
 
     #[test]
-    fn stage28_spec_only_allows_all_sixteen_flows_without_time() {
+    fn spec_only_allows_all_sixteen_flows_without_time() {
         let mut args = test_args();
         args.flow_count = 16;
         args.time_flow_count = 0;
         args.spec_flow_count = 16;
-        args.spec_layout = SpecLayout::Stage27j;
-
         assert_eq!(args.time_flow_count_clamped(), 0);
         assert_eq!(args.spec_flow_count_clamped(), 16);
     }
@@ -4951,13 +5313,13 @@ mod tests {
             spectrum_preview: SpecPreviewCapture::default(),
         };
         state.spectrum_preview.status.complete = true;
-        state.stats.detected_bandwidth_mhz = Some(160);
+        state.stats.detected_sample_rate_msps = Some(160);
 
         let (config, generation) = apply_display_config_patch_to_shared(
             &mut state,
             DisplayConfigPatch {
-                bandwidth_mhz: Some(320),
-                output_mode: None,
+                sample_rate_msps: Some(320),
+                output_mode: Some("time_only".to_string()),
                 center_mhz: None,
                 expected_mhz: None,
                 dac_mhz: None,
@@ -4972,17 +5334,18 @@ mod tests {
                 pause: None,
                 freeze: None,
             },
-        );
+        )
+        .unwrap();
 
         assert_eq!(generation, 8);
-        assert_eq!(config.bandwidth_mhz, 320);
+        assert_eq!(config.sample_rate_msps, 320);
         assert_eq!(state.config_generation, 8);
         assert!(state.waveform_binary.is_none());
         assert!(state.waveform_updated.is_none());
         assert!(state.spectrum_binary.is_none());
         assert!(state.spectrum_updated.is_none());
         assert!(!state.spectrum_preview.status.complete);
-        assert_eq!(state.stats.selected_bandwidth_mhz, 320);
+        assert_eq!(state.stats.selected_sample_rate_msps, 320);
         assert!(state.stats.selected_detected_mismatch);
     }
 
@@ -5044,7 +5407,7 @@ mod tests {
 
     #[test]
     fn bpf_filter_matches_ipv4_udp_dst_port_range_offsets() {
-        let filter = bpf_udp_port_range_filter(4300, DEFAULT_FLOW_COUNT_27H);
+        let filter = bpf_udp_port_range_filter(4300, DEFAULT_FLOW_COUNT);
         assert_eq!(filter.len(), 9);
         assert_eq!(filter[0].code, BPF_LD | BPF_H | BPF_ABS);
         assert_eq!(filter[0].k, 12);
@@ -5063,7 +5426,7 @@ mod tests {
         assert_eq!(filter[8].k, 0);
 
         let clamped = bpf_udp_port_range_filter(4300, 128);
-        assert_eq!(clamped[6].k, 4371);
+        assert_eq!(clamped[6].k, 4323);
     }
 
     #[test]
@@ -5071,28 +5434,28 @@ mod tests {
         let config = PacketFanoutConfig {
             group: 0x027d,
             mode: FanoutMode::Hash,
-            worker_count: DEFAULT_FLOW_COUNT_27H,
+            worker_count: DEFAULT_FLOW_COUNT,
         };
         assert_eq!(packet_fanout_arg(config), 0x027d);
 
         let port_config = PacketFanoutConfig {
             group: 0x027d,
             mode: FanoutMode::Port,
-            worker_count: DEFAULT_FLOW_COUNT_27H,
+            worker_count: DEFAULT_FLOW_COUNT,
         };
         assert_eq!(packet_fanout_arg(port_config), 0x0006_027d);
     }
 
     #[test]
     fn port_fanout_bpf_maps_udp_dst_port_to_worker_index() {
-        let filter = bpf_fanout_by_dst_port(4300, DEFAULT_FLOW_COUNT_27H);
+        let filter = bpf_fanout_by_dst_port(4300, DEFAULT_FLOW_COUNT);
         assert_eq!(filter.len(), 4);
         assert_eq!(filter[0].code, BPF_LD | BPF_H | BPF_ABS);
         assert_eq!(filter[0].k, 22);
         assert_eq!(filter[1].code, BPF_ALU | BPF_SUB | BPF_K);
         assert_eq!(filter[1].k, 4300);
         assert_eq!(filter[2].code, BPF_ALU | BPF_MOD | BPF_K);
-        assert_eq!(filter[2].k, DEFAULT_FLOW_COUNT_27H as u32);
+        assert_eq!(filter[2].k, DEFAULT_FLOW_COUNT as u32);
         assert_eq!(filter[3].code, BPF_RET | BPF_A);
     }
 
@@ -5101,7 +5464,7 @@ mod tests {
         let args = test_args();
         let base = ReceiverStats::new(&args);
         let mut config = DisplayConfig::default();
-        config.bandwidth_mhz = 320;
+        config.sample_rate_msps = 320;
 
         let mut worker0 = WorkerStats::new(0);
         worker0.time_packets = 10;
@@ -5123,11 +5486,11 @@ mod tests {
         let mut flow0 = FlowStats::new(0, 4300, 4000);
         flow0.time_packets = 10;
         flow0.packets_per_sec = 10.0;
-        flow0.detected_bandwidth_mhz = Some(320);
+        flow0.detected_sample_rate_msps = Some(320);
         let mut flow1 = FlowStats::new(1, 4301, 4001);
         flow1.time_packets = 20;
         flow1.packets_per_sec = 20.0;
-        flow1.detected_bandwidth_mhz = Some(320);
+        flow1.detected_sample_rate_msps = Some(320);
 
         let reports = vec![
             Some(FanoutWorkerReport {
@@ -5147,7 +5510,7 @@ mod tests {
         assert_eq!(stats.active_worker_count, 2);
         assert_eq!(stats.last_board_id, Some(37));
         assert_eq!(stats.rx_processed_packets_per_sec, 30.0);
-        assert_eq!(stats.detected_bandwidth_mhz, Some(320));
+        assert_eq!(stats.detected_sample_rate_msps, Some(320));
         assert_eq!(stats.per_flow[0].time_packets, 10);
         assert_eq!(stats.per_flow[1].time_packets, 20);
     }
@@ -5157,13 +5520,13 @@ mod tests {
         let args = test_args();
         let base = ReceiverStats::new(&args);
         let mut config = DisplayConfig::default();
-        config.bandwidth_mhz = 320;
+        config.sample_rate_msps = 320;
 
         let mut stale_worker = WorkerStats::new(0);
         stale_worker.last_time_count = Some(DEFAULT_TIME_COUNT);
         let mut stale_flow = FlowStats::new(1, 4301, 4001);
         stale_flow.time_packets = 10_000;
-        stale_flow.detected_bandwidth_mhz = Some(160);
+        stale_flow.detected_sample_rate_msps = Some(160);
         stale_flow.last_seq_no = Some(1_000);
 
         let mut active_worker = WorkerStats::new(1);
@@ -5173,7 +5536,7 @@ mod tests {
         let mut active_flow = FlowStats::new(1, 4301, 4001);
         active_flow.time_packets = 100;
         active_flow.packets_per_sec = 15_000.0;
-        active_flow.detected_bandwidth_mhz = Some(320);
+        active_flow.detected_sample_rate_msps = Some(320);
         active_flow.last_seq_no = Some(20_000);
 
         let reports = vec![
@@ -5189,9 +5552,9 @@ mod tests {
             }),
         ];
         let stats = aggregate_fanout_stats(&base, &reports, &config, 0, 0, 0);
-        assert_eq!(stats.per_flow[1].detected_bandwidth_mhz, Some(320));
+        assert_eq!(stats.per_flow[1].detected_sample_rate_msps, Some(320));
         assert_eq!(stats.per_flow[1].last_seq_no, Some(20_000));
-        assert_eq!(stats.detected_bandwidth_mhz, Some(320));
+        assert_eq!(stats.detected_sample_rate_msps, Some(320));
     }
 
     #[test]
@@ -5200,14 +5563,14 @@ mod tests {
         let mut stats = ReceiverStats::new(&args);
         let mut reorder = ReorderTracker::new(8);
 
-        let (_, gap0) = reorder.ingest(test_header(0), BandwidthMode::Msps320, &mut stats);
-        let (_, gap2) = reorder.ingest(test_header(2), BandwidthMode::Msps320, &mut stats);
-        let (detected, gap1) = reorder.ingest(test_header(1), BandwidthMode::Msps320, &mut stats);
+        let (_, gap0) = reorder.ingest(test_header(0), SampleRateMode::Msps320, &mut stats);
+        let (_, gap2) = reorder.ingest(test_header(2), SampleRateMode::Msps320, &mut stats);
+        let (detected, gap1) = reorder.ingest(test_header(1), SampleRateMode::Msps320, &mut stats);
 
         assert!(!gap0);
         assert!(!gap2);
         assert!(!gap1);
-        assert_eq!(detected, Some(BandwidthMode::Msps320));
+        assert_eq!(detected, Some(SampleRateMode::Msps320));
         assert_eq!(stats.seq_gaps, 0);
         assert_eq!(stats.frame_gaps, 0);
         assert_eq!(stats.sample0_gaps, 0);
@@ -5219,21 +5582,20 @@ mod tests {
         let args = test_args();
         let mut stats = ReceiverStats::new(&args);
         let mut reorder = ReorderTracker::new(8);
-        let _ = reorder.ingest(test_header(0), BandwidthMode::Msps320, &mut stats);
+        let _ = reorder.ingest(test_header(0), SampleRateMode::Msps320, &mut stats);
         reorder.reset();
-        let (_, gap) =
-            reorder.ingest(test_header(10_000), BandwidthMode::Msps320, &mut stats);
+        let (_, gap) = reorder.ingest(test_header(10_000), SampleRateMode::Msps320, &mut stats);
         assert!(!gap);
         assert_eq!(stats.seq_gaps, 0);
         assert_eq!(stats.frame_gaps, 0);
         assert_eq!(stats.sample0_gaps, 0);
 
         let mut flow = FlowStats::new(0, 4300, 4000);
-        flow.detected_bandwidth_mhz = Some(160);
+        flow.detected_sample_rate_msps = Some(160);
         flow.last_seq_no = Some(99);
         flow.last_sample0 = Some(1234);
         flow.clear_continuity();
-        assert_eq!(flow.detected_bandwidth_mhz, None);
+        assert_eq!(flow.detected_sample_rate_msps, None);
         assert_eq!(flow.last_seq_no, None);
         assert_eq!(flow.last_sample0, None);
     }
@@ -5244,8 +5606,8 @@ mod tests {
         let mut stats = ReceiverStats::new(&args);
         let mut reorder = ReorderTracker::new(2);
 
-        let _ = reorder.ingest(test_header(0), BandwidthMode::Msps320, &mut stats);
-        let (_, gap) = reorder.ingest(test_header(4), BandwidthMode::Msps320, &mut stats);
+        let _ = reorder.ingest(test_header(0), SampleRateMode::Msps320, &mut stats);
+        let (_, gap) = reorder.ingest(test_header(4), SampleRateMode::Msps320, &mut stats);
 
         assert!(gap);
         assert_eq!(stats.seq_gaps, 1);
@@ -5264,11 +5626,11 @@ mod tests {
         ];
         assert_eq!(per_flow_detected_consensus(&flows), None);
 
-        flows[0].detected_bandwidth_mhz = Some(160);
-        flows[2].detected_bandwidth_mhz = Some(160);
+        flows[0].detected_sample_rate_msps = Some(160);
+        flows[2].detected_sample_rate_msps = Some(160);
         assert_eq!(per_flow_detected_consensus(&flows), Some(160));
 
-        flows[1].detected_bandwidth_mhz = Some(320);
+        flows[1].detected_sample_rate_msps = Some(320);
         assert_eq!(per_flow_detected_consensus(&flows), None);
     }
 
@@ -5283,8 +5645,8 @@ mod tests {
             sample0: 123_456,
             seq_no: 10,
             frame_id: 10,
-            selected_bandwidth_mhz: 320,
-            detected_bandwidth_mhz: Some(160),
+            selected_sample_rate_msps: 320,
+            detected_sample_rate_msps: Some(160),
             decimation: 1,
             sample_rate_hz: RAW_SAMPLE_RATE_HZ,
             requested_window_us: 2.0,
@@ -5353,17 +5715,32 @@ mod tests {
         assert_eq!(f32::from_le_bytes(bytes[160..164].try_into().unwrap()), 0.0);
         assert_eq!(f32::from_le_bytes(bytes[164..168].try_into().unwrap()), 1.0);
         assert_eq!(f32::from_le_bytes(bytes[168..172].try_into().unwrap()), 1.0);
-        assert_eq!(f32::from_le_bytes(bytes[172..176].try_into().unwrap()), -0.5);
+        assert_eq!(
+            f32::from_le_bytes(bytes[172..176].try_into().unwrap()),
+            -0.5
+        );
         assert_eq!(f32::from_le_bytes(bytes[176..180].try_into().unwrap()), 0.2);
         assert_eq!(f32::from_le_bytes(bytes[180..184].try_into().unwrap()), 0.3);
-        assert_eq!(f32::from_le_bytes(bytes[184..188].try_into().unwrap()), 1.02);
-        assert_eq!(f32::from_le_bytes(bytes[188..192].try_into().unwrap()), 0.58);
+        assert_eq!(
+            f32::from_le_bytes(bytes[184..188].try_into().unwrap()),
+            1.02
+        );
+        assert_eq!(
+            f32::from_le_bytes(bytes[188..192].try_into().unwrap()),
+            0.58
+        );
         assert_eq!(f32::from_le_bytes(bytes[192..196].try_into().unwrap()), 0.7);
-        assert_eq!(f32::from_le_bytes(bytes[196..200].try_into().unwrap()), -0.3);
+        assert_eq!(
+            f32::from_le_bytes(bytes[196..200].try_into().unwrap()),
+            -0.3
+        );
         assert_eq!(f32::from_le_bytes(bytes[200..204].try_into().unwrap()), 0.0);
         assert_eq!(f32::from_le_bytes(bytes[204..208].try_into().unwrap()), 1.0);
         assert_eq!(f32::from_le_bytes(bytes[208..212].try_into().unwrap()), 0.8);
-        assert_eq!(f32::from_le_bytes(bytes[212..216].try_into().unwrap()), -0.4);
+        assert_eq!(
+            f32::from_le_bytes(bytes[212..216].try_into().unwrap()),
+            -0.4
+        );
     }
 
     #[test]
@@ -5380,11 +5757,15 @@ mod tests {
         let mut header = test_header(0);
         header.sample0 = 0;
         header.time_count = 2;
-        let snapshot = build_waveform_from_packets(&[time_packet(header, 100, 0)], &config).unwrap();
+        let snapshot =
+            build_waveform_from_packets(&[time_packet(header, 100, 0)], &config).unwrap();
         assert_eq!(snapshot.channels.len(), 1);
         assert_eq!(snapshot.channels[0].x_us.len(), 8);
         assert_eq!(snapshot.channels[0].i.len(), 8);
-        assert!(snapshot.channels[0].i.iter().all(|value| (*value - 100.0).abs() < 1.0e-3));
+        assert!(snapshot.channels[0]
+            .i
+            .iter()
+            .all(|value| (*value - 100.0).abs() < 1.0e-3));
         assert_eq!(snapshot.channels[0].sample_rf.len(), 8);
         assert_eq!(snapshot.channels[0].rf.len(), 1024);
         assert_eq!(snapshot.channels[0].rf_x_us.len(), 1024);
@@ -5490,7 +5871,7 @@ mod tests {
     fn rf_scope_uses_measured_iq_sideband_for_lower_rf_tone() {
         let mut config = DisplayConfig::default();
         config.channel_mask = 0x0001;
-        config.bandwidth_mhz = 160;
+        config.sample_rate_msps = 160;
         config.display_points = 1024;
         config.time_window_us = 0.25;
         config.vertical_scale = 1.0;
@@ -5500,11 +5881,14 @@ mod tests {
 
         let amplitude = 1000.0;
         let raw_hz = 40_000_000.0;
-        let sample_rate_hz = BandwidthMode::Msps160.sample_rate_hz();
+        let sample_rate_hz = SampleRateMode::Msps160.sample_rate_hz();
         let mut samples = Vec::new();
         for n in 0..64 {
             let phase = 2.0 * std::f64::consts::PI * raw_hz * n as f64 / sample_rate_hz;
-            samples.push(((amplitude * phase.cos()).round() as i16, (amplitude * phase.sin()).round() as i16));
+            samples.push((
+                (amplitude * phase.cos()).round() as i16,
+                (amplitude * phase.sin()).round() as i16,
+            ));
         }
 
         let mut header = test_header(0);
@@ -5523,7 +5907,7 @@ mod tests {
     fn rf_scope_curve_shows_upper_rf_tone_cycles() {
         let mut config = DisplayConfig::default();
         config.channel_mask = 0x0001;
-        config.bandwidth_mhz = 160;
+        config.sample_rate_msps = 160;
         config.display_points = 1024;
         config.time_window_us = 0.25;
         config.vertical_scale = 1.0;
@@ -5533,11 +5917,14 @@ mod tests {
 
         let amplitude = 1000.0;
         let raw_hz = 40_000_000.0;
-        let sample_rate_hz = BandwidthMode::Msps160.sample_rate_hz();
+        let sample_rate_hz = SampleRateMode::Msps160.sample_rate_hz();
         let mut samples = Vec::new();
         for n in 0..64 {
             let phase = 2.0 * std::f64::consts::PI * raw_hz * n as f64 / sample_rate_hz;
-            samples.push(((amplitude * phase.cos()).round() as i16, (amplitude * phase.sin()).round() as i16));
+            samples.push((
+                (amplitude * phase.cos()).round() as i16,
+                (amplitude * phase.sin()).round() as i16,
+            ));
         }
 
         let mut header = test_header(0);
@@ -5568,7 +5955,8 @@ mod tests {
         for (mhz, cycles) in [(160.0, 40.0), (190.0, 47.5), (240.0, 60.0)] {
             config.expected_mhz = mhz;
             config.dac_mhz = mhz;
-            let snapshot = build_waveform_from_packets(std::slice::from_ref(&packet), &config).unwrap();
+            let snapshot =
+                build_waveform_from_packets(std::slice::from_ref(&packet), &config).unwrap();
             assert!((snapshot.rf_window_cycles - cycles).abs() < 1.0e-9);
             lens.push(snapshot.channels[0].rf.len());
         }
@@ -5600,9 +5988,9 @@ mod tests {
             nchan: block_count,
             block_index,
             block_count,
-            pfb_taps: 0,
+            pfb_taps: 4,
             fft_shift: 0,
-            spec_status_flags: SPEC_FFT_ONLY_FLAG,
+            spec_status_flags: 1 << 10,
             spec_sample_rate_hz: 100_000_000,
             scale_mode: 0,
             spec_half_band: false,
@@ -5677,12 +6065,16 @@ mod tests {
 
         let block1_header = spec_preview_header(7, 1, 2);
         assert!(capture.should_decode(&block1_header, interval));
-        assert!(capture.ingest(&spec_preview_block(7, 1, 2), interval).is_none());
+        assert!(capture
+            .ingest(&spec_preview_block(7, 1, 2), interval)
+            .is_none());
         assert_eq!(capture.status.coverage_blocks, 1);
 
         let block0_header = spec_preview_header(8, 0, 2);
         assert!(capture.should_decode(&block0_header, interval));
-        assert!(capture.ingest(&spec_preview_block(8, 0, 2), interval).is_none());
+        assert!(capture
+            .ingest(&spec_preview_block(8, 0, 2), interval)
+            .is_none());
         assert_eq!(capture.status.frame_id, Some(8));
         assert_eq!(capture.status.coverage_blocks, 1);
         assert!(!capture.status.complete);
@@ -5767,8 +6159,14 @@ mod tests {
         assert_eq!(le_u64(&bytes, 104), 0b101);
         assert_eq!(f32::from_le_bytes(bytes[128..132].try_into().unwrap()), 1.0);
         assert_eq!(f32::from_le_bytes(bytes[132..136].try_into().unwrap()), 2.0);
-        assert_eq!(f32::from_le_bytes(bytes[136..140].try_into().unwrap()), 0.25);
-        assert_eq!(f32::from_le_bytes(bytes[144..148].try_into().unwrap()), 10.0);
+        assert_eq!(
+            f32::from_le_bytes(bytes[136..140].try_into().unwrap()),
+            0.25
+        );
+        assert_eq!(
+            f32::from_le_bytes(bytes[144..148].try_into().unwrap()),
+            10.0
+        );
         assert_eq!(f32::from_le_bytes(bytes[152..156].try_into().unwrap()), 3.0);
     }
 }
@@ -5777,8 +6175,8 @@ fn main() -> std::io::Result<()> {
     let args = Args::parse();
     let stats = ReceiverStats::new(&args);
     let mut initial_config = DisplayConfig::default();
-    if BandwidthMode::from_mhz(args.initial_bandwidth_mhz).is_some() {
-        initial_config.bandwidth_mhz = args.initial_bandwidth_mhz;
+    if SampleRateMode::from_mhz(args.initial_sample_rate_msps).is_some() {
+        initial_config.sample_rate_msps = args.initial_sample_rate_msps;
     }
     initial_config.display_points = args.waveform_points_clamped();
     sanitize_config(&mut initial_config);
@@ -5809,13 +6207,12 @@ fn main() -> std::io::Result<()> {
         waveform_points: args.waveform_points,
         waveform_max_points: args.waveform_max_points,
         web: args.web.clone(),
-        initial_bandwidth_mhz: args.initial_bandwidth_mhz,
+        initial_sample_rate_msps: args.initial_sample_rate_msps,
         backend: args.backend.clone(),
         worker_count: args.worker_count,
         fanout_group: args.fanout_group,
         fanout_mode: args.fanout_mode,
         pin_workers: args.pin_workers,
-        spec_layout: args.spec_layout,
         ring_mb: args.ring_mb,
         block_mb: args.block_mb,
         block_count: args.block_count,
@@ -5840,4 +6237,4 @@ const ECHARTS_JS: &str = concat!(
     include_str!("../static/echarts.part2.js"),
     include_str!("../static/echarts.part3.js"),
 );
-const STAGE29_MATH_JS: &str = include_str!("../static/stage29_math.js");
+const T510_MATH_JS: &str = include_str!("../static/t510_math.js");

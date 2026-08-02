@@ -191,8 +191,7 @@ module tb_spec_udp_cmac512;
         .DATA_FIFO_DEPTH(512),
         .DATA_COUNT_W(10),
         .TOKEN_FIFO_DEPTH(64),
-        .TOKEN_COUNT_W(7),
-        .PRODUCTION_27H(1'b1)
+        .TOKEN_COUNT_W(7)
     ) dut (
         .s_clk(s_clk),
         .s_rst_n(s_rst_n),

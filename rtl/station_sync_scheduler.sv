@@ -28,7 +28,7 @@ module station_sync_scheduler #(
     input  wire        ref_locked,
     input  wire        rfdc_ready,
 
-    input  wire [1:0]  science_bandwidth_mode,
+    input  wire [1:0]  science_sample_rate_mode,
     input  wire        science_aa100_active,
 
     input  wire        adc_valid,
@@ -106,9 +106,9 @@ module station_sync_scheduler #(
     wire science_fire = science_valid && science_ready;
     wire first_sample0_reachable =
         (schedule_first_sample0 != 64'd0) &&
-        ((science_bandwidth_mode == 2'd0) ?
+        ((science_sample_rate_mode == 2'd0) ?
             (schedule_first_sample0[4:0] == 5'd0) :
-         (science_bandwidth_mode == 2'd1) ?
+         (science_sample_rate_mode == 2'd1) ?
             (science_aa100_active ?
                 (schedule_first_sample0[2:0] == 3'd4) :
                 (schedule_first_sample0[2:0] == 3'd0)) :

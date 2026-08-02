@@ -8,7 +8,7 @@ module tb_t510_cmac_pause;
     logic [63:0] tx_keep = '1;
     logic tx_valid = 1'b0;
     logic tx_last = 1'b0;
-    logic test_pass = 1'b0;
+    integer failures = 0;
     wire tx_ready;
 
     always #1.55 clk = ~clk;
@@ -59,24 +59,30 @@ module tb_t510_cmac_pause;
 
     task automatic check_true(input logic condition, input string message);
         if (!condition) begin
-            $error("FAIL: %s", message);
-            $fatal(1);
+            failures = failures + 1;
+            $display("CHECK FAILED: %s", message);
         end
     endtask
 
     initial begin
+        // XPM CDC models honor glbl.GSR for the first 100 ns.  Start the
+        // behavioral checks only after that initialization interval.
+        #120ns;
         repeat (4) @(posedge clk);
         reset_n <= 1'b1;
         repeat (3) @(posedge clk);
+        #1ps;
         check_true(tx_ready, "ready after reset");
 
         // An idle link must stop before accepting the first beat.
         force dut.rx_pause_req = 9'h100;
         repeat (4) @(posedge clk);
+        #1ps;
         check_true(!tx_ready, "global pause blocks an idle transmitter");
         check_true(!dut.tx_axis_tvalid_gated, "CMAC valid is gated while paused");
         release dut.rx_pause_req;
         repeat (4) @(posedge clk);
+        #1ps;
         check_true(tx_ready, "zero quanta/resume releases the transmitter");
 
         // Once a frame has started, pause must wait for TLAST and must not
@@ -95,16 +101,21 @@ module tb_t510_cmac_pause;
         check_true(tx_ready, "TLAST accepted before pause");
         tx_last <= 1'b0;
         @(posedge clk);
+        #1ps;
         check_true(!tx_ready, "pause takes effect at packet boundary");
         check_true(!dut.tx_axis_tvalid_gated, "next frame is held out of CMAC");
 
         release dut.rx_pause_req;
         repeat (4) @(posedge clk);
+        #1ps;
         check_true(tx_ready, "transmission resumes after pause timer expires");
 
         tx_valid <= 1'b0;
-        test_pass = 1'b1;
-        $display("PASS: tb_t510_cmac_pause");
+        if (failures == 0) begin
+            $display("PASS: tb_t510_cmac_pause");
+        end else begin
+            $display("CHECK FAILED: tb_t510_cmac_pause failures=%0d", failures);
+        end
         $finish;
     end
 endmodule

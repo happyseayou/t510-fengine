@@ -134,34 +134,14 @@ class SysfsGpio:
         return direction_path.read_text().strip()
 
 
-LMK04828_INIT_245P76 = (
-    0x000090, 0x000010, 0x000200, 0x000306, 0x0004D0, 0x00055B, 0x000600, 0x000C51,
-    0x000D04, 0x01000C, 0x010155, 0x010255, 0x010300, 0x010422, 0x010500, 0x0106F0,
-    0x010755, 0x01080C, 0x010955, 0x010A55, 0x010B00, 0x010C22, 0x010D00, 0x010EF0,
-    0x010F15, 0x01100C, 0x011155, 0x011255, 0x011300, 0x011402, 0x011500, 0x0116F0,
-    0x011755, 0x01180C, 0x011955, 0x011A55, 0x011B00, 0x011C02, 0x011D00, 0x011EF0,
-    0x011F15, 0x01200C, 0x012155, 0x012255, 0x012300, 0x012422, 0x012500, 0x0126F0,
-    0x012705, 0x01280C, 0x012955, 0x012A55, 0x012B00, 0x012C02, 0x012D00, 0x012EF0,
-    0x012F55, 0x01300C, 0x013155, 0x013255, 0x013300, 0x013402, 0x013500, 0x0136F0,
-    0x013755, 0x013825, 0x013902, 0x013A0C, 0x013B00, 0x013C00, 0x013D08, 0x013E03,
-    0x013F00, 0x014000, 0x014100, 0x014200, 0x014351, 0x0144FF, 0x01457F, 0x014638,
-    0x01470A, 0x014833, 0x014940, 0x014A0B, 0x014B16, 0x014C00, 0x014D00, 0x014EC0,
-    0x014F7F, 0x015003, 0x015102, 0x015200, 0x015300, 0x01547D, 0x015503, 0x015600,
-    0x015700, 0x01587D, 0x015906, 0x015A00, 0x015BD4, 0x015C20, 0x015D00, 0x015E00,
-    0x015F13, 0x016000, 0x016101, 0x016244, 0x016300, 0x016400, 0x01650C, 0x0171AA,
-    0x017202, 0x017C15, 0x017D33, 0x016600, 0x016700, 0x01680C, 0x016959, 0x016A20,
-    0x016B00, 0x016C00, 0x016D00, 0x016E3B, 0x017300, 0x018200, 0x018300, 0x018400,
-    0x018500, 0x018800, 0x018900, 0x018A00, 0x018B00, 0x1FFD00, 0x1FFE00, 0x1FFF53,
-)
-
-# TICS Pro export:
-# reports/arch/lmk04828_stage32_min_delta_160_10m_cont_manual_clkin2.tcs
+# TICS Pro export retained in reports/ as historical evidence.  The register
+# sequence below is the sole active 160 MHz / 10 MHz continuous-SYSREF profile.
 # SHA256 a9fac413bf18ff7bda1844284f72e59fde3e72dcfceed6144b59dcbda82f216e
 #
 # This table is intentionally kept in the exact TICS write order.  Do not
 # sort/deduplicate it: R0 is written twice and the high-page final writes are
 # part of the programming sequence.
-LMK04828_INIT_STAGE32_160 = (
+LMK04828_INIT_160M_10M_CONTINUOUS = (
     0x000090, 0x000010, 0x000200, 0x000306, 0x0004D0, 0x00055B, 0x000600, 0x000C51,
     0x000D04, 0x01000F, 0x010155, 0x010255, 0x010300, 0x010420, 0x010500, 0x0106F0,
     0x010755, 0x01080F, 0x010955, 0x010A55, 0x010B00, 0x010C20, 0x010D00, 0x010EF0,
@@ -203,8 +183,7 @@ class T510ClockController:
     LMK_REF_SELECT0 = 33
     LMK_REF_SELECT1 = 34
     LMK_SYNC = 78
-    PROFILE_ID_245P76 = "tcxo_10mhz_245p76_sysref_req"
-    PROFILE_ID_STAGE32_160 = "stage32_160_10m_cont_manual_clkin2"
+    PROFILE_ID_160M_10M_CONTINUOUS = "160m_10m_cont_manual_clkin2"
     SYSREF_REQUEST = "request"
     SYSREF_CONTINUOUS = "continuous"
     KEY_REGISTERS = (
@@ -396,20 +375,20 @@ class T510ClockController:
             status["pll2_lock"] = pll2
             status["reg6"] = int(registers.get("0x006", 0))
             status["configured"] = bool(pll1 and pll2)
-            stage32_signature = (
+            current_profile_signature = (
                 int(registers.get("0x118", -1)) == 0x0F
                 and int(registers.get("0x138", -1)) == 0x00
                 and int(registers.get("0x139", -1)) == 0x03
                 and int(registers.get("0x143", -1)) == 0x50
             )
-            if stage32_signature:
-                status["profile_id"] = self.PROFILE_ID_STAGE32_160
+            if current_profile_signature:
+                status["profile_id"] = self.PROFILE_ID_160M_10M_CONTINUOUS
                 status["sysref_mode"] = self.SYSREF_CONTINUOUS
                 status["lmk_clkin"] = "CLKin2 (manual)"
                 status["selected_ref"] = "external_10mhz"
             else:
-                status["profile_id"] = self.PROFILE_ID_245P76
-                status["sysref_mode"] = self.SYSREF_REQUEST
+                status["profile_id"] = "unknown"
+                status["sysref_mode"] = "unknown"
         except Exception as exc:
             status["errors"].append(f"lmk_register_read: {exc}")  # type: ignore[index]
         return status
@@ -477,98 +456,14 @@ class T510ClockController:
         result["configured"] = bool(result["pll1_lock"] and result["pll2_lock"])
         return result
 
-    def _configure_245p76_profile(
-        self,
-        *,
-        ref: str,
-        lmk_clkin: str,
-        ref_select0: int,
-        ref_select1: int,
-        poll_lock: bool = True,
-        max_attempts: int = 24,
-        register_delay_s: float = 0.005,
-    ) -> dict[str, int | bool | str]:
-        return self._configure_profile(
-            ref=ref,
-            lmk_clkin=lmk_clkin,
-            ref_select0=ref_select0,
-            ref_select1=ref_select1,
-            profile_id=f"{ref}_245p76_sysref_req",
-            init_values=LMK04828_INIT_245P76,
-            sysref_mode=self.SYSREF_REQUEST,
-            poll_lock=poll_lock,
-            max_attempts=max_attempts,
-            register_delay_s=register_delay_s,
-        )
-
-    def configure_tcxo_245p76(
+    def configure_external_10mhz_160m_continuous(
         self,
         *,
         poll_lock: bool = True,
         max_attempts: int = 24,
         register_delay_s: float = 0.005,
     ) -> dict[str, int | bool | str]:
-        # T510 clock schematic bring-up path used so far: SEL0/SEL1 = 0/0
-        # selects the onboard 10 MHz oscillator on CLKin0.
-        return self._configure_245p76_profile(
-            ref="tcxo_10mhz",
-            lmk_clkin="CLKin0",
-            ref_select0=0,
-            ref_select1=0,
-            poll_lock=poll_lock,
-            max_attempts=max_attempts,
-            register_delay_s=register_delay_s,
-        )
-
-    def configure_external_10mhz_245p76(
-        self,
-        *,
-        poll_lock: bool = True,
-        max_attempts: int = 16,
-        register_delay_s: float = 0.005,
-    ) -> dict[str, object]:
-        """Configure the LMK profile from the external 10 MHz reference input.
-
-        Board revisions in the lab have used different CLKin select wiring
-        during bring-up. Try the non-TCXO selector states and keep the first
-        full PLL lock, while returning every attempt for diagnostics.
-        """
-        attempts: list[dict[str, int | bool | str]] = []
-        selector_candidates = (
-            (1, 0, "CLKin1"),
-            (0, 1, "CLKin2"),
-            (1, 1, "holdover"),
-        )
-        best: dict[str, int | bool | str] | None = None
-        for ref_select0, ref_select1, lmk_clkin in selector_candidates:
-            result = self._configure_245p76_profile(
-                ref="external_10mhz",
-                lmk_clkin=lmk_clkin,
-                ref_select0=ref_select0,
-                ref_select1=ref_select1,
-                poll_lock=poll_lock,
-                max_attempts=max_attempts,
-                register_delay_s=register_delay_s,
-            )
-            attempts.append(result)
-            if result.get("configured"):
-                best = result
-                break
-            if best is None or int(result.get("pll1_lock", 0)) + int(result.get("pll2_lock", 0)) > int(best.get("pll1_lock", 0)) + int(best.get("pll2_lock", 0)):
-                best = result
-        selected = dict(best or {})
-        selected["attempts_detail"] = attempts
-        selected["configured"] = bool(selected.get("configured", False))
-        return selected
-
-    def configure_external_10mhz_stage32_160(
-        self,
-        *,
-        poll_lock: bool = True,
-        max_attempts: int = 24,
-        register_delay_s: float = 0.005,
-    ) -> dict[str, int | bool | str]:
-        """Program the Stage 32 manual-CLKin2, 160 MHz, continuous-SYSREF profile."""
+        """Program the manual-CLKin2, 160 MHz, continuous-SYSREF profile."""
         return self._configure_profile(
             ref="external_10mhz",
             lmk_clkin="CLKin2 (manual)",
@@ -576,8 +471,8 @@ class T510ClockController:
             # this TICS profile selects CLKin2 manually and ignores the pins.
             ref_select0=0,
             ref_select1=1,
-            profile_id=self.PROFILE_ID_STAGE32_160,
-            init_values=LMK04828_INIT_STAGE32_160,
+            profile_id=self.PROFILE_ID_160M_10M_CONTINUOUS,
+            init_values=LMK04828_INIT_160M_10M_CONTINUOUS,
             sysref_mode=self.SYSREF_CONTINUOUS,
             poll_lock=poll_lock,
             max_attempts=max_attempts,

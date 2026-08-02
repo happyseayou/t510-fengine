@@ -12,6 +12,18 @@
 
 ## 最新状态
 
+- 2026-08-03 Stage 33 已完成“只保留最新成果”的源码与仓库收敛：它仍是当前
+  `demo-ant.xpr` 对 Stage 32 数据面的原位升级，所有 `T510_STAGE*` 分支已删除，
+  `CORE_VERSION` 固定为 `0x00010033`。ADC/DAC合同为3.84 GS/s、12x和80 MHz
+  AXIS，复基带及`sample0`时基保持320 MS/s；API只保留v2，SPEC只接受当前
+  `16 x 256 x 1`、4-tap PFB格式。本轮84个Python测试、Board Agent 7个测试、
+  receiver 37个测试、Web math、RFDC artifact检查和18个XSim testbench均通过，
+  已完整提交`synth_1 -> impl_1 -> write_bitstream`长任务并按规则停止轮询。
+  旧build、rollback、板端原始证据和旧Vivado产物已删除；最终timing/DRC/SHA及
+  板端MTS/RF/满速/热稳仍待验收，不声明发布PASS。详见
+  `33_rfdc_adc_dac_3p84g_release.md`、
+  `../vivado/stage33/latest_only_build_submission_20260803.md`和
+  `../maintenance/stage33_latest_only_cleanup.md`。
 - 2026-08-02 Stage 32h3与32h正式`PASS`：DAC0在60/67/170/280 MHz的25%/100%
   及8路同时60 MHz、100%共9项频谱仪矩阵全部通过。最差成对镜像抑制
   72.66 dBc，最差最大已标记杂散-53.04 dBc，四组幅度增量12.02..12.12 dB，
@@ -149,6 +161,7 @@
 44. `30_board_agent_center_hub.md`
 45. `31_station_multiboard_sync_preparation.md`
 46. `32_stage32_master_plan.md`
+47. `33_rfdc_adc_dac_3p84g_release.md`
 
 ## 推荐接续入口
 

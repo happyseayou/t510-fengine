@@ -8,7 +8,7 @@ module science_rate_selector #(
     input  wire                                         clk,
     input  wire                                         rst_n,
     input  wire                                         clear,
-    input  wire [1:0]                                   bandwidth_mode,
+    input  wire [1:0]                                   sample_rate_mode,
     input  wire [NINPUT*SUBSAMPLES_PER_BEAT*SAMPLE_W-1:0] s_axis_tdata,
     input  wire [USER_W-1:0]                            s_axis_tuser,
     input  wire [SAMPLE0_W-1:0]                         s_axis_sample0,
@@ -34,13 +34,7 @@ module science_rate_selector #(
     localparam [1:0] BW_20MHZ  = 2'd0;
     localparam [1:0] BW_100MHZ = 2'd1;
     localparam [1:0] BW_200MHZ = 2'd2;
-`ifdef T510_STAGE32
     localparam bit AA100_ENABLED = 1'b1;
-`elsif T510_STAGE27I_ANTI_ALIAS
-    localparam bit AA100_ENABLED = 1'b1;
-`else
-    localparam bit AA100_ENABLED = 1'b0;
-`endif
 
     logic [DATA_W-1:0] pending_tdata;
     logic [USER_W-1:0] pending_tuser;
@@ -66,13 +60,13 @@ module science_rate_selector #(
     logic candidate_tlast;
     logic candidate_valid;
 
-    logic [31:0] legacy_output_beat_count;
-    logic [31:0] legacy_dropped_beat_count;
+    logic [31:0] direct_output_beat_count;
+    logic [31:0] direct_dropped_beat_count;
 
-    wire bw100_selected = (bandwidth_mode == BW_100MHZ);
+    wire bw100_selected = (sample_rate_mode == BW_100MHZ);
     wire bw100_aa_selected = bw100_selected && AA100_ENABLED;
-    wire legacy_s_axis_tready = !pending_valid || m_axis_tready;
-    wire legacy_input_fire = !bw100_aa_selected && s_axis_tvalid && legacy_s_axis_tready;
+    wire direct_s_axis_tready = !pending_valid || m_axis_tready;
+    wire direct_input_fire = !bw100_aa_selected && s_axis_tvalid && direct_s_axis_tready;
 
     wire aa_s_axis_tready;
     wire [DATA_W-1:0] aa_m_axis_tdata;
@@ -83,14 +77,14 @@ module science_rate_selector #(
     wire [31:0] aa_output_beat_count;
     wire [31:0] aa_dropped_beat_count;
 
-    assign s_axis_tready = bw100_aa_selected ? aa_s_axis_tready : legacy_s_axis_tready;
+    assign s_axis_tready = bw100_aa_selected ? aa_s_axis_tready : direct_s_axis_tready;
     assign m_axis_tdata = bw100_aa_selected ? aa_m_axis_tdata : pending_tdata;
     assign m_axis_tuser = bw100_aa_selected ? aa_m_axis_tuser : pending_tuser;
     assign m_axis_sample0 = bw100_aa_selected ? aa_m_axis_sample0 : pending_sample0;
     assign m_axis_tlast = bw100_aa_selected ? aa_m_axis_tlast : pending_tlast;
     assign m_axis_tvalid = bw100_aa_selected ? aa_m_axis_tvalid : pending_valid;
-    assign output_beat_count = bw100_aa_selected ? aa_output_beat_count : legacy_output_beat_count;
-    assign dropped_beat_count = bw100_aa_selected ? aa_dropped_beat_count : legacy_dropped_beat_count;
+    assign output_beat_count = bw100_aa_selected ? aa_output_beat_count : direct_output_beat_count;
+    assign dropped_beat_count = bw100_aa_selected ? aa_dropped_beat_count : direct_dropped_beat_count;
 
     science_decim2_halfband_aa #(
         .NINPUT(NINPUT),
@@ -138,8 +132,8 @@ module science_rate_selector #(
         candidate_tlast = s_axis_tlast;
         candidate_valid = 1'b0;
 
-        if (legacy_input_fire) begin
-            case (bandwidth_mode)
+        if (direct_input_fire) begin
+            case (sample_rate_mode)
                 BW_200MHZ: begin
                     candidate_tdata = s_axis_tdata;
                     candidate_valid = 1'b1;
@@ -201,8 +195,8 @@ module science_rate_selector #(
             decim8_tuser <= {USER_W{1'b0}};
             decim8_sample0 <= {SAMPLE0_W{1'b0}};
             decim8_tlast <= 1'b0;
-            legacy_output_beat_count <= 32'd0;
-            legacy_dropped_beat_count <= 32'd0;
+            direct_output_beat_count <= 32'd0;
+            direct_dropped_beat_count <= 32'd0;
         end else begin
             if (clear) begin
                 pending_valid <= 1'b0;
@@ -210,8 +204,8 @@ module science_rate_selector #(
                 decim8_phase <= 3'd0;
                 decim2_tlast <= 1'b0;
                 decim8_tlast <= 1'b0;
-                legacy_output_beat_count <= 32'd0;
-                legacy_dropped_beat_count <= 32'd0;
+                direct_output_beat_count <= 32'd0;
+                direct_dropped_beat_count <= 32'd0;
             end else if (bw100_aa_selected) begin
                 pending_valid <= 1'b0;
                 decim2_phase <= 1'b0;
@@ -222,8 +216,8 @@ module science_rate_selector #(
                 pending_valid <= 1'b0;
             end
 
-            if (!clear && legacy_input_fire) begin
-                case (bandwidth_mode)
+            if (!clear && direct_input_fire) begin
+                case (sample_rate_mode)
                     BW_100MHZ: begin
                         decim2_phase <= ~decim2_phase;
                         if (decim2_phase == 1'b0) begin
@@ -267,8 +261,8 @@ module science_rate_selector #(
                 endcase
             end
 
-            if (!clear && !bw100_selected && s_axis_tvalid && !legacy_s_axis_tready) begin
-                legacy_dropped_beat_count <= legacy_dropped_beat_count + 32'd1;
+            if (!clear && !bw100_selected && s_axis_tvalid && !direct_s_axis_tready) begin
+                direct_dropped_beat_count <= direct_dropped_beat_count + 32'd1;
             end
 
             if (!clear && !bw100_selected && candidate_valid) begin
@@ -277,7 +271,7 @@ module science_rate_selector #(
                 pending_sample0 <= candidate_sample0;
                 pending_tlast <= candidate_tlast;
                 pending_valid <= 1'b1;
-                legacy_output_beat_count <= legacy_output_beat_count + 32'd1;
+                direct_output_beat_count <= direct_output_beat_count + 32'd1;
             end
         end
     end

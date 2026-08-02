@@ -81,6 +81,20 @@ proc create_t510_rfdc_bd {} {
         return $freq
     }
 
+    proc _assert_bd_property {cell property expected} {
+        set actual [get_property -quiet $property $cell]
+        if {$actual eq ""} {
+            error "Stage 33 RFDC invariant missing property $property on $cell"
+        }
+        if {[string is double -strict $actual] && [string is double -strict $expected]} {
+            if {[expr {abs(double($actual) - double($expected))}] > 1.0e-6} {
+                error "Stage 33 RFDC invariant failed: $property expected $expected, read $actual"
+            }
+        } elseif {![string equal -nocase $actual $expected]} {
+            error "Stage 33 RFDC invariant failed: $property expected $expected, read $actual"
+        }
+    }
+
     set ps [create_bd_cell -type ip -vlnv xilinx.com:ip:zynq_ultra_ps_e:3.4 zynq_ultra_ps_e_0]
     apply_bd_automation -rule xilinx.com:bd_rule:zynq_ultra_ps_e -config {apply_board_preset "0"} $ps
     set_property -dict [list \
@@ -124,24 +138,24 @@ proc create_t510_rfdc_bd {} {
     set_property CONFIG.FREQ_HZ 160000000 [get_bd_pins pl_mts_sync_clk_0/pl_clk]
 
     set rfdc [create_bd_cell -type ip -vlnv xilinx.com:ip:usp_rf_data_converter:2.6 usp_rf_data_converter_0]
-    # DAC_Data_Type describes the analog converter output: Stage 32 uses a
+    # DAC_Data_Type describes the analog converter output: Stage 33 uses a
     # real RF output.  The fine mixer mode below is I/Q->Real, so the PL side
     # remains four interleaved complex samples (I0,Q0,...,I3,Q3) per beat.
     set_property -dict [list \
         CONFIG.ADC0_Clock_Source {1} \
         CONFIG.ADC0_Multi_Tile_Sync {true} \
-        CONFIG.ADC0_Sampling_Rate {1.6000} \
+        CONFIG.ADC0_Sampling_Rate {3.8400} \
         CONFIG.ADC1_Clock_Dist {2} \
         CONFIG.ADC1_Multi_Tile_Sync {true} \
         CONFIG.ADC1_PLL_Enable {true} \
         CONFIG.ADC1_Refclk_Freq {160.000} \
-        CONFIG.ADC1_Sampling_Rate {1.6000} \
+        CONFIG.ADC1_Sampling_Rate {3.8400} \
         CONFIG.ADC2_Clock_Source {1} \
         CONFIG.ADC2_Multi_Tile_Sync {true} \
-        CONFIG.ADC2_Sampling_Rate {1.6000} \
+        CONFIG.ADC2_Sampling_Rate {3.8400} \
         CONFIG.ADC3_Clock_Source {1} \
         CONFIG.ADC3_Multi_Tile_Sync {true} \
-        CONFIG.ADC3_Sampling_Rate {1.6000} \
+        CONFIG.ADC3_Sampling_Rate {3.8400} \
         CONFIG.ADC_Data_Type00 {1} \
         CONFIG.ADC_Data_Type02 {1} \
         CONFIG.ADC_Data_Type10 {1} \
@@ -158,14 +172,22 @@ proc create_t510_rfdc_bd {} {
         CONFIG.ADC_Data_Width22 {4} \
         CONFIG.ADC_Data_Width30 {4} \
         CONFIG.ADC_Data_Width32 {4} \
-        CONFIG.ADC_Decimation_Mode00 {5} \
-        CONFIG.ADC_Decimation_Mode02 {5} \
-        CONFIG.ADC_Decimation_Mode10 {5} \
-        CONFIG.ADC_Decimation_Mode12 {5} \
-        CONFIG.ADC_Decimation_Mode20 {5} \
-        CONFIG.ADC_Decimation_Mode22 {5} \
-        CONFIG.ADC_Decimation_Mode30 {5} \
-        CONFIG.ADC_Decimation_Mode32 {5} \
+        CONFIG.ADC_Decimation_Mode00 {12} \
+        CONFIG.ADC_Decimation_Mode02 {12} \
+        CONFIG.ADC_Decimation_Mode10 {12} \
+        CONFIG.ADC_Decimation_Mode12 {12} \
+        CONFIG.ADC_Decimation_Mode20 {12} \
+        CONFIG.ADC_Decimation_Mode22 {12} \
+        CONFIG.ADC_Decimation_Mode30 {12} \
+        CONFIG.ADC_Decimation_Mode32 {12} \
+        CONFIG.ADC_Dither00 {true} \
+        CONFIG.ADC_Dither02 {true} \
+        CONFIG.ADC_Dither10 {true} \
+        CONFIG.ADC_Dither12 {true} \
+        CONFIG.ADC_Dither20 {true} \
+        CONFIG.ADC_Dither22 {true} \
+        CONFIG.ADC_Dither30 {true} \
+        CONFIG.ADC_Dither32 {true} \
         CONFIG.ADC_Mixer_Type00 {2} \
         CONFIG.ADC_Mixer_Type02 {2} \
         CONFIG.ADC_Mixer_Type10 {2} \
@@ -174,6 +196,14 @@ proc create_t510_rfdc_bd {} {
         CONFIG.ADC_Mixer_Type22 {2} \
         CONFIG.ADC_Mixer_Type30 {2} \
         CONFIG.ADC_Mixer_Type32 {2} \
+        CONFIG.ADC_Mixer_Mode00 {0} \
+        CONFIG.ADC_Mixer_Mode02 {0} \
+        CONFIG.ADC_Mixer_Mode10 {0} \
+        CONFIG.ADC_Mixer_Mode12 {0} \
+        CONFIG.ADC_Mixer_Mode20 {0} \
+        CONFIG.ADC_Mixer_Mode22 {0} \
+        CONFIG.ADC_Mixer_Mode30 {0} \
+        CONFIG.ADC_Mixer_Mode32 {0} \
         CONFIG.ADC_NCO_Freq00 {1.5} \
         CONFIG.ADC_NCO_Freq02 {1.5} \
         CONFIG.ADC_NCO_Freq10 {1.5} \
@@ -182,6 +212,7 @@ proc create_t510_rfdc_bd {} {
         CONFIG.ADC_NCO_Freq22 {1.5} \
         CONFIG.ADC_NCO_Freq30 {1.5} \
         CONFIG.ADC_NCO_Freq32 {1.5} \
+        CONFIG.ADC_Slice00_Enable {true} \
         CONFIG.ADC_Slice02_Enable {true} \
         CONFIG.ADC_Slice10_Enable {true} \
         CONFIG.ADC_Slice12_Enable {true} \
@@ -191,16 +222,16 @@ proc create_t510_rfdc_bd {} {
         CONFIG.ADC_Slice32_Enable {true} \
         CONFIG.DAC0_Clock_Source {6} \
         CONFIG.DAC0_Multi_Tile_Sync {true} \
-        CONFIG.DAC0_Sampling_Rate {1.6000} \
+        CONFIG.DAC0_Sampling_Rate {3.8400} \
         CONFIG.DAC1_Multi_Tile_Sync {true} \
-        CONFIG.DAC1_Sampling_Rate {1.6000} \
+        CONFIG.DAC1_Sampling_Rate {3.8400} \
         CONFIG.DAC2_Clock_Dist {2} \
         CONFIG.DAC2_Multi_Tile_Sync {true} \
         CONFIG.DAC2_PLL_Enable {true} \
         CONFIG.DAC2_Refclk_Freq {160.000} \
-        CONFIG.DAC2_Sampling_Rate {1.6000} \
+        CONFIG.DAC2_Sampling_Rate {3.8400} \
         CONFIG.DAC3_Multi_Tile_Sync {true} \
-        CONFIG.DAC3_Sampling_Rate {1.6000} \
+        CONFIG.DAC3_Sampling_Rate {3.8400} \
         CONFIG.DAC_Data_Type00 {0} \
         CONFIG.DAC_Data_Type02 {0} \
         CONFIG.DAC_Data_Type10 {0} \
@@ -217,14 +248,14 @@ proc create_t510_rfdc_bd {} {
         CONFIG.DAC_Data_Width22 {8} \
         CONFIG.DAC_Data_Width30 {8} \
         CONFIG.DAC_Data_Width32 {8} \
-        CONFIG.DAC_Interpolation_Mode00 {5} \
-        CONFIG.DAC_Interpolation_Mode02 {5} \
-        CONFIG.DAC_Interpolation_Mode10 {5} \
-        CONFIG.DAC_Interpolation_Mode12 {5} \
-        CONFIG.DAC_Interpolation_Mode20 {5} \
-        CONFIG.DAC_Interpolation_Mode22 {5} \
-        CONFIG.DAC_Interpolation_Mode30 {5} \
-        CONFIG.DAC_Interpolation_Mode32 {5} \
+        CONFIG.DAC_Interpolation_Mode00 {12} \
+        CONFIG.DAC_Interpolation_Mode02 {12} \
+        CONFIG.DAC_Interpolation_Mode10 {12} \
+        CONFIG.DAC_Interpolation_Mode12 {12} \
+        CONFIG.DAC_Interpolation_Mode20 {12} \
+        CONFIG.DAC_Interpolation_Mode22 {12} \
+        CONFIG.DAC_Interpolation_Mode30 {12} \
+        CONFIG.DAC_Interpolation_Mode32 {12} \
         CONFIG.DAC_Mixer_Type00 {2} \
         CONFIG.DAC_Mixer_Type02 {2} \
         CONFIG.DAC_Mixer_Type10 {2} \
@@ -259,6 +290,53 @@ proc create_t510_rfdc_bd {} {
         CONFIG.DAC_Slice32_Enable {true} \
     ] $rfdc
 
+    foreach tile {0 1 2 3} {
+        _assert_bd_property $rfdc CONFIG.ADC${tile}_Sampling_Rate 3.84
+        _assert_bd_property $rfdc CONFIG.DAC${tile}_Sampling_Rate 3.84
+        _assert_bd_property $rfdc CONFIG.ADC${tile}_Fabric_Freq 80.0
+        _assert_bd_property $rfdc CONFIG.DAC${tile}_Fabric_Freq 80.0
+    }
+    _assert_bd_property $rfdc CONFIG.ADC1_Refclk_Freq 160.0
+    _assert_bd_property $rfdc CONFIG.DAC2_Refclk_Freq 160.0
+    # In RFDC 2.6 each of the eight user-selectable real ADC converters
+    # expands to two derived R2C digital paths.  Vivado therefore reads all
+    # 16 ADC Slice*_Enable properties as true and exposes 16 m*_axis ports,
+    # while xrfdc still presents eight physical ADC blocks.  Check every
+    # derived path so regenerated IP cannot silently change its inherited
+    # factor/dither/mixer settings.  DAC remains eight C2R converter paths.
+    foreach slice {00 01 02 03 10 11 12 13 20 21 22 23 30 31 32 33} {
+        _assert_bd_property $rfdc CONFIG.ADC_Slice${slice}_Enable true
+        _assert_bd_property $rfdc CONFIG.ADC_Data_Width${slice} 4
+        _assert_bd_property $rfdc CONFIG.ADC_Data_Type${slice} 1
+        _assert_bd_property $rfdc CONFIG.ADC_Mixer_Type${slice} 2
+        _assert_bd_property $rfdc CONFIG.ADC_Mixer_Mode${slice} 0
+        _assert_bd_property $rfdc CONFIG.ADC_Decimation_Mode${slice} 12
+        _assert_bd_property $rfdc CONFIG.ADC_Dither${slice} true
+    }
+    foreach slice {00 02 10 12 20 22 30 32} {
+        _assert_bd_property $rfdc CONFIG.DAC_Slice${slice}_Enable true
+        _assert_bd_property $rfdc CONFIG.DAC_Data_Width${slice} 8
+        _assert_bd_property $rfdc CONFIG.DAC_Data_Type${slice} 0
+        _assert_bd_property $rfdc CONFIG.DAC_Mixer_Type${slice} 2
+        _assert_bd_property $rfdc CONFIG.DAC_Mixer_Mode${slice} 0
+        _assert_bd_property $rfdc CONFIG.DAC_Interpolation_Mode${slice} 12
+    }
+    foreach {kind expected_count} {ADC 16 DAC 8} {
+        set enabled_count 0
+        foreach property [list_property $rfdc] {
+            if {[regexp "^CONFIG\\.${kind}_Slice[0-3][0-3]_Enable$" $property] &&
+                [string equal -nocase [get_property -quiet $property $rfdc] true]} {
+                incr enabled_count
+            }
+        }
+        if {$enabled_count != $expected_count} {
+            error "Stage 33 RFDC invariant failed: expected $expected_count enabled $kind digital paths, read $enabled_count"
+        }
+    }
+    _assert_bd_property $clk_wiz CONFIG.PRIM_IN_FREQ 160.0
+    _assert_bd_property $clk_wiz CONFIG.CLKOUT1_REQUESTED_OUT_FREQ 80.0
+    _assert_bd_property $clk_wiz CONFIG.CLKOUT2_REQUESTED_OUT_FREQ 80.0
+
     connect_bd_net [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
         [get_bd_pins zynq_ultra_ps_e_0/maxihpm0_lpd_aclk] \
         [get_bd_pins ps8_0_axi_periph/ACLK] \
@@ -291,7 +369,7 @@ proc create_t510_rfdc_bd {} {
     connect_bd_net [get_bd_ports pl_clk_n] [get_bd_pins pl_mts_sync_clk_0/pl_clk_n]
     connect_bd_net [get_bd_ports pl_sys_ref_p] [get_bd_pins pl_mts_sync_clk_0/pl_sys_ref_p]
     connect_bd_net [get_bd_ports pl_sys_ref_n] [get_bd_pins pl_mts_sync_clk_0/pl_sys_ref_n]
-    # Stage 32: RFDC ADC and DAC AXIS both run at 80 MHz.  The existing data
+    # Stage 33: RFDC ADC and DAC AXIS both run at 80 MHz.  The existing data
     # widths represent four complex samples per beat, so the RFDC/PL complex
     # rate is 320 MS/s while the 1024-bit ADC aggregate and 128-bit DAC ports
     # remain unchanged.
@@ -352,15 +430,26 @@ proc create_t510_rfdc_bd {} {
     } {
         _externalize_intf [get_bd_intf_pins usp_rf_data_converter_0/$intf] $intf
         if {$intf eq "adc1_clk" || $intf eq "dac2_clk"} {
-            # The enabled ADC/DAC clock-distribution roots both receive the
-            # Stage 32 160 MHz LMK reference.  Keep the external interface
-            # metadata aligned with the RFDC PLL configuration.
+            # Both enabled ADC/DAC clock-distribution roots use the stable
+            # 160 MHz LMK reference. Keep the external
+            # interface metadata aligned with the RFDC PLL configuration.
             set_property CONFIG.FREQ_HZ 160000000 [get_bd_intf_ports $intf]
         } elseif {[regexp {^m[0-9][0-9]_axis$} $intf]} {
             set_property CONFIG.FREQ_HZ $adc_axis_freq_hz [get_bd_intf_ports $intf]
         } elseif {[regexp {^s[0-9][0-9]_axis$} $intf]} {
             set_property CONFIG.FREQ_HZ $dac_axis_freq_hz [get_bd_intf_ports $intf]
         }
+    }
+    _assert_bd_property [get_bd_ports adc_m_axis_clk] CONFIG.FREQ_HZ 80000000
+    _assert_bd_property [get_bd_ports dac_s_axis_clk] CONFIG.FREQ_HZ 80000000
+    foreach intf {
+        m00_axis m01_axis m02_axis m03_axis m10_axis m11_axis m12_axis m13_axis
+        m20_axis m21_axis m22_axis m23_axis m30_axis m31_axis m32_axis m33_axis
+    } {
+        _assert_bd_property [get_bd_intf_ports $intf] CONFIG.FREQ_HZ 80000000
+    }
+    foreach intf {s00_axis s02_axis s10_axis s12_axis s20_axis s22_axis s30_axis s32_axis} {
+        _assert_bd_property [get_bd_intf_ports $intf] CONFIG.FREQ_HZ 80000000
     }
     assign_bd_address
     set core_seg [lindex [get_bd_addr_segs -quiet zynq_ultra_ps_e_0/Data/SEG_core_s_axi_Reg] 0]

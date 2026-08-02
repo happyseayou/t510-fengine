@@ -18,12 +18,12 @@
 </head>
 <body><main>
   <h1>T510 Board Agent API</h1>
-  <p class="muted">Stage 32 · Stage 31 sync-compatible Rust service · OpenAPI 3.1 · Agent version 0.3.2</p>
+  <p class="muted">Stage 33 · API v2 scheduled-sync Rust service · OpenAPI 3.1 · Agent version 0.3.2</p>
   <p class="warning"><strong>开发网络安全模式：</strong><code>security_mode=none</code>。服务不校验 token、allowlist 或 mTLS，不启用 CORS。请仅放在受控实验室局域网中。</p>
 
   <section>
     <h2>职责边界</h2>
-    <p>Agent 只做配置和控制，并在请求时读取一次累计寄存器快照。它不抓取波形/频谱，不做 FFT、WebSocket 或 packet capture，也不计算 packet rate/drop rate（does not calculate packet rates）。独立的 Stage 32 reference watchdog 只轮询 LMK PLL1/PLL2 锁定状态并在物理参考失锁时执行安全 STOP；它不计算数据率或保存波形。Center Hub 应保存相邻 <code>GET /api/v1/status</code> 快照并计算速率。</p>
+    <p>Agent 只做配置和控制，并在请求时读取一次累计寄存器快照。它不抓取波形/频谱，不做 FFT、WebSocket 或 packet capture，也不计算 packet rate/drop rate（does not calculate packet rates）。独立的 Stage 33 reference watchdog 只轮询 LMK PLL1/PLL2 锁定状态并在物理参考失锁时执行安全 STOP；它不计算数据率或保存波形。Center Hub 应保存相邻 <code>GET /api/v2/status</code> 快照并计算速率。</p>
     <p>每个硬件请求同步启动一次固定 Python helper。Agent 同一时刻只接受一个自身发起的硬件请求；冲突返回 <code>409 HARDWARE_BUSY</code>。Agent 不管理 Jupyter，也不能阻止 notebook 同时写硬件。</p>
   </section>
 
@@ -35,25 +35,25 @@
       <tr><td><span class="method get">GET</span></td><td><a href="/api/openapi.json"><code>/api/openapi.json</code></a></td><td>OpenAPI 3.1 JSON。</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/health/live</code></td><td>Rust 进程存活，不访问 FPGA。</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/health/ready</code></td><td>检查本地配置、helper、Python 和 catalog 文件，不访问 FPGA。</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/info</code></td><td>device UID、hostname、machine-id、管理 MAC/IP、内存、版本和安全模式。</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/capabilities</code></td><td>明确支持和不支持的能力。</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/bitstreams</code></td><td>可用的命名 bitstream ID、SHA、core version 和 profile；不公开任意路径入口。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/info</code></td><td>device UID、hostname、machine-id、管理 MAC/IP、内存、版本和安全模式。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/capabilities</code></td><td>明确支持和不支持的能力。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/bitstreams</code></td><td>可用的命名 bitstream ID、SHA、core version 和 profile；不公开任意路径入口。</td></tr>
     </tbody></table>
   </section>
 
   <section>
     <h2>硬件接口</h2>
     <table><thead><tr><th>方法</th><th>路径</th><th>行为</th></tr></thead><tbody>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/status</code></td><td>一次性读取 core、board ID、streaming、LMK profile/SYSREF、reference watchdog、ADC/DAC MTS target 与实测 latency、half-band coefficient ID、PPS/QSFP、数据通路健康和累计 counters。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/configure</code></td><td>加载 catalog bitstream，配置 profile/source/24 endpoints/board ID；完成后保持停流。重复调用会真实重配。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/start</code></td><td>校验 <code>expected_board_id</code> 后立即启动。</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/sync/status</code></td><td>读取 Stage 31 prepare/arm/commit、generation、sample0 和错误状态。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/sync/prepare</code></td><td>写入并冻结 generation、目标 PPS、TAI epoch、first_sample0、观测/信号链标签及 MTS 结果 ID。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/sync/arm</code></td><td>仅在所有板 prepare 成功后 arm；板端再次检查时钟、RFDC、PPS 和提前量。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/sync/abort</code></td><td>撤销 generation，并清空数据侧与 CMAC 侧流水。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/stop</code></td><td>无条件安全停止，双时钟域完整清空，并验证 counters 稳定和流水可恢复；无需请求体。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v1/reset</code></td><td>校验 <code>expected_board_id</code>，先安全停止并完整清空，再 reset。</td></tr>
-      <tr><td><span class="method put">PUT</span></td><td><code>/api/v1/dac</code></td><td>校验 board ID，短暂 mute，原子更新完整八路 DAC，phase commit，恢复 enable mask 并回读。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/status</code></td><td>一次性读取 core、board ID、streaming、LMK profile/SYSREF、reference watchdog、ADC/DAC MTS target 与实测 latency、half-band coefficient ID、PPS/QSFP、数据通路健康和累计 counters。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/configure</code></td><td>加载 catalog bitstream，配置 profile/source/24 endpoints/board ID；完成后保持停流。重复调用会真实重配。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/start</code></td><td>校验 <code>expected_board_id</code> 后立即启动。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/sync/status</code></td><td>读取 scheduled-sync prepare/arm/commit、generation、sample0 和错误状态。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/sync/prepare</code></td><td>写入并冻结 generation、目标 PPS、TAI epoch、first_sample0、观测/信号链标签及 MTS 结果 ID。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/sync/arm</code></td><td>仅在所有板 prepare 成功后 arm；板端再次检查时钟、RFDC、PPS 和提前量。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/sync/abort</code></td><td>撤销 generation，并清空数据侧与 CMAC 侧流水。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/stop</code></td><td>无条件安全停止，双时钟域完整清空，并验证 counters 稳定和流水可恢复；无需请求体。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/reset</code></td><td>校验 <code>expected_board_id</code>，先安全停止并完整清空，再 reset。</td></tr>
+      <tr><td><span class="method put">PUT</span></td><td><code>/api/v2/dac</code></td><td>校验 board ID 与当前 RFDC DAC mixer 中心；中心不一致返回 409，绝不只改变 DDS 计算基准。随后短暂 mute，原子更新完整八路 DAC，phase commit，恢复 enable mask 并回读。</td></tr>
     </tbody></table>
   </section>
 
@@ -61,38 +61,38 @@
     <h2>快速检查</h2>
 <pre>curl -s http://192.168.100.117:8010/health/live | jq
 curl -s http://192.168.100.117:8010/health/ready | jq
-curl -s http://192.168.100.117:8010/api/v1/info | jq
-curl -s http://192.168.100.117:8010/api/v1/bitstreams | jq
-curl -s http://192.168.100.117:8010/api/v1/status | jq</pre>
+curl -s http://192.168.100.117:8010/api/v2/info | jq
+curl -s http://192.168.100.117:8010/api/v2/bitstreams | jq
+curl -s http://192.168.100.117:8010/api/v2/status | jq</pre>
   </section>
 
   <section>
     <h2>配置请求</h2>
-    <p><code>endpoints</code> 必须恰好 24 项，ID 0..23 各一次；0..7 为 <code>TIME</code>，8..23 为 <code>SPEC</code>。为兼容旧接口仍使用字段 <code>bandwidth_mhz</code>，但 Stage 32 中它表示复采样率档位：<code>160</code> 是“160 MS/s（约 128 MHz 可用科学带宽）”，<code>320</code> 是“320 MS/s（约 256 MHz 可用科学带宽）”。160 支持三种 mode；320 明确拒绝 <code>time_spec</code>。</p>
-<pre>curl -sS -X POST http://192.168.100.117:8010/api/v1/configure \
+    <p><code>endpoints</code> 必须恰好 24 项，ID 0..23 各一次；0..7 为 <code>TIME</code>，8..23 为 <code>SPEC</code>。字段 <code>sample_rate_msps</code> 表示复采样率档位：<code>160</code> 是 160 MS/s，中心范围 80..1840 MHz；<code>320</code> 是 320 MS/s，中心范围 160..1760 MHz。160 支持三种 mode；320 明确拒绝 <code>time_spec</code>。ADC/DAC 模拟采样率为 3.84 GS/s，分别使用 12× 抽取/插值；UDP 数据格式保持不变。</p>
+<pre>curl -sS -X POST http://192.168.100.117:8010/api/v2/configure \
   -H 'Content-Type: application/json' \
-  --data @config/stage30/configure.example.json | jq</pre>
+  --data @config/stage33/configure_160_time_only.example.json | jq</pre>
     <p>启动、停止和 reset：</p>
-<pre>curl -sS -X POST http://192.168.100.117:8010/api/v1/start \
+<pre>curl -sS -X POST http://192.168.100.117:8010/api/v2/start \
   -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq
-curl -sS -X POST http://192.168.100.117:8010/api/v1/stop | jq
-curl -sS -X POST http://192.168.100.117:8010/api/v1/reset \
+curl -sS -X POST http://192.168.100.117:8010/api/v2/stop | jq
+curl -sS -X POST http://192.168.100.117:8010/api/v2/reset \
   -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq</pre>
-    <p>Stage 31 两阶段启动（Center Hub 应对所有板先 prepare，再统一 arm）：</p>
-<pre>curl -sS -X POST http://192.168.100.117:8010/api/v1/sync/prepare \
+    <p>Scheduled-sync 两阶段启动（Center Hub 应对所有板先 prepare，再统一 arm）：</p>
+<pre>curl -sS -X POST http://192.168.100.117:8010/api/v2/sync/prepare \
   -H 'Content-Type: application/json' \
   -d '{"expected_board_id":1,"generation":1,"target_pps_count":105,"epoch_tai_seconds":1784256000,"observation_tag":1,"signal_chain_tag":1,"schedule_tag":1,"mts_result_id":1}' | jq
-curl -sS -X POST http://192.168.100.117:8010/api/v1/sync/arm \
+curl -sS -X POST http://192.168.100.117:8010/api/v2/sync/arm \
   -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq
-curl -sS http://192.168.100.117:8010/api/v1/sync/status | jq</pre>
+curl -sS http://192.168.100.117:8010/api/v2/sync/status | jq</pre>
   </section>
 
   <section>
     <h2>DAC 请求</h2>
-<pre>curl -sS -X PUT http://192.168.100.117:8010/api/v1/dac \
+<pre>curl -sS -X PUT http://192.168.100.117:8010/api/v2/dac \
   -H 'Content-Type: application/json' \
-  --data @config/stage30/dac.example.json | jq</pre>
-    <p>请求必须包含 <code>expected_board_id</code>、<code>center_mhz</code> 和 channel 0..7 的完整八路 <code>enabled</code>、<code>rf_frequency_mhz</code>、<code>amplitude_percent</code>、<code>phase_deg</code>。</p>
+  --data @config/stage33/dac.example.json | jq</pre>
+    <p>请求必须包含 <code>expected_board_id</code>、与当前 RFDC mixer 完全一致的 <code>center_mhz</code>，以及 channel 0..7 的完整八路 <code>enabled</code>、<code>rf_frequency_mhz</code>、<code>amplitude_percent</code>、<code>phase_deg</code>。RF 频率须满足 1 ≤ f &lt; 1920 MHz，并位于当前中心 ±80 MHz（160 MS/s）或 ±160 MHz（320 MS/s）。</p>
   </section>
 
   <section>

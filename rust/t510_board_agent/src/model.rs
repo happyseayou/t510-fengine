@@ -2,6 +2,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
 
+const RF_FIRST_NYQUIST_MIN_MHZ: f64 = 1.0;
+const RF_FIRST_NYQUIST_MAX_MHZ: f64 = 1920.0;
+
+fn center_bounds_mhz(sample_rate_msps: u16) -> Option<(f64, f64)> {
+    match sample_rate_msps {
+        160 => Some((80.0, 1840.0)),
+        320 => Some((160.0, 1760.0)),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileMode {
@@ -13,7 +24,7 @@ pub enum ProfileMode {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
-    pub bandwidth_mhz: u16,
+    pub sample_rate_msps: u16,
     pub mode: ProfileMode,
     pub center_mhz: f64,
 }
@@ -136,7 +147,7 @@ fn validate_mac(value: &str, field: &str) -> Result<(), String> {
 impl ConfigureRequest {
     pub fn validate(&self) -> Result<(), String> {
         let legal_profile = matches!(
-            (&self.profile.bandwidth_mhz, &self.profile.mode),
+            (&self.profile.sample_rate_msps, &self.profile.mode),
             (160, ProfileMode::TimeOnly)
                 | (160, ProfileMode::SpecOnly)
                 | (160, ProfileMode::TimeSpec)
@@ -145,14 +156,19 @@ impl ConfigureRequest {
         );
         if !legal_profile {
             return Err(
-                "Stage 32 profile supports 160MS/s time_only/spec_only/time_spec and 320MS/s time_only/spec_only"
+                "Stage 33 profile supports 160MS/s time_only/spec_only/time_spec and 320MS/s time_only/spec_only"
                     .into(),
             );
         }
+        let (center_min, center_max) = center_bounds_mhz(self.profile.sample_rate_msps)
+            .expect("legal profile bandwidth has center bounds");
         if !self.profile.center_mhz.is_finite()
-            || !(50.0..=350.0).contains(&self.profile.center_mhz)
+            || !(center_min..=center_max).contains(&self.profile.center_mhz)
         {
-            return Err("profile.center_mhz must be finite and within 50..350 MHz".into());
+            return Err(format!(
+                "profile.center_mhz must be finite and within {center_min:.0}..{center_max:.0} MHz for the {} MS/s profile",
+                self.profile.sample_rate_msps
+            ));
         }
         validate_ipv4(&self.source.ip, "source.ip")?;
         validate_mac(&self.source.mac, "source.mac")?;
@@ -221,8 +237,8 @@ impl ConfigureRequest {
 
 impl DacRequest {
     pub fn validate(&self) -> Result<(), String> {
-        if !self.center_mhz.is_finite() || !(50.0..=350.0).contains(&self.center_mhz) {
-            return Err("center_mhz must be finite and within 50..350 MHz".into());
+        if !self.center_mhz.is_finite() || !(80.0..=1840.0).contains(&self.center_mhz) {
+            return Err("center_mhz must be finite and within 80..1840 MHz; hardware enforces the active 160/320 MS/s profile and RFDC mixer readback".into());
         }
         if self.channels.len() != 8 {
             return Err("channels must contain exactly 8 entries".into());
@@ -233,10 +249,17 @@ impl DacRequest {
                 return Err("channel values must contain 0..7 exactly once".into());
             }
             if !channel.rf_frequency_mhz.is_finite()
-                || !(50.0..=350.0).contains(&channel.rf_frequency_mhz)
+                || channel.rf_frequency_mhz < RF_FIRST_NYQUIST_MIN_MHZ
+                || channel.rf_frequency_mhz >= RF_FIRST_NYQUIST_MAX_MHZ
             {
                 return Err(format!(
-                    "channel {} rf_frequency_mhz must be within 50..350 MHz",
+                    "channel {} rf_frequency_mhz must be within 1..1920 MHz (upper bound exclusive)",
+                    channel.channel
+                ));
+            }
+            if (channel.rf_frequency_mhz - self.center_mhz).abs() > 160.0 {
+                return Err(format!(
+                    "channel {} rf_frequency_mhz must be within center +/-160 MHz; hardware further enforces +/-80 MHz for the active 160 MS/s profile",
                     channel.channel
                 ));
             }

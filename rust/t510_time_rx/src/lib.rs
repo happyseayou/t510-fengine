@@ -9,30 +9,33 @@ pub const SPEC_UDP_PAYLOAD_BYTES: usize = HEADER_BYTES + SPEC_PAYLOAD_BYTES;
 pub const TIME_NINPUT: usize = 8;
 pub const TIME_SUBSAMPLES_PER_BEAT: usize = 4;
 pub const TIME_WORD64_PER_BEAT: usize = 16;
-// sample0 is always expressed on the Stage 32 RFDC complex-output timebase.
+// sample0 remains on the 320 MS/s RFDC complex-output timebase. It is not the
+// 3.84 GS/s analog-converter clock.
 pub const RAW_SAMPLE_RATE_HZ: f64 = 320_000_000.0;
+pub const RFDC_COMPLEX_SAMPLE_RATE_HZ: f64 = RAW_SAMPLE_RATE_HZ;
+pub const ADC_ANALOG_SAMPLE_RATE_HZ: f64 = 3_840_000_000.0;
+pub const DAC_ANALOG_SAMPLE_RATE_HZ: f64 = 3_840_000_000.0;
+pub const DEFAULT_CENTER_MHZ: f64 = 200.0;
+pub const DEFAULT_TARGET_MHZ: f64 = 200.010;
 pub const STREAM_SPEC: u16 = 0;
 pub const STREAM_TIME: u16 = 1;
 pub const PAYLOAD_FORMAT_INT16_IQ: u16 = 0;
 pub const PRODUCT_FENGINE_IQ16: u16 = 0xf101;
-pub const SPEC_NCHAN_27F: u16 = 4096;
-pub const SPEC_BLOCK_COUNT_27F: u16 = 64;
-pub const SPEC_BLOCK_CHANS_27F: u16 = 64;
-pub const SPEC_TIME_COUNT_27F: u16 = 4;
-pub const SPEC_BLOCK_COUNT_27H: u16 = 16;
-pub const SPEC_BLOCK_CHANS_27H: u16 = 256;
-pub const SPEC_TIME_COUNT_27H: u16 = 1;
+pub const SPEC_NCHAN: u16 = 4096;
+pub const SPEC_BLOCK_COUNT: u16 = 16;
+pub const SPEC_BLOCK_CHANS: u16 = 256;
+pub const SPEC_TIME_COUNT: u16 = 1;
 pub const SPEC_FFT_ONLY_FLAG: u32 = 1 << 8;
 pub const SPEC_ANTI_ALIAS_100M_FLAG: u32 = 1 << 9;
 pub const SPEC_PFB_ACTIVE_FLAG: u32 = 1 << 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BandwidthMode {
+pub enum SampleRateMode {
     Msps160,
     Msps320,
 }
 
-impl BandwidthMode {
+impl SampleRateMode {
     pub fn from_mhz(value: u32) -> Option<Self> {
         match value {
             160 => Some(Self::Msps160),
@@ -62,7 +65,7 @@ impl BandwidthMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfig {
-    pub bandwidth_mhz: u32,
+    pub sample_rate_msps: u32,
     #[serde(default = "default_output_mode")]
     pub output_mode: String,
     pub center_mhz: f64,
@@ -82,12 +85,12 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            bandwidth_mhz: 160,
+            sample_rate_msps: 160,
             output_mode: "time_spec".to_string(),
-            center_mhz: 100.0,
-            expected_mhz: 60.010,
-            dac_mhz: 60.010,
-            target_mhz_by_channel: [60.010; TIME_NINPUT],
+            center_mhz: DEFAULT_CENTER_MHZ,
+            expected_mhz: DEFAULT_TARGET_MHZ,
+            dac_mhz: DEFAULT_TARGET_MHZ,
+            target_mhz_by_channel: [DEFAULT_TARGET_MHZ; TIME_NINPUT],
             waveform_view_mode: "dual".to_string(),
             phase_deg_by_channel: [0.0; TIME_NINPUT],
             channel_mask: 0x00ff,
@@ -100,8 +103,8 @@ impl Default for DisplayConfig {
 }
 
 impl DisplayConfig {
-    pub fn bandwidth_mode(&self) -> BandwidthMode {
-        BandwidthMode::from_mhz(self.bandwidth_mhz).unwrap_or(BandwidthMode::Msps160)
+    pub fn sample_rate_mode(&self) -> SampleRateMode {
+        SampleRateMode::from_mhz(self.sample_rate_msps).unwrap_or(SampleRateMode::Msps160)
     }
 
     pub fn needs_time(&self) -> bool {
@@ -114,11 +117,11 @@ impl DisplayConfig {
 
     pub fn target_hz(&self, channel: usize) -> f64 {
         let target = self.target_mhz_by_channel[channel.min(TIME_NINPUT - 1)];
-        let legacy_only = self
+        let default_only = self
             .target_mhz_by_channel
             .iter()
-            .all(|value| (*value - 60.010).abs() < 1.0e-12);
-        if legacy_only && (self.expected_mhz - 60.010).abs() >= 1.0e-12 {
+            .all(|value| (*value - DEFAULT_TARGET_MHZ).abs() < 1.0e-12);
+        if default_only && (self.expected_mhz - DEFAULT_TARGET_MHZ).abs() >= 1.0e-12 {
             return expected_signal_hz(self);
         }
         if target.is_finite() && target > 0.0 {
@@ -134,7 +137,7 @@ fn default_output_mode() -> String {
 }
 
 fn default_target_mhz_by_channel() -> [f64; TIME_NINPUT] {
-    [60.010; TIME_NINPUT]
+    [DEFAULT_TARGET_MHZ; TIME_NINPUT]
 }
 
 fn waveform_carrier_hz(config: &DisplayConfig) -> f64 {
@@ -216,7 +219,7 @@ pub enum FastPacketError {
     UnsupportedPayloadFormat,
     UnexpectedPayloadBytes,
     UnsupportedProduct,
-    UnexpectedSpecLayout,
+    UnexpectedSpecFormat,
     TruncatedPayload,
     TruncatedTimePayload,
     TruncatedSpecPayload,
@@ -250,8 +253,8 @@ pub struct WaveformSnapshot {
     pub sample0: u64,
     pub seq_no: u32,
     pub frame_id: u64,
-    pub selected_bandwidth_mhz: u32,
-    pub detected_bandwidth_mhz: Option<u32>,
+    pub selected_sample_rate_msps: u32,
+    pub detected_sample_rate_msps: Option<u32>,
     pub decimation: u64,
     pub sample_rate_hz: f64,
     pub requested_window_us: f64,
@@ -367,7 +370,10 @@ pub fn parse_t510_header(udp_payload: &[u8]) -> Result<T510Header, String> {
         return Err(format!("bad T510 magic 0x{:08x}", header.magic));
     }
     if header.version != 2 && header.version != 3 {
-        return Err(format!("unsupported T510 header version {}", header.version));
+        return Err(format!(
+            "unsupported T510 header version {}",
+            header.version
+        ));
     }
     if header.header_bytes as usize != HEADER_BYTES {
         return Err(format!("unexpected header_bytes {}", header.header_bytes));
@@ -375,7 +381,10 @@ pub fn parse_t510_header(udp_payload: &[u8]) -> Result<T510Header, String> {
     Ok(header)
 }
 
-pub fn validate_common_payload_bounds(header: &T510Header, udp_payload_len: usize) -> Result<(), String> {
+pub fn validate_common_payload_bounds(
+    header: &T510Header,
+    udp_payload_len: usize,
+) -> Result<(), String> {
     if udp_payload_len < HEADER_BYTES + header.payload_bytes as usize {
         return Err(format!(
             "truncated T510 payload: available {}, needed {}",
@@ -388,10 +397,16 @@ pub fn validate_common_payload_bounds(header: &T510Header, udp_payload_len: usiz
 
 pub fn validate_time_header(header: &T510Header, udp_payload_len: usize) -> Result<(), String> {
     if header.stream_type != STREAM_TIME {
-        return Err(format!("not a TIME stream: stream_type={}", header.stream_type));
+        return Err(format!(
+            "not a TIME stream: stream_type={}",
+            header.stream_type
+        ));
     }
     if header.ninput as usize != TIME_NINPUT {
-        return Err(format!("unsupported ninput {}; expected {}", header.ninput, TIME_NINPUT));
+        return Err(format!(
+            "unsupported ninput {}; expected {}",
+            header.ninput, TIME_NINPUT
+        ));
     }
     if header.payload_format != PAYLOAD_FORMAT_INT16_IQ {
         return Err(format!(
@@ -415,38 +430,38 @@ pub fn validate_time_header(header: &T510Header, udp_payload_len: usize) -> Resu
     Ok(())
 }
 
-pub fn is_supported_spec_layout(header: &T510Header) -> bool {
-    if header.nchan != SPEC_NCHAN_27F || header.block_index >= header.block_count {
+pub fn is_current_spec_format(header: &T510Header) -> bool {
+    if header.nchan != SPEC_NCHAN || header.block_index >= header.block_count {
         return false;
     }
     if header.chan0 != u32::from(header.block_index) * u32::from(header.chan_count) {
         return false;
     }
-    let payload_bytes = header.chan_count as usize * header.time_count as usize * header.ninput as usize * 4;
+    let payload_bytes =
+        header.chan_count as usize * header.time_count as usize * header.ninput as usize * 4;
     if payload_bytes != SPEC_PAYLOAD_BYTES {
         return false;
     }
-    let stage27h = header.block_count == SPEC_BLOCK_COUNT_27H
-        && header.chan_count == SPEC_BLOCK_CHANS_27H
-        && header.time_count == SPEC_TIME_COUNT_27H
-        && header.pfb_taps == 0;
-    let stage27j = header.block_count == SPEC_BLOCK_COUNT_27H
-        && header.chan_count == SPEC_BLOCK_CHANS_27H
-        && header.time_count == SPEC_TIME_COUNT_27H
-        && header.pfb_taps >= 4;
-    let stage27g = header.block_count == SPEC_BLOCK_COUNT_27F
-        && header.chan_count == SPEC_BLOCK_CHANS_27F
-        && header.time_count == SPEC_TIME_COUNT_27F
-        && header.pfb_taps >= 4;
-    stage27h || stage27j || stage27g
+    header.block_count == SPEC_BLOCK_COUNT
+        && header.chan_count == SPEC_BLOCK_CHANS
+        && header.time_count == SPEC_TIME_COUNT
+        && header.pfb_taps >= 4
+        && (header.spec_status_flags & SPEC_FFT_ONLY_FLAG) == 0
+        && (header.spec_status_flags & SPEC_PFB_ACTIVE_FLAG) != 0
 }
 
 pub fn validate_spec_header(header: &T510Header, udp_payload_len: usize) -> Result<(), String> {
     if header.stream_type != STREAM_SPEC {
-        return Err(format!("not a SPEC stream: stream_type={}", header.stream_type));
+        return Err(format!(
+            "not a SPEC stream: stream_type={}",
+            header.stream_type
+        ));
     }
     if header.ninput as usize != TIME_NINPUT {
-        return Err(format!("unsupported ninput {}; expected {}", header.ninput, TIME_NINPUT));
+        return Err(format!(
+            "unsupported ninput {}; expected {}",
+            header.ninput, TIME_NINPUT
+        ));
     }
     if header.payload_format != PAYLOAD_FORMAT_INT16_IQ {
         return Err(format!(
@@ -466,7 +481,7 @@ pub fn validate_spec_header(header: &T510Header, udp_payload_len: usize) -> Resu
             header.product_id
         ));
     }
-    if !is_supported_spec_layout(header) {
+    if !is_current_spec_format(header) {
         return Err(format!(
             "unexpected SPEC layout/product nchan={} block={}/{} chan0={} chan_count={} time_count={} taps={} flags=0x{:08x}",
             header.nchan,
@@ -479,7 +494,8 @@ pub fn validate_spec_header(header: &T510Header, udp_payload_len: usize) -> Resu
             header.spec_status_flags
         ));
     }
-    let expected = header.chan_count as usize * header.time_count as usize * header.ninput as usize * 4;
+    let expected =
+        header.chan_count as usize * header.time_count as usize * header.ninput as usize * 4;
     if expected != header.payload_bytes as usize {
         return Err(format!(
             "SPEC layout implies {} payload bytes, header says {}",
@@ -563,7 +579,10 @@ pub fn parse_t510_header_fast(udp_payload: &[u8]) -> Result<T510Header, FastPack
     Ok(header)
 }
 
-pub fn validate_time_header_fast(header: &T510Header, udp_payload_len: usize) -> Result<(), FastPacketError> {
+pub fn validate_time_header_fast(
+    header: &T510Header,
+    udp_payload_len: usize,
+) -> Result<(), FastPacketError> {
     if header.stream_type != STREAM_TIME {
         return Err(FastPacketError::NotTimeStream);
     }
@@ -582,7 +601,10 @@ pub fn validate_time_header_fast(header: &T510Header, udp_payload_len: usize) ->
     Ok(())
 }
 
-pub fn validate_spec_header_fast(header: &T510Header, udp_payload_len: usize) -> Result<(), FastPacketError> {
+pub fn validate_spec_header_fast(
+    header: &T510Header,
+    udp_payload_len: usize,
+) -> Result<(), FastPacketError> {
     if header.stream_type != STREAM_SPEC {
         return Err(FastPacketError::NotSpecStream);
     }
@@ -598,10 +620,11 @@ pub fn validate_spec_header_fast(header: &T510Header, udp_payload_len: usize) ->
     if header.product_id != PRODUCT_FENGINE_IQ16 {
         return Err(FastPacketError::UnsupportedProduct);
     }
-    if !is_supported_spec_layout(header) {
-        return Err(FastPacketError::UnexpectedSpecLayout);
+    if !is_current_spec_format(header) {
+        return Err(FastPacketError::UnexpectedSpecFormat);
     }
-    let expected = header.chan_count as usize * header.time_count as usize * header.ninput as usize * 4;
+    let expected =
+        header.chan_count as usize * header.time_count as usize * header.ninput as usize * 4;
     if expected != header.payload_bytes as usize {
         return Err(FastPacketError::UnexpectedPayloadBytes);
     }
@@ -617,7 +640,11 @@ pub fn parse_t510_time_header_fast(udp_payload: &[u8]) -> Result<T510Header, Fas
     Ok(header)
 }
 
-pub fn time_payload_complex_offset(beat: usize, sub_sample: usize, channel: usize) -> Result<usize, String> {
+pub fn time_payload_complex_offset(
+    beat: usize,
+    sub_sample: usize,
+    channel: usize,
+) -> Result<usize, String> {
     if sub_sample >= TIME_SUBSAMPLES_PER_BEAT {
         return Err("sub_sample must be in range 0..3".to_string());
     }
@@ -628,18 +655,21 @@ pub fn time_payload_complex_offset(beat: usize, sub_sample: usize, channel: usiz
     Ok(HEADER_BYTES + word64 * 8 + if channel % 2 == 0 { 0 } else { 4 })
 }
 
-pub fn expected_sample0_delta(header: &T510Header, bandwidth: BandwidthMode) -> u64 {
-    header.time_count as u64 * TIME_SUBSAMPLES_PER_BEAT as u64 * bandwidth.decimation()
+pub fn expected_sample0_delta(header: &T510Header, sample_rate: SampleRateMode) -> u64 {
+    header.time_count as u64 * TIME_SUBSAMPLES_PER_BEAT as u64 * sample_rate.decimation()
 }
 
-pub fn infer_bandwidth_from_sample0_delta(header: &T510Header, delta: u64) -> Option<BandwidthMode> {
+pub fn infer_sample_rate_from_sample0_delta(
+    header: &T510Header,
+    delta: u64,
+) -> Option<SampleRateMode> {
     let denom = header.time_count as u64 * TIME_SUBSAMPLES_PER_BEAT as u64;
     if denom == 0 || delta % denom != 0 {
         return None;
     }
     match delta / denom {
-        1 => Some(BandwidthMode::Msps320),
-        2 => Some(BandwidthMode::Msps160),
+        1 => Some(SampleRateMode::Msps320),
+        2 => Some(SampleRateMode::Msps160),
         _ => None,
     }
 }
@@ -647,7 +677,7 @@ pub fn infer_bandwidth_from_sample0_delta(header: &T510Header, delta: u64) -> Op
 pub fn decode_channel_samples(
     udp_payload: &[u8],
     header: &T510Header,
-    bandwidth: BandwidthMode,
+    sample_rate: SampleRateMode,
     channel: usize,
 ) -> Result<Vec<DecodedSample>, String> {
     validate_time_header(header, udp_payload.len())?;
@@ -662,7 +692,7 @@ pub fn decode_channel_samples(
             let q = i16::from_le_bytes([udp_payload[offset + 2], udp_payload[offset + 3]]);
             let logical_idx = beat * TIME_SUBSAMPLES_PER_BEAT + sub;
             out.push(DecodedSample {
-                sample_index: header.sample0 + logical_idx as u64 * bandwidth.decimation(),
+                sample_index: header.sample0 + logical_idx as u64 * sample_rate.decimation(),
                 i,
                 q,
             });
@@ -718,7 +748,8 @@ pub fn decode_spectrum_snapshot(
                     return Err("truncated payload while decoding SPEC".to_string());
                 }
                 let i = i16::from_le_bytes([udp_payload[offset], udp_payload[offset + 1]]) as f64;
-                let q = i16::from_le_bytes([udp_payload[offset + 2], udp_payload[offset + 3]]) as f64;
+                let q =
+                    i16::from_le_bytes([udp_payload[offset + 2], udp_payload[offset + 3]]) as f64;
                 sum_i += i;
                 sum_q += q;
                 sum_power += i * i + q * q;
@@ -773,7 +804,10 @@ pub fn decode_spectrum_snapshot(
     })
 }
 
-pub fn ethernet_ipv4_udp_payload<'a>(frame: &'a [u8], dst_port_filter: u16) -> Result<&'a [u8], String> {
+pub fn ethernet_ipv4_udp_payload<'a>(
+    frame: &'a [u8],
+    dst_port_filter: u16,
+) -> Result<&'a [u8], String> {
     if frame.len() < 42 {
         return Err("frame too short for Ethernet/IPv4/UDP".to_string());
     }
@@ -804,7 +838,10 @@ pub fn ethernet_ipv4_udp_payload<'a>(frame: &'a [u8], dst_port_filter: u16) -> R
     Ok(&frame[udp + 8..udp + udp_len])
 }
 
-pub fn ethernet_ipv4_udp_payload_fast(frame: &[u8], dst_port_filter: u16) -> Result<&[u8], FastPacketError> {
+pub fn ethernet_ipv4_udp_payload_fast(
+    frame: &[u8],
+    dst_port_filter: u16,
+) -> Result<&[u8], FastPacketError> {
     ethernet_ipv4_udp_payload_range_fast(frame, dst_port_filter, 1).map(|view| view.payload)
 }
 
@@ -854,12 +891,12 @@ pub fn build_waveform(
     udp_payload: &[u8],
     header: &T510Header,
     config: &DisplayConfig,
-    detected_bandwidth: Option<BandwidthMode>,
+    detected_sample_rate: Option<SampleRateMode>,
     gap_before: bool,
 ) -> Result<WaveformSnapshot, String> {
-    let selected_bandwidth = config.bandwidth_mode();
-    let waveform_bandwidth = detected_bandwidth.unwrap_or(selected_bandwidth);
-        let projection_hz = waveform_carrier_hz(config);
+    let selected_sample_rate = config.sample_rate_mode();
+    let waveform_sample_rate = detected_sample_rate.unwrap_or(selected_sample_rate);
+    let projection_hz = waveform_carrier_hz(config);
     let expected_hz = config.target_hz(0);
     let center_hz = config.center_mhz * 1_000_000.0;
     let expected_baseband_hz = expected_hz - center_hz;
@@ -869,7 +906,7 @@ pub fn build_waveform(
         if (config.channel_mask & (1u16 << channel)) == 0 {
             continue;
         }
-        let samples = decode_channel_samples(udp_payload, header, waveform_bandwidth, channel)?;
+        let samples = decode_channel_samples(udp_payload, header, waveform_sample_rate, channel)?;
         let stride = (samples.len().max(1) + display_points - 1) / display_points;
         let mut x_us = Vec::new();
         let mut i_values = Vec::new();
@@ -886,9 +923,12 @@ pub fn build_waveform(
             max_abs = max_abs.max(abs_i).max(abs_q);
             sum_sq += sample.i as f64 * sample.i as f64 + sample.q as f64 * sample.q as f64;
             if idx % stride == 0 {
-                let theta = 2.0 * std::f64::consts::PI * projection_hz * sample.sample_index as f64 / RAW_SAMPLE_RATE_HZ;
+                let theta = 2.0 * std::f64::consts::PI * projection_hz * sample.sample_index as f64
+                    / RAW_SAMPLE_RATE_HZ;
                 let rf = sample.i as f64 * theta.cos() - sample.q as f64 * theta.sin();
-                let t_us = (sample.sample_index.saturating_sub(header.sample0)) as f64 / RAW_SAMPLE_RATE_HZ * 1_000_000.0;
+                let t_us = (sample.sample_index.saturating_sub(header.sample0)) as f64
+                    / RAW_SAMPLE_RATE_HZ
+                    * 1_000_000.0;
                 let scale = config.vertical_scale.max(1.0);
                 x_us.push(t_us as f32);
                 i_values.push((sample.i as f64 / scale) as f32);
@@ -923,10 +963,10 @@ pub fn build_waveform(
         sample0: header.sample0,
         seq_no: header.seq_no,
         frame_id: header.frame_id,
-        selected_bandwidth_mhz: selected_bandwidth.mhz(),
-        detected_bandwidth_mhz: detected_bandwidth.map(|mode| mode.mhz()),
-        decimation: waveform_bandwidth.decimation(),
-        sample_rate_hz: waveform_bandwidth.sample_rate_hz(),
+        selected_sample_rate_msps: selected_sample_rate.mhz(),
+        detected_sample_rate_msps: detected_sample_rate.map(|mode| mode.mhz()),
+        decimation: waveform_sample_rate.decimation(),
+        sample_rate_hz: waveform_sample_rate.sample_rate_hz(),
         requested_window_us: config.time_window_us.max(0.0),
         captured_window_us: channels
             .first()
@@ -937,8 +977,11 @@ pub fn build_waveform(
         expected_mhz: expected_hz / 1_000_000.0,
         dac_mhz: config.dac_mhz,
         expected_baseband_mhz: expected_baseband_hz / 1_000_000.0,
-        rf_samples_per_cycle: samples_per_cycle(waveform_bandwidth.sample_rate_hz(), expected_hz),
-        baseband_samples_per_cycle: samples_per_cycle(waveform_bandwidth.sample_rate_hz(), expected_baseband_hz),
+        rf_samples_per_cycle: samples_per_cycle(waveform_sample_rate.sample_rate_hz(), expected_hz),
+        baseband_samples_per_cycle: samples_per_cycle(
+            waveform_sample_rate.sample_rate_hz(),
+            expected_baseband_hz,
+        ),
         rf_window_cycles: expected_hz.abs() * config.time_window_us.max(0.0) * 1.0e-6,
         gap_before,
         channels,
@@ -955,8 +998,14 @@ mod tests {
 
     fn synthetic_payload(time_count: u16, seq: u32, sample0: u64) -> Vec<u8> {
         let mut out = Vec::new();
-        push_word(&mut out, ((MAGIC as u64) << 32) | (2u64 << 16) | HEADER_BYTES as u64);
-        push_word(&mut out, (37u64 << 48) | (1u64 << 32) | (1u64 << 16) | 0x0006);
+        push_word(
+            &mut out,
+            ((MAGIC as u64) << 32) | (2u64 << 16) | HEADER_BYTES as u64,
+        );
+        push_word(
+            &mut out,
+            (37u64 << 48) | (1u64 << 32) | (1u64 << 16) | 0x0006,
+        );
         push_word(&mut out, 0);
         push_word(&mut out, 7);
         push_word(&mut out, sample0);
@@ -964,7 +1013,9 @@ mod tests {
         push_word(&mut out, ((seq as u64) << 32) | 0x0055);
         push_word(
             &mut out,
-            ((time_count as u64) << 32) | ((TIME_NINPUT as u64) << 16) | PAYLOAD_FORMAT_INT16_IQ as u64,
+            ((time_count as u64) << 32)
+                | ((TIME_NINPUT as u64) << 16)
+                | PAYLOAD_FORMAT_INT16_IQ as u64,
         );
         push_word(&mut out, TIME_PAYLOAD_BYTES as u64);
         for _ in 9..15 {
@@ -1025,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_stage31_v3_sync_identity() {
+    fn parses_scheduled_sync_v3_sync_identity() {
         let mut payload = synthetic_payload(64, 12, 1000);
         let word0 = ((MAGIC as u64) << 32) | (3u64 << 16) | HEADER_BYTES as u64;
         payload[0..8].copy_from_slice(&word0.to_le_bytes());
@@ -1047,37 +1098,76 @@ mod tests {
     fn decodes_payload_byte_offsets() {
         let payload = synthetic_payload(64, 12, 1000);
         let header = parse_t510_header(&payload).unwrap();
-        let ch3 = decode_channel_samples(&payload, &header, BandwidthMode::Msps160, 3).unwrap();
+        let ch3 = decode_channel_samples(&payload, &header, SampleRateMode::Msps160, 3).unwrap();
         assert_eq!(ch3.len(), 256);
-        assert_eq!(ch3[0], DecodedSample { sample_index: 1000, i: 3, q: -3 });
-        assert_eq!(ch3[1], DecodedSample { sample_index: 1002, i: 13, q: -13 });
-        assert_eq!(ch3[4], DecodedSample { sample_index: 1008, i: 103, q: -103 });
+        assert_eq!(
+            ch3[0],
+            DecodedSample {
+                sample_index: 1000,
+                i: 3,
+                q: -3
+            }
+        );
+        assert_eq!(
+            ch3[1],
+            DecodedSample {
+                sample_index: 1002,
+                i: 13,
+                q: -13
+            }
+        );
+        assert_eq!(
+            ch3[4],
+            DecodedSample {
+                sample_index: 1008,
+                i: 103,
+                q: -103
+            }
+        );
     }
 
     #[test]
-    fn detects_bandwidth_from_sample_delta() {
+    fn detects_sample_rate_from_sample_delta() {
         let payload = synthetic_payload(64, 12, 1000);
         let header = parse_t510_header(&payload).unwrap();
-        assert_eq!(expected_sample0_delta(&header, BandwidthMode::Msps320), 256);
-        assert_eq!(infer_bandwidth_from_sample0_delta(&header, 256), Some(BandwidthMode::Msps320));
-        assert_eq!(infer_bandwidth_from_sample0_delta(&header, 512), Some(BandwidthMode::Msps160));
-        assert_eq!(infer_bandwidth_from_sample0_delta(&header, 123), None);
+        assert_eq!(
+            expected_sample0_delta(&header, SampleRateMode::Msps320),
+            256
+        );
+        assert_eq!(
+            infer_sample_rate_from_sample0_delta(&header, 256),
+            Some(SampleRateMode::Msps320)
+        );
+        assert_eq!(
+            infer_sample_rate_from_sample0_delta(&header, 512),
+            Some(SampleRateMode::Msps160)
+        );
+        assert_eq!(infer_sample_rate_from_sample0_delta(&header, 123), None);
     }
 
     #[test]
-    fn detected_bandwidth_drives_preview_time_axis_when_available() {
+    fn detected_sample_rate_drives_preview_time_axis_when_available() {
         let payload = synthetic_payload(64, 12, 1000);
         let header = parse_t510_header(&payload).unwrap();
-        let ch0_320 = decode_channel_samples(&payload, &header, BandwidthMode::Msps320, 0).unwrap();
-        let ch0_160 = decode_channel_samples(&payload, &header, BandwidthMode::Msps160, 0).unwrap();
+        let ch0_320 =
+            decode_channel_samples(&payload, &header, SampleRateMode::Msps320, 0).unwrap();
+        let ch0_160 =
+            decode_channel_samples(&payload, &header, SampleRateMode::Msps160, 0).unwrap();
         assert_eq!(ch0_320[1].sample_index - ch0_320[0].sample_index, 1);
         assert_eq!(ch0_160[1].sample_index - ch0_160[0].sample_index, 2);
 
         let mut config = DisplayConfig::default();
-        config.bandwidth_mhz = 160;
-        let snapshot = build_waveform(&payload, &header, &config, Some(BandwidthMode::Msps320), true).unwrap();
-        assert_eq!(snapshot.selected_bandwidth_mhz, 160);
-        assert_eq!(snapshot.detected_bandwidth_mhz, Some(320));
+        config.sample_rate_msps = 160;
+        let snapshot = build_waveform(
+            &payload,
+            &header,
+            &config,
+            Some(SampleRateMode::Msps320),
+            true,
+        )
+        .unwrap();
+        assert_eq!(snapshot.selected_sample_rate_msps, 160);
+        assert_eq!(snapshot.detected_sample_rate_msps, Some(320));
         assert_eq!(snapshot.decimation, 1);
         assert!(snapshot.gap_before);
     }

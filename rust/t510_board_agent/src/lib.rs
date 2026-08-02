@@ -252,7 +252,7 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
                 "external_reference_watchdog": {
                     "enabled": true,
                     "source": "LMK04828_SPI_PLL1_PLL2",
-                    "state_path": "/run/t510-stage32-ref-watchdog.json",
+                    "state_path": "/run/t510-ref-watchdog.json",
                     "start_arm_fail_closed": true
                 },
                 "delay_schedule": false,
@@ -464,7 +464,7 @@ async fn configure(
             )
         })?;
     let profile_supported = resolved.public.profiles.iter().any(|profile| {
-        profile.bandwidth_mhz == request.profile.bandwidth_mhz
+        profile.sample_rate_msps == request.profile.sample_rate_msps
             && profile.modes.contains(&request.profile.mode)
     });
     if !profile_supported {
@@ -475,7 +475,7 @@ async fn configure(
             "the selected bitstream does not advertise the requested profile",
             Some(json!({
                 "bitstream_id": request.bitstream_id,
-                "bandwidth_mhz": request.profile.bandwidth_mhz,
+                "sample_rate_msps": request.profile.sample_rate_msps,
                 "mode": request.profile.mode
             })),
         ));
@@ -638,19 +638,19 @@ pub fn app(state: AppState) -> Router {
         .route("/api/openapi.json", get(openapi))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
-        .route("/api/v1/info", get(info))
-        .route("/api/v1/capabilities", get(capabilities))
-        .route("/api/v1/bitstreams", get(bitstreams))
-        .route("/api/v1/status", get(status))
-        .route("/api/v1/configure", post(configure))
-        .route("/api/v1/start", post(start))
-        .route("/api/v1/sync/status", get(sync_status))
-        .route("/api/v1/sync/prepare", post(sync_prepare))
-        .route("/api/v1/sync/arm", post(sync_arm))
-        .route("/api/v1/sync/abort", post(sync_abort))
-        .route("/api/v1/stop", post(stop))
-        .route("/api/v1/reset", post(reset))
-        .route("/api/v1/dac", put(dac))
+        .route("/api/v2/info", get(info))
+        .route("/api/v2/capabilities", get(capabilities))
+        .route("/api/v2/bitstreams", get(bitstreams))
+        .route("/api/v2/status", get(status))
+        .route("/api/v2/configure", post(configure))
+        .route("/api/v2/start", post(start))
+        .route("/api/v2/sync/status", get(sync_status))
+        .route("/api/v2/sync/prepare", post(sync_prepare))
+        .route("/api/v2/sync/arm", post(sync_arm))
+        .route("/api/v2/sync/abort", post(sync_abort))
+        .route("/api/v2/stop", post(stop))
+        .route("/api/v2/reset", post(reset))
+        .route("/api/v2/dac", put(dac))
         .fallback(fallback)
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .with_state(state)
@@ -702,9 +702,9 @@ mod tests {
             bitstream_id: "test".into(),
             board_id: 1,
             profile: Profile {
-                bandwidth_mhz: 160,
+                sample_rate_msps: 160,
                 mode,
-                center_mhz: 100.0,
+                center_mhz: 200.0,
             },
             source: SourceIdentity {
                 ip: "10.0.1.1".into(),
@@ -741,11 +741,30 @@ mod tests {
                     id: "test".into(),
                     path: bitstream,
                     sha256: sha,
-                    core_version: "0x00010032".into(),
+                    core_version: "0x00010033".into(),
                     mts_adc_target_latency: Some(240),
                     mts_dac_target_latency: Some(224),
+                    mts_campaign: Some(crate::config::MtsCampaignProof {
+                        discovery: crate::config::MtsCampaignCycles {
+                            rfdc_reset: 20,
+                            overlay_reload: 10,
+                            lmk_reload: 10,
+                            passed: 40,
+                        },
+                        fixed: crate::config::MtsCampaignCycles {
+                            rfdc_reset: 20,
+                            overlay_reload: 10,
+                            lmk_reload: 10,
+                            passed: 40,
+                        },
+                        observed_adc_max: 220,
+                        observed_dac_max: 208,
+                        adc_margin: 20,
+                        dac_margin: 16,
+                        evidence_sha256: "1".repeat(64),
+                    }),
                     profiles: vec![ProfileSpec {
-                        bandwidth_mhz: 160,
+                        sample_rate_msps: 160,
                         modes: vec![
                             ProfileMode::TimeOnly,
                             ProfileMode::SpecOnly,
@@ -770,9 +789,16 @@ mod tests {
             (320, ProfileMode::SpecOnly),
         ] {
             let mut request = configure_request(mode);
-            request.profile.bandwidth_mhz = bandwidth;
+            request.profile.sample_rate_msps = bandwidth;
             assert!(request.validate().is_ok());
         }
+        let mut invalid_320_center = configure_request(ProfileMode::TimeOnly);
+        invalid_320_center.profile.sample_rate_msps = 320;
+        invalid_320_center.profile.center_mhz = 100.0;
+        assert!(invalid_320_center
+            .validate()
+            .unwrap_err()
+            .contains("160..1760"));
         let mut duplicate = configure_request(ProfileMode::TimeSpec);
         duplicate.endpoints[23].endpoint_id = 22;
         assert!(duplicate.validate().unwrap_err().contains("0..23"));
@@ -785,6 +811,33 @@ mod tests {
         let mut bad_mask = configure_request(ProfileMode::TimeOnly);
         bad_mask.endpoints[8].enabled = true;
         assert!(bad_mask.validate().unwrap_err().contains("enable mask"));
+    }
+
+    #[test]
+    fn validates_stage33_dac_first_nyquist_and_offset_bounds() {
+        let request = |center_mhz: f64, rf_frequency_mhz: f64| DacRequest {
+            expected_board_id: 1,
+            center_mhz,
+            channels: (0..8)
+                .map(|channel| crate::model::DacChannel {
+                    channel,
+                    enabled: true,
+                    rf_frequency_mhz,
+                    amplitude_percent: 25.0,
+                    phase_deg: 0.0,
+                })
+                .collect(),
+        };
+        assert!(request(160.0, 1.0).validate().is_ok());
+        assert!(request(1760.0, 1919.999).validate().is_ok());
+        assert!(request(1760.0, 1920.0)
+            .validate()
+            .unwrap_err()
+            .contains("upper bound exclusive"));
+        assert!(request(200.0, 360.001)
+            .validate()
+            .unwrap_err()
+            .contains("+/-160"));
     }
 
     #[test]
@@ -803,6 +856,32 @@ mod tests {
             RuntimeConfig::validate(Path::new("/x").into(), missing_target, false)
                 .unwrap_err()
                 .contains("requires frozen non-negative ADC/DAC MTS target latencies")
+        );
+        let mut missing_campaign = state.runtime.config.clone();
+        missing_campaign.bitstreams[0].mts_campaign = None;
+        assert!(
+            RuntimeConfig::validate(Path::new("/x").into(), missing_campaign, false)
+                .unwrap_err()
+                .contains("campaign proof")
+        );
+        let mut wrong_target = state.runtime.config.clone();
+        wrong_target.bitstreams[0].mts_adc_target_latency = Some(241);
+        assert!(
+            RuntimeConfig::validate(Path::new("/x").into(), wrong_target, false)
+                .unwrap_err()
+                .contains("observed maxima")
+        );
+        let mut stale_target = state.runtime.config.clone();
+        stale_target.bitstreams[0].mts_adc_target_latency = Some(230);
+        stale_target.bitstreams[0]
+            .mts_campaign
+            .as_mut()
+            .unwrap()
+            .observed_adc_max = 210;
+        assert!(
+            RuntimeConfig::validate(Path::new("/x").into(), stale_target, false)
+                .unwrap_err()
+                .contains("must not reuse")
         );
         let mut config = state.runtime.config.clone();
         config.bitstreams[0].path = Path::new("relative.bit").to_path_buf();
@@ -823,12 +902,12 @@ mod tests {
         let configure = configure_request(ProfileMode::TimeSpec);
         let dac = DacRequest {
             expected_board_id: 1,
-            center_mhz: 100.0,
+            center_mhz: 200.0,
             channels: (0..8)
                 .map(|channel| crate::model::DacChannel {
                     channel,
                     enabled: true,
-                    rf_frequency_mhz: 100.01,
+                    rf_frequency_mhz: 200.01,
                     amplitude_percent: 25.0,
                     phase_deg: channel as f64,
                 })
@@ -837,24 +916,24 @@ mod tests {
         for (method, path, payload, expected_command) in [
             (
                 "POST",
-                "/api/v1/configure",
+                "/api/v2/configure",
                 Some(serde_json::to_value(configure).unwrap()),
                 "configure",
             ),
             (
                 "POST",
-                "/api/v1/start",
+                "/api/v2/start",
                 Some(json!({"expected_board_id": 1})),
                 "start",
             ),
-            ("GET", "/api/v1/status", None, "status"),
+            ("GET", "/api/v2/status", None, "status"),
             (
                 "PUT",
-                "/api/v1/dac",
+                "/api/v2/dac",
                 Some(serde_json::to_value(dac).unwrap()),
                 "set-dac",
             ),
-            ("POST", "/api/v1/stop", None, "stop"),
+            ("POST", "/api/v2/stop", None, "stop"),
         ] {
             let mut request = axum::http::Request::builder().method(method).uri(path);
             let body = if let Some(payload) = payload {
@@ -877,7 +956,7 @@ mod tests {
 
         let request = axum::http::Request::builder()
             .method("POST")
-            .uri("/api/v1/reset")
+            .uri("/api/v2/reset")
             .header("content-type", "application/json")
             .body(Body::from(r#"{"expected_board_id":1}"#))
             .unwrap();
@@ -887,6 +966,25 @@ mod tests {
             serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
         assert_eq!(body["code"], "BOARD_ID_MISMATCH");
+    }
+
+    #[tokio::test]
+    async fn v1_routes_are_not_registered() {
+        let (_temp, state) = fixture(
+            "#!/bin/sh\nread input\nprintf '{\"ok\":true,\"result\":{}}\\n'\n",
+            2,
+        );
+        let retired_route = ["/api/", "v1", "/status"].concat();
+        let response = app(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(retired_route)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -929,5 +1027,17 @@ mod tests {
         }
         assert!(HELP_HTML.contains("security_mode=none"));
         assert!(HELP_HTML.contains("does not calculate packet rates"));
+        assert_eq!(
+            value["components"]["schemas"]["Profile"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            value["components"]["schemas"]["DacChannel"]["properties"]["rf_frequency_mhz"]
+                ["exclusiveMaximum"],
+            1920
+        );
     }
 }
