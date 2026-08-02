@@ -1,0 +1,41 @@
+{
+  "stage": "32h3",
+  "status": "PRECHECK_ONLY",
+  "timestamp_local": "2026-08-02T12:53:31+08:00",
+  "source": "user_provided_spectrum_analyzer_screenshot",
+  "board": {
+    "streaming": false,
+    "dac_enable_mask": 1,
+    "dac_channel": 0,
+    "requested_rf_mhz": 60.0,
+    "amplitude_percent": 25.0,
+    "other_dac_channels_enabled": false,
+    "sample_rate_msps": 320,
+    "center_mhz": 170.0
+  },
+  "analyzer": {
+    "vendor": "SIGLENT",
+    "start_mhz": 10.0,
+    "stop_mhz": 330.0,
+    "rbw_hz": 1000000,
+    "vbw_hz": 1000000,
+    "detector": "PEAK",
+    "input_attenuation_db": 0.0,
+    "reference_level_dbm": -20.0
+  },
+  "markers": [
+    {"label": "carrier", "frequency_mhz": 59.92, "power_dbm": -7.60, "relative_dbc": 0.0},
+    {"label": "second_harmonic", "frequency_mhz": 120.0, "power_dbm": -62.02, "relative_dbc": -54.42},
+    {"label": "image_about_170mhz", "frequency_mhz": 280.0, "power_dbm": -81.40, "relative_dbc": -73.80},
+    {"label": "spur", "frequency_mhz": 180.0, "power_dbm": -74.34, "relative_dbc": -66.74},
+    {"label": "spur", "frequency_mhz": 260.0, "power_dbm": -70.59, "relative_dbc": -62.99}
+  ],
+  "preliminary_assessment": {
+    "frequency_direction_correct": true,
+    "image_rejection_db": 73.80,
+    "largest_observed_spur_dbc": -54.42,
+    "fixed_10_or_20mhz_comb_observed": false,
+    "formal_gate_eligible": false,
+    "reason": "RBW and VBW are 1 MHz rather than <=10 kHz, and the carrier is above the displayed reference-level range"
+  }
+}

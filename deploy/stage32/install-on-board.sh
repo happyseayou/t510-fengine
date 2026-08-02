@@ -9,7 +9,7 @@ fi
 SOURCE="${1:?usage: install-on-board.sh STAGED_RELEASE RELEASE_ID}"
 RELEASE_ID="${2:?usage: install-on-board.sh STAGED_RELEASE RELEASE_ID}"
 RELEASE="/opt/t510-agent/releases/${RELEASE_ID}"
-EXPECTED_SHA="439080046408267493a031efa1d097fcd3c2f818850ee9eac1925ae95d6b094c"
+EXPECTED_SHA="47117c9e656cfd8345125ef0130eb91a5ec0868cef59931b40b957da29f31234"
 
 test -d "${SOURCE}"
 test -x "${SOURCE}/bin/t510-board-agent"

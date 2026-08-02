@@ -2,7 +2,7 @@
 
 ## 状态
 
-`IN_PROGRESS`
+`PASS`
 
 既有五模式吞吐、PPS切换、故障恢复和长稳门禁仍为有效`PASS`证据。2026-07-29
 外部绝对RF输入发现接收频率轴反向，DAC直接频谱仪测量又发现真实梳状杂散，因此
@@ -10,12 +10,20 @@
 
 | 子步骤 | 内容 | 当前状态 |
 |---|---|---|
-| 32h1 | 外部绝对RF频率轴 | `IN_PROGRESS` |
-| 32h2 | DAC DDS复数方向与新bitstream | `NOT_STARTED` |
-| 32h3 | DAC频谱仪纯度门禁 | `NOT_STARTED` |
+| 32h1 | 外部绝对RF频率轴 | `PASS` |
+| 32h2 | DAC DDS复数方向与bitstream | `PASS` |
+| 32h3 | DAC频谱仪纯度门禁 | `PASS` |
 
-只有32h1～32h3全部`PASS`，本报告才能恢复`PASS`。这次重新打开不追溯否定既有
-数据吞吐和长稳结果。
+32h1～32h3现已全部`PASS`，本报告恢复`PASS`。这次重新打开不追溯否定既有
+数据吞吐和长稳结果，并新增了绝对RF频率、DAC频谱纯度和修复后满速回归证据。
+
+2026-08-02更新：32h2最终候选bit SHA256为
+`47117c9e656cfd8345125ef0130eb91a5ec0868cef59931b40b957da29f31234`。完整fresh
+CONFIGURE后的160/320四点物理方向矩阵全部通过，反向相位bit已否决。32h3随后
+完成频谱仪9项矩阵：最差镜像抑制72.66 dBc、最差最大杂散-53.04 dBc、四组
+25%到100%功率增量为12.02..12.12 dB，8路同时输出对DAC0影响仅-0.01 dB；
+修复后160 TIME_SPEC和320 SPEC_ONLY各60秒板端/主机回归也全部通过。因此本报告
+正式恢复`PASS`。
 
 ## 目标
 
@@ -889,9 +897,9 @@ soak只用于观察低概率、随时间积累或温度相关的问题，不用�
 
 ## 下一阶段准入
 
-32h-c、Linux warm reboot、物理PPS自动停流、PS watchdog物理10 MHz自动停流、
-RFDC ready-low数字停流、fail-closed和fresh CONFIGURE后20秒无损恢复均已
-`PASS`，32h-d正式改为`PASS`。真正冷启动`32h-p2`和最终30分钟soak
-`32h-e`也已`PASS`。Stage 32h整体改为`PASS`，Stage 32单板release闭合。
-`32i`仍因缺少第二块板和公共分路硬件保持`BLOCKED`，不能用单板结果声明多板
-物理同步通过。
+既有32h-c、32h-d、32h-e、32h-p1和32h-p2证据仍为`PASS`。此前把
+`DAC_Data_Type=0`判成PL real输入是错误假设，已经撤回；后续direct raw preview
+与完整fresh CONFIGURE证明标准正向DDS候选的160/320频率方向正确，32h2已
+`PASS`。32h3的频谱仪9项矩阵和两项修复后60秒满速回归也已`PASS`，Stage 32
+单板release重新闭合。`32i`仍保持`BLOCKED`，总体Stage 32继续为
+`IN_PROGRESS / BLOCKED_BY_HARDWARE`。

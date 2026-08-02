@@ -12,6 +12,36 @@
 
 ## 最新状态
 
+- 2026-08-02 Stage 32h3与32h正式`PASS`：DAC0在60/67/170/280 MHz的25%/100%
+  及8路同时60 MHz、100%共9项频谱仪矩阵全部通过。最差成对镜像抑制
+  72.66 dBc，最差最大已标记杂散-53.04 dBc，四组幅度增量12.02..12.12 dB，
+  8路同时输出对DAC0影响-0.01 dB，未复现固定10/20 MHz梳状峰。随后160
+  TIME_SPEC与320 SPEC_ONLY各60秒约83.21 Gbit/s回归通过，主机drop/gap和板端
+  PFB/XFFT/drop增量全部为0。Stage 32单板release重新闭合；32i仍因缺少第二块板
+  保持`BLOCKED`，Stage 32总体仍为`IN_PROGRESS / BLOCKED_BY_HARDWARE`。
+- 2026-08-02 Stage 32h2正式`PASS`：最终候选保持标准正向复数DDS
+  `I=cos(theta),Q=sin(theta)`，bit SHA256为
+  `47117c9e656cfd8345125ef0130eb91a5ec0868cef59931b40b957da29f31234`。
+  完整fresh CONFIGURE后，160的120/220 MHz与320的60/280 MHz在ADC0/ADC1上
+  全部0-bin误差命中，正式窗口板端/主机drop、gap、PFB/XFFT异常增量为0；镜像
+  52.02和55.35 dB作为32h3纯度warning保留。反向相位bit `d4950668...5cb0`已被
+  物理测试否决，禁止发布。一次旧初始化会话异常在完整bit download、RFDC
+  init/MTS后消失，记录为`INIT-STATE-001`并强化强制发布顺序。该条记录的是
+  32h2完成时的交接状态；32h3和32h的最终`PASS`状态以上一条为准。
+- 2026-08-01 Stage 32h2第二轮综合失败已定位并纠正：实验性
+  `DAC_Data_Type=1`会把物理DAC配成I/Q输出对，使8条DAC AXIS收缩为4条，
+  顶层因缺少`s02/s12/s22/s32`报错。正确合同已恢复为8路Real模拟输出加
+  Fine I/Q-to-Real mixer，wrapper八路接口均已连接。此前“Data Type 0表示
+  PL real输入”的结论作废。当前物理问题是偏频相关镜像；拟用320模式直接
+  请求120/220 MHz区分共轭镜像和`Fs/2`相关镜像，但试跑时QSFP掉链，已安全
+  STOP并关闭8路DAC。该条为诊断过程历史；其“32h2仍进行中/32h3阻塞”状态已被
+  上述2026-08-02结论取代。
+- 2026-08-01 Stage 32h1在设备搬动并重新接线后正式`PASS`：10 MHz双PLL锁定，
+  PPS计数按1 Hz持续递增，QSFP实际对端MAC与162接收机100G口一致。320 MS/s的
+  60/280 MHz及160 MS/s的120/220 MHz四点均命中真实RF±1 bin，ADC0/ADC1镜像
+  抑制全部≥60 dB，正式窗口drop/gap和板端PFB/XFFT错误为0。32h2现为
+  `IN_PROGRESS`，开始修复PL DDS的`I=cos、Q=sin`复数方向；新bitstream完成并
+  通过上板前32h仍保持`IN_PROGRESS`。
 - 2026-07-29 Stage 32新增`32h1 -> 32h2 -> 32h3`频率真值闭合链。外部
   280 MHz经功分送入ADC0/ADC1时，原页面错误显示60 MHz；逐通道原始SPEC证明
   正确物理频率关系应为`RF=center+signed_bin*bin_width`，两路真实60 MHz镜像
@@ -19,7 +49,12 @@
   因此Stage 32h从`PASS`重新置为`IN_PROGRESS`；既有吞吐/长稳证据保留，但单板
   release需等`32h1_external_rf_frequency_axis.md`、
   `32h2_dac_dds_iq_direction.md`和`32h3_dac_spectral_purity.md`全部通过。
-- Stage 32单板release已经闭合：总体任务、32a..32i子阶段、冻结接口和证据规则记录在`32_stage32_master_plan.md`，`32a..32h`均已`PASS`。最终PPS recent guard bit SHA256为`439080046408267493a031efa1d097fcd3c2f818850ee9eac1925ae95d6b094c`，fully routed、WNS/WHS为`+0.081/+0.009 ns`。五模式10分钟、三个满线速组合各1小时、PPS边界针对性复测、Linux warm reboot、物理断PPS、物理断10 MHz、RFDC ready-low数字门禁和真正整板断电恢复均已PASS。常驻PS watchdog release为`stage32-ref-watchdog-r2-20260727`；PYNQ额外修改和逐板复刻步骤见`../deployment/stage32_pynq_replication_guide.md`。最终针对性soak再次完成160 TIME_SPEC、320 TIME_ONLY和320 SPEC_ONLY各10分钟，三项约`83.20 Gbit/s`，主机与板端正式窗口drop/gap以及PFB/XFFT异常计数全部为0；证据见`../board/stage32h_final30_soak_20260727.md`。示波器证据作为非单板功能release硬门槛的`REMOTE-EVID-001`延期。固定MTS target为ADC`230`、DAC`336`；UDP主机为`astrolab@192.168.100.162`，凭据不落盘。当前只有一块T510，因此`32i`双板物理同步为`BLOCKED`，Stage 32总体保持`IN_PROGRESS / BLOCKED_BY_HARDWARE`。Stage32固定使用一份manual CLKin2 / external 10 MHz / 160 MHz RFDC+PL reference / continuous 10 MHz SYSREF profile，同时服务160/320 MS/s，不另生成320 MHz LMK profile；UDP header、8192B payload、24 flow和端口`4300..4323`保持不变。
+- Stage 32曾在新增32h1～32h3之前完成单板吞吐、切换、故障恢复和soak门禁；这些
+  历史证据继续有效，但当前单板release因32h3频谱纯度未完成而重新保持
+  `IN_PROGRESS`。最终PPS recent guard父版本SHA256为
+  `439080046408267493a031efa1d097fcd3c2f818850ee9eac1925ae95d6b094c`；当前32h2
+  候选SHA见本节首条。固定MTS target仍为ADC`230`、DAC`336`，LMK/UDP接口冻结
+  不变；32i仍因缺第二块T510而`BLOCKED`。
 - Stage 31 在 Hub 联测中复现的“双时钟域半包锁死”已完成 RTL/Agent 修复、Vivado 闭合和上板恢复复测。修复版 `CORE_VERSION=0x00010031`、bit SHA256 `21357385978297a688e9418e086852d4a8aac2deaa25078e1570b81cdc4266c9` 已 fresh-download 到 T510 `192.168.100.117`，Agent `0.2.1` release 为 `stage31-54a3e73cf7af-20260718083108`。按原故障序列 `START -> ABORT -> STOP -> IMMEDIATE START` 后，TIME/SPEC 在三次快照中持续增至 `28,179,891/28,179,808`，RFDC drop 固定为 `35`，science/TIME/SPEC/TX drop 与 route error 为 0，无需 reload bitstream 恢复；板卡现已 STOP 在 clean pipeline 状态供 Hub 联测。运行中有 QSFP link/mux 瞬时抖动，需结合 Hub 实际收包继续观察。旧 SHA `3696845d...`/Agent `0.2.0` 的 generation 1 与 DAC 自环只保留为初版证据；修复版的 PREPARE/ARM/PPS commit、功分器、公共多板 SYSREF/PPS 和共同输入相位仍待联合验收，因此不声明多板同步通过。详见 `31_station_multiboard_sync_preparation.md`、`../board/stage31_pipeline_flush_recovery_smoke_20260718.md` 和初版 `../board/stage31_single_board_agent_sync_smoke_20260718.md`。
 - Stage 30 已重构为单个轻量、无状态 Rust Board Agent，并于 2026-07-16 在 T510 `192.168.100.117:8010` 完成只读上线。Agent 以 root 运行，每个硬件请求启动一次固定 Python/PYNQ helper；不使用 FastAPI、SQLite、worker socket、journal、maintenance/Jupyter 互锁或后台监控。`/api/help`、OpenAPI、live/ready/info/capabilities/bitstreams/status 均已现场通过，device UID 为 `t510-psmac-02511023dc28`，空闲 RSS 约 `3.8MiB`；Jupyter server/kernel PID 未变，现有约 `960kpps` science stream 与 Rust waveform/spectrum 持续 live。Python 29 项、Board Agent Rust 5 项、receiver Rust 34 项和 browser math 均通过，aarch64 musl 静态 binary 为 `2.9MiB`。真实 configure/start/stop/reset/DAC Gate 延后到 Hub 联调维护窗口；Hub -> T510 入站还需从 `192.168.99.119` 本机补 curl，Center Hub 仍需增加独立 DAC-ADC lab profile。详见 `30_board_agent_center_hub.md`。
 - Stage 29 生产力版本已在冻结的 `CORE_VERSION=0x00010030` / bitstream SHA256 `7486a55b6f7e50e5875474e7d85299b107e9384cfff454316f64f2d3d7e9800d` 上完成软件收口：正式控制矩阵为 `100MHz TIME_ONLY/SPEC_ONLY/TIME_SPEC` 与 `200MHz TIME_ONLY/SPEC_ONLY`，继续拒绝 `200MHz TIME_SPEC`。唯一 Jupyter 入口为 `notebooks/00_stage29_fengine_production_control.ipynb`；Python 使用严格 `Stage29Config/Stage29Controller`，Rust SPEC 幅度、功率和瀑布预览显示明确 RF MHz 横轴。历史报告继续保留，本阶段未修改 RTL/BD/XDC/IP/overlay/UDP wire contract，五模式 60 秒硬件发布门禁命令与尚待现场执行的边界见 `29_productivity_release.md`。

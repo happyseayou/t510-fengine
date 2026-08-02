@@ -62,6 +62,11 @@ def main() -> int:
     configure.add_argument("path")
     configure.add_argument("--bandwidth-mhz", type=int, choices=(160, 320))
     configure.add_argument(
+        "--center-mhz",
+        type=float,
+        help="override profile center frequency in MHz",
+    )
+    configure.add_argument(
         "--mode",
         choices=("time_only", "spec_only", "time_spec"),
         help="override profile mode and derive endpoint enables from stream type",
@@ -91,6 +96,8 @@ def main() -> int:
             raise ValueError("configure body must contain a profile object")
         if args.bandwidth_mhz is not None:
             profile["bandwidth_mhz"] = args.bandwidth_mhz
+        if args.center_mhz is not None:
+            profile["center_mhz"] = args.center_mhz
         if args.mode is not None:
             profile["mode"] = args.mode
             enabled_streams = {

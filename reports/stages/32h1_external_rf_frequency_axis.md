@@ -2,7 +2,7 @@
 
 ## 状态
 
-`IN_PROGRESS`
+`PASS`
 
 ## 目标
 
@@ -25,8 +25,8 @@
 - [x] Node、receiver Rust和静态musl构建通过。
 - [x] 新receiver部署到`astrolab@192.168.100.162`。
 - [x] 320 MS/s外部60/280 MHz在ADC0/ADC1均命中真实RF±1 bin，镜像≥60 dBc。
-- [ ] 160 MS/s外部120/220 MHz在ADC0/ADC1均命中真实RF±1 bin，镜像≥60 dBc。
-- [ ] 主机和FPGA没有新增drop/gap/overflow。
+- [x] 160 MS/s外部120/220 MHz在ADC0/ADC1均命中真实RF±1 bin，镜像≥60 dBc。
+- [x] 主机和FPGA没有新增drop/gap/overflow。
 
 ## 实际改动
 
@@ -45,8 +45,8 @@
 - `python3 -m unittest discover -s tests`：62项PASS。
 - receiver Rust测试：lib 7项、binary 29项，共36项PASS。
 - x86_64 musl静态release构建：PASS（仅有既有linker warning）。
-- 实施所基于的仓库HEAD：`1c96aa4b811c5889762d87136b4975296a310071`；
-  本阶段代码尚未提交，因此最终提交SHA待闭合时补记。
+- 32h1实现与120 MHz以前证据的checkpoint：
+  `f73aca682a523394cb20f8e83ce4e7889e9a892a`；220 MHz闭合证据的提交SHA待补记。
 
 ## 部署与板端证据
 
@@ -106,14 +106,25 @@
   - ADC0：peak bin 2816 → 120.000 MHz，镜像抑制71.54 dB。
   - ADC1：peak bin 2816 → 120.000 MHz，镜像抑制69.43 dB。
   - 五帧观测窗口内receiver新增kernel/ring/app drop及SPEC sequence/frame gap均为0。
+- 搬动设备并重新接线后，重新确认10 MHz与PPS：LMK手动CLKin2、PLL1/PLL2均锁定，
+  PPS计数在约10.56秒内从25增长到35，`pps_recent=true`。
+- 重新确认QSFP实际对端为接收机`192.168.100.162`的`enp1s0f0np0`：目标与
+  实际MAC均为`4c:bb:47:2b:42:6e`，链路100000 Mb/s/full duplex/carrier 1；
+  16路SPEC实际接收约625 kpps / 41.60 Gbit/s且drop/gap为0。
+- 160 MS/s外部220 MHz闭合快照：
+  `reports/board/stage32h1_external_220mhz_postmove_20260801.json`。
+- 160 MS/s、center 170 MHz、外部220 MHz：
+  - ADC0：peak bin 1280 → 220.000 MHz，镜像抑制64.39 dB。
+  - ADC1：peak bin 1280 → 220.000 MHz，镜像抑制67.58 dB。
+  - 五帧观测窗口内receiver新增kernel/ring/app drop及SPEC sequence/frame gap均为0。
+  - 板端LMK、watchdog、QSFP、half-band和PFB/XFFT均健康；RFDC/science/SPEC/TX
+    drop、route error和总`error_flags`均为0。
 
-160 MS/s的220 MHz证据尚未完成，因此32h1仍为`IN_PROGRESS`。
+## 下一阶段准入
 
-## 尚需人工配合的门禁
-
-同一外部源继续经功分送入ADC0/ADC1，最后设置为160 MS/s的220 MHz。稳定后运行
-同一只读门禁并保存JSON。四个频点全部通过前，本阶段维持`IN_PROGRESS`，32h2
-不得启动Vivado构建。
+320 MS/s的60/280 MHz和160 MS/s的120/220 MHz四个绝对频率点全部闭合，双ADC
+镜像抑制均不低于60 dB，允许进入32h2。32h1修复只涉及receiver显示/换算和
+CONFIGURE占位DAC校验，没有修改ADC Q、PFB或UDP格式。
 
 ## 回滚
 

@@ -1,0 +1,937 @@
+{
+  "agent_base": "http://192.168.100.117:8010",
+  "bandwidth_mhz": 320,
+  "board_after": {
+    "board_id": 1,
+    "captured_at_unix_ms": 1785652715521,
+    "channelizer": {
+      "capture_backpressure_count": 0,
+      "coefficient_error_count": 0,
+      "coefficient_id": "0x28a40001",
+      "data_halt_count": 0,
+      "frame_count": 6064417,
+      "frame_sample0_overflow_count": 0,
+      "nchan": 4096,
+      "overflow_count": 0,
+      "packet_chan_count": 256,
+      "packet_time_count": 1,
+      "peak_chan": 0,
+      "peak_power": 0,
+      "taps": 4,
+      "tile_overflow_count": 0,
+      "xfft_data_out_halt_count": 0,
+      "xfft_event_count": 0,
+      "xfft_fft_overflow_count": 0,
+      "xfft_status_halt_count": 0,
+      "xfft_tlast_missing_count": 0,
+      "xfft_tlast_unexpected_count": 0
+    },
+    "clock": {
+      "configured": true,
+      "errors": [],
+      "lmk_clkin": "CLKin2 (manual)",
+      "pll1_lock": 1,
+      "pll2_lock": 1,
+      "profile_id": "stage32_160_10m_cont_manual_clkin2",
+      "selected_ref": "external_10mhz",
+      "sysref_mode": "continuous"
+    },
+    "core_version": "0x00010032",
+    "counters": {
+      "rfdc_dropped": 18,
+      "science_dropped_beats": 0,
+      "spec_dropped": 0,
+      "spec_packets": 97029362,
+      "time_dropped": 0,
+      "time_packets": 0,
+      "tx_frames_built": 97030976,
+      "tx_frames_dropped": 0,
+      "tx_frames_sent": 97030989,
+      "tx_route_error": 0,
+      "tx_route_miss": 0
+    },
+    "error_flags": 0,
+    "halfband": {
+      "active": false,
+      "coefficient_id": "0xaa160055",
+      "primed": false,
+      "taps": 55
+    },
+    "mts": {
+      "adc": {
+        "active_measured_latency": [
+          230,
+          230,
+          230,
+          230
+        ],
+        "measured_latency": [
+          230,
+          230,
+          230,
+          230
+        ],
+        "offset": [
+          4,
+          4,
+          4,
+          4
+        ],
+        "ref_tile": 0,
+        "target_latency": 230,
+        "tiles": 15
+      },
+      "available": true,
+      "captured_at_unix_ms": 1785652612449,
+      "core_version": "0x00010032",
+      "dac": {
+        "active_measured_latency": [
+          334,
+          334,
+          334,
+          334
+        ],
+        "measured_latency": [
+          334,
+          334,
+          334,
+          334
+        ],
+        "offset": [
+          30,
+          30,
+          30,
+          30
+        ],
+        "ref_tile": 0,
+        "target_latency": 336,
+        "tiles": 15
+      }
+    },
+    "pipeline": {
+      "cmac_mux_locked": true,
+      "cmac_mux_selected_source": 2,
+      "cmac_mux_stale_science_frame": false,
+      "first_spec_seen": false,
+      "first_time_seen": false,
+      "flush_clean": true,
+      "pfb_input_fifo_level": 19580,
+      "rfdc_downstream_ready": true,
+      "stream_accepting": true,
+      "time_fifo_empty": true,
+      "time_fifo_full": false
+    },
+    "profile": {
+      "aa100_active": false,
+      "bandwidth_code": 2,
+      "bandwidth_mhz": 320,
+      "center_mhz": 169.99999999999886,
+      "display_name": "320 MS/s\uff08\u7ea6256 MHz\u53ef\u7528\u79d1\u5b66\u5e26\u5bbd\uff09",
+      "mode": "spec_only",
+      "output_mode_code": 2
+    },
+    "qsfp": {
+      "link_up": true,
+      "module_present": true,
+      "raw_flags": 2559373341
+    },
+    "sample0": {
+      "rfdc": 8633605045,
+      "time": 0
+    },
+    "streaming": true,
+    "timing": {
+      "configured_clock_ref": 0,
+      "configured_sync_mode": 0,
+      "pps_count": 108,
+      "pps_input_high": true,
+      "pps_recent": true,
+      "reference_locked": true
+    }
+  },
+  "board_before": {
+    "board_id": 1,
+    "captured_at_unix_ms": 1785652646442,
+    "channelizer": {
+      "capture_backpressure_count": 0,
+      "coefficient_error_count": 0,
+      "coefficient_id": "0x28a40001",
+      "data_halt_count": 0,
+      "frame_count": 667430,
+      "frame_sample0_overflow_count": 0,
+      "nchan": 4096,
+      "overflow_count": 0,
+      "packet_chan_count": 256,
+      "packet_time_count": 1,
+      "peak_chan": 0,
+      "peak_power": 0,
+      "taps": 4,
+      "tile_overflow_count": 0,
+      "xfft_data_out_halt_count": 0,
+      "xfft_event_count": 0,
+      "xfft_fft_overflow_count": 0,
+      "xfft_status_halt_count": 0,
+      "xfft_tlast_missing_count": 0,
+      "xfft_tlast_unexpected_count": 0
+    },
+    "clock": {
+      "configured": true,
+      "errors": [],
+      "lmk_clkin": "CLKin2 (manual)",
+      "pll1_lock": 1,
+      "pll2_lock": 1,
+      "profile_id": "stage32_160_10m_cont_manual_clkin2",
+      "selected_ref": "external_10mhz",
+      "sysref_mode": "continuous"
+    },
+    "core_version": "0x00010032",
+    "counters": {
+      "rfdc_dropped": 18,
+      "science_dropped_beats": 0,
+      "spec_dropped": 0,
+      "spec_packets": 10677567,
+      "time_dropped": 0,
+      "time_packets": 0,
+      "tx_frames_built": 10679185,
+      "tx_frames_dropped": 0,
+      "tx_frames_sent": 10679198,
+      "tx_route_error": 0,
+      "tx_route_miss": 0
+    },
+    "error_flags": 0,
+    "halfband": {
+      "active": false,
+      "coefficient_id": "0xaa160055",
+      "primed": false,
+      "taps": 55
+    },
+    "mts": {
+      "adc": {
+        "active_measured_latency": [
+          230,
+          230,
+          230,
+          230
+        ],
+        "measured_latency": [
+          230,
+          230,
+          230,
+          230
+        ],
+        "offset": [
+          4,
+          4,
+          4,
+          4
+        ],
+        "ref_tile": 0,
+        "target_latency": 230,
+        "tiles": 15
+      },
+      "available": true,
+      "captured_at_unix_ms": 1785652612449,
+      "core_version": "0x00010032",
+      "dac": {
+        "active_measured_latency": [
+          334,
+          334,
+          334,
+          334
+        ],
+        "measured_latency": [
+          334,
+          334,
+          334,
+          334
+        ],
+        "offset": [
+          30,
+          30,
+          30,
+          30
+        ],
+        "ref_tile": 0,
+        "target_latency": 336,
+        "tiles": 15
+      }
+    },
+    "pipeline": {
+      "cmac_mux_locked": true,
+      "cmac_mux_selected_source": 2,
+      "cmac_mux_stale_science_frame": false,
+      "first_spec_seen": false,
+      "first_time_seen": false,
+      "flush_clean": true,
+      "pfb_input_fifo_level": 19634,
+      "rfdc_downstream_ready": true,
+      "stream_accepting": true,
+      "time_fifo_empty": true,
+      "time_fifo_full": false
+    },
+    "profile": {
+      "aa100_active": false,
+      "bandwidth_code": 2,
+      "bandwidth_mhz": 320,
+      "center_mhz": 169.99999999999886,
+      "display_name": "320 MS/s\uff08\u7ea6256 MHz\u53ef\u7528\u79d1\u5b66\u5e26\u5bbd\uff09",
+      "mode": "spec_only",
+      "output_mode_code": 2
+    },
+    "qsfp": {
+      "link_up": true,
+      "module_present": true,
+      "raw_flags": 2559373341
+    },
+    "sample0": {
+      "rfdc": 3107090553,
+      "time": 0
+    },
+    "streaming": true,
+    "timing": {
+      "configured_clock_ref": 0,
+      "configured_sync_mode": 0,
+      "pps_count": 39,
+      "pps_input_high": true,
+      "pps_recent": true,
+      "reference_locked": true
+    }
+  },
+  "board_counter_delta": {
+    "rfdc_dropped": 0,
+    "science_dropped_beats": 0,
+    "spec_dropped": 0,
+    "spec_packets": 86351795,
+    "time_dropped": 0,
+    "time_packets": 0,
+    "tx_frames_built": 86351791,
+    "tx_frames_dropped": 0,
+    "tx_frames_sent": 86351791,
+    "tx_route_error": 0,
+    "tx_route_miss": 0
+  },
+  "board_idle": {
+    "board_id": 1,
+    "captured_at_unix_ms": 1785652629536,
+    "channelizer": {
+      "capture_backpressure_count": 0,
+      "coefficient_error_count": 0,
+      "coefficient_id": "0x28a40001",
+      "data_halt_count": 0,
+      "frame_count": 0,
+      "frame_sample0_overflow_count": 0,
+      "nchan": 4096,
+      "overflow_count": 0,
+      "packet_chan_count": 256,
+      "packet_time_count": 1,
+      "peak_chan": 0,
+      "peak_power": 0,
+      "taps": 4,
+      "tile_overflow_count": 0,
+      "xfft_data_out_halt_count": 0,
+      "xfft_event_count": 0,
+      "xfft_fft_overflow_count": 0,
+      "xfft_status_halt_count": 0,
+      "xfft_tlast_missing_count": 0,
+      "xfft_tlast_unexpected_count": 0
+    },
+    "clock": {
+      "configured": true,
+      "errors": [],
+      "lmk_clkin": "CLKin2 (manual)",
+      "pll1_lock": 1,
+      "pll2_lock": 1,
+      "profile_id": "stage32_160_10m_cont_manual_clkin2",
+      "selected_ref": "external_10mhz",
+      "sysref_mode": "continuous"
+    },
+    "core_version": "0x00010032",
+    "counters": {
+      "rfdc_dropped": 0,
+      "science_dropped_beats": 0,
+      "spec_dropped": 0,
+      "spec_packets": 0,
+      "time_dropped": 0,
+      "time_packets": 0,
+      "tx_frames_built": 0,
+      "tx_frames_dropped": 0,
+      "tx_frames_sent": 0,
+      "tx_route_error": 0,
+      "tx_route_miss": 0
+    },
+    "error_flags": 0,
+    "halfband": {
+      "active": false,
+      "coefficient_id": "0xaa160055",
+      "primed": false,
+      "taps": 55
+    },
+    "mts": {
+      "adc": {
+        "active_measured_latency": [
+          230,
+          230,
+          230,
+          230
+        ],
+        "measured_latency": [
+          230,
+          230,
+          230,
+          230
+        ],
+        "offset": [
+          4,
+          4,
+          4,
+          4
+        ],
+        "ref_tile": 0,
+        "target_latency": 230,
+        "tiles": 15
+      },
+      "available": true,
+      "captured_at_unix_ms": 1785652612449,
+      "core_version": "0x00010032",
+      "dac": {
+        "active_measured_latency": [
+          334,
+          334,
+          334,
+          334
+        ],
+        "measured_latency": [
+          334,
+          334,
+          334,
+          334
+        ],
+        "offset": [
+          30,
+          30,
+          30,
+          30
+        ],
+        "ref_tile": 0,
+        "target_latency": 336,
+        "tiles": 15
+      }
+    },
+    "pipeline": {
+      "cmac_mux_locked": false,
+      "cmac_mux_selected_source": 2,
+      "cmac_mux_stale_science_frame": false,
+      "first_spec_seen": false,
+      "first_time_seen": false,
+      "flush_clean": true,
+      "pfb_input_fifo_level": 0,
+      "rfdc_downstream_ready": true,
+      "stream_accepting": false,
+      "time_fifo_empty": true,
+      "time_fifo_full": false
+    },
+    "profile": {
+      "aa100_active": false,
+      "bandwidth_code": 2,
+      "bandwidth_mhz": 320,
+      "center_mhz": 169.99999999999886,
+      "display_name": "320 MS/s\uff08\u7ea6256 MHz\u53ef\u7528\u79d1\u5b66\u5e26\u5bbd\uff09",
+      "mode": "spec_only",
+      "output_mode_code": 2
+    },
+    "qsfp": {
+      "link_up": true,
+      "module_present": true,
+      "raw_flags": 2559373341
+    },
+    "sample0": {
+      "rfdc": 1754846704,
+      "time": 0
+    },
+    "streaming": false,
+    "timing": {
+      "configured_clock_ref": 0,
+      "configured_sync_mode": 0,
+      "pps_count": 22,
+      "pps_input_high": true,
+      "pps_recent": true,
+      "reference_locked": true
+    }
+  },
+  "channelizer_counter_delta": {
+    "capture_backpressure_count": 0,
+    "coefficient_error_count": 0,
+    "data_halt_count": 0,
+    "frame_count": 5396987,
+    "frame_sample0_overflow_count": 0,
+    "overflow_count": 0,
+    "tile_overflow_count": 0,
+    "xfft_data_out_halt_count": 0,
+    "xfft_event_count": 0,
+    "xfft_fft_overflow_count": 0,
+    "xfft_status_halt_count": 0,
+    "xfft_tlast_missing_count": 0,
+    "xfft_tlast_unexpected_count": 0
+  },
+  "classification": "STAGE32_320MSPS_SPEC_ONLY_BOARD_HOST_PASS",
+  "errors": [],
+  "host": {
+    "classification": "HOST_STAGE32_320MSPS_spec_only_RUST_RX_PASS",
+    "counter_delta": {
+      "app_drops": 0,
+      "frame_gaps": 0,
+      "kernel_drops": 0,
+      "parse_errors": 0,
+      "ring_drops": 0,
+      "sample0_gaps": 0,
+      "seq_gaps": 0,
+      "spec_frame_gaps": 0,
+      "spec_packets": 75011072,
+      "spec_seq_gaps": 0,
+      "time_packets": 0,
+      "worker_ring_drops": 0
+    },
+    "errors": [],
+    "ethtool_delta": {
+      "ch0_arm": 58518,
+      "ch0_events": 114232,
+      "ch0_poll": 170006,
+      "ch10_arm": 56653,
+      "ch10_events": 112198,
+      "ch10_poll": 167812,
+      "ch11_arm": 56939,
+      "ch11_events": 113041,
+      "ch11_poll": 169207,
+      "ch12_arm": 56864,
+      "ch12_events": 112659,
+      "ch12_poll": 168554,
+      "ch13_arm": 56738,
+      "ch13_events": 112830,
+      "ch13_poll": 169033,
+      "ch14_arm": 58069,
+      "ch14_events": 113823,
+      "ch14_poll": 169631,
+      "ch15_arm": 61975,
+      "ch15_events": 120596,
+      "ch15_poll": 179279,
+      "ch16_arm": 61375,
+      "ch16_events": 120104,
+      "ch16_poll": 178901,
+      "ch17_arm": 61868,
+      "ch17_events": 120740,
+      "ch17_poll": 179684,
+      "ch18_arm": 61171,
+      "ch18_events": 119712,
+      "ch18_poll": 178310,
+      "ch19_arm": 60622,
+      "ch19_events": 119324,
+      "ch19_poll": 178133,
+      "ch1_arm": 58600,
+      "ch1_events": 114429,
+      "ch1_poll": 170277,
+      "ch2_arm": 57167,
+      "ch2_events": 112947,
+      "ch2_poll": 168815,
+      "ch3_arm": 56686,
+      "ch3_events": 112811,
+      "ch3_poll": 169028,
+      "ch7_arm": 2,
+      "ch7_events": 2,
+      "ch7_poll": 2,
+      "ch8_arm": 61031,
+      "ch8_events": 119533,
+      "ch8_poll": 178084,
+      "ch9_arm": 60962,
+      "ch9_events": 119438,
+      "ch9_poll": 177956,
+      "ch_arm": 945242,
+      "ch_events": 1858418,
+      "ch_poll": 2772715,
+      "rx0_bytes": 39206249242,
+      "rx0_csum_complete": 4688621,
+      "rx0_csum_none": 2,
+      "rx0_mpwqe_filler_cqes": 151243,
+      "rx0_mpwqe_filler_strides": 151243,
+      "rx0_packets": 4688623,
+      "rx0_pp_alloc_fast": 9679744,
+      "rx0_pp_recycle_cached": 9679744,
+      "rx10_bytes": 39205964494,
+      "rx10_csum_complete": 4688587,
+      "rx10_mpwqe_filler_cqes": 151245,
+      "rx10_mpwqe_filler_strides": 151245,
+      "rx10_packets": 4688587,
+      "rx10_pp_alloc_fast": 9679616,
+      "rx10_pp_recycle_cached": 9679616,
+      "rx11_bytes": 39206449490,
+      "rx11_csum_complete": 4688645,
+      "rx11_mpwqe_filler_cqes": 151247,
+      "rx11_mpwqe_filler_strides": 151247,
+      "rx11_packets": 4688645,
+      "rx11_pp_alloc_fast": 9679680,
+      "rx11_pp_recycle_cached": 9679680,
+      "rx12_bytes": 39206407680,
+      "rx12_csum_complete": 4688640,
+      "rx12_mpwqe_filler_cqes": 151247,
+      "rx12_mpwqe_filler_strides": 151247,
+      "rx12_packets": 4688640,
+      "rx12_pp_alloc_fast": 9679744,
+      "rx12_pp_recycle_cached": 9679744,
+      "rx13_bytes": 39206257164,
+      "rx13_csum_complete": 4688622,
+      "rx13_mpwqe_filler_cqes": 151246,
+      "rx13_mpwqe_filler_strides": 151246,
+      "rx13_packets": 4688622,
+      "rx13_pp_alloc_fast": 9679808,
+      "rx13_pp_recycle_cached": 9679808,
+      "rx14_bytes": 39206516386,
+      "rx14_csum_complete": 4688653,
+      "rx14_mpwqe_filler_cqes": 151247,
+      "rx14_mpwqe_filler_strides": 151247,
+      "rx14_packets": 4688653,
+      "rx14_pp_alloc_fast": 9679744,
+      "rx14_pp_recycle_cached": 9679744,
+      "rx15_bytes": 39206574920,
+      "rx15_csum_complete": 4688660,
+      "rx15_mpwqe_filler_cqes": 151248,
+      "rx15_mpwqe_filler_strides": 151248,
+      "rx15_packets": 4688660,
+      "rx15_pp_alloc_fast": 9679808,
+      "rx15_pp_recycle_cached": 9679808,
+      "rx16_bytes": 39205981218,
+      "rx16_csum_complete": 4688589,
+      "rx16_mpwqe_filler_cqes": 151245,
+      "rx16_mpwqe_filler_strides": 151245,
+      "rx16_packets": 4688589,
+      "rx16_pp_alloc_fast": 9679616,
+      "rx16_pp_recycle_cached": 9679616,
+      "rx17_bytes": 39205997942,
+      "rx17_csum_complete": 4688591,
+      "rx17_mpwqe_filler_cqes": 151245,
+      "rx17_mpwqe_filler_strides": 151245,
+      "rx17_packets": 4688591,
+      "rx17_pp_alloc_fast": 9679680,
+      "rx17_pp_recycle_cached": 9679680,
+      "rx18_bytes": 39205839064,
+      "rx18_csum_complete": 4688572,
+      "rx18_mpwqe_filler_cqes": 151244,
+      "rx18_mpwqe_filler_strides": 151244,
+      "rx18_packets": 4688572,
+      "rx18_pp_alloc_fast": 9679680,
+      "rx18_pp_recycle_cached": 9679680,
+      "rx19_bytes": 39206332422,
+      "rx19_csum_complete": 4688631,
+      "rx19_mpwqe_filler_cqes": 151246,
+      "rx19_mpwqe_filler_strides": 151246,
+      "rx19_packets": 4688631,
+      "rx19_pp_alloc_fast": 9679808,
+      "rx19_pp_recycle_cached": 9679808,
+      "rx1_bytes": 39206524748,
+      "rx1_csum_complete": 4688654,
+      "rx1_mpwqe_filler_cqes": 151247,
+      "rx1_mpwqe_filler_strides": 151247,
+      "rx1_packets": 4688654,
+      "rx1_pp_alloc_fast": 9679872,
+      "rx1_pp_recycle_cached": 9679851,
+      "rx2_bytes": 39206173544,
+      "rx2_csum_complete": 4688612,
+      "rx2_mpwqe_filler_cqes": 151245,
+      "rx2_mpwqe_filler_strides": 151245,
+      "rx2_packets": 4688612,
+      "rx2_pp_alloc_fast": 9679680,
+      "rx2_pp_recycle_cached": 9679680,
+      "rx3_bytes": 39206298974,
+      "rx3_csum_complete": 4688627,
+      "rx3_mpwqe_filler_cqes": 151246,
+      "rx3_mpwqe_filler_strides": 151246,
+      "rx3_packets": 4688627,
+      "rx3_pp_alloc_fast": 9679744,
+      "rx3_pp_recycle_cached": 9679744,
+      "rx8_bytes": 39206123372,
+      "rx8_csum_complete": 4688606,
+      "rx8_mpwqe_filler_cqes": 151245,
+      "rx8_mpwqe_filler_strides": 151245,
+      "rx8_packets": 4688606,
+      "rx8_pp_alloc_fast": 9679808,
+      "rx8_pp_recycle_cached": 9679808,
+      "rx9_bytes": 39206248802,
+      "rx9_csum_complete": 4688621,
+      "rx9_mpwqe_filler_cqes": 151246,
+      "rx9_mpwqe_filler_strides": 151246,
+      "rx9_packets": 4688621,
+      "rx9_pp_alloc_fast": 9679744,
+      "rx9_pp_recycle_cached": 9679744,
+      "rx_8192_to_10239_bytes_phy": 75017924,
+      "rx_bytes": 627299663516,
+      "rx_bytes_phy": 627599282904,
+      "rx_csum_complete": 75017898,
+      "rx_csum_none": 2,
+      "rx_mpwqe_filler_cqes": 2419932,
+      "rx_mpwqe_filler_strides": 2419932,
+      "rx_packets": 75017900,
+      "rx_packets_phy": 75017843,
+      "rx_pp_alloc_fast": 154875776,
+      "rx_pp_recycle_cached": 154875755,
+      "rx_prio0_bytes": 627602922114,
+      "rx_prio0_packets": 75018278,
+      "rx_vport_multicast_bytes": 876,
+      "rx_vport_multicast_packets": 4,
+      "rx_vport_unicast_bytes": 627300223330,
+      "rx_vport_unicast_packets": 75017965,
+      "tx7_bytes": 436,
+      "tx7_cqes": 2,
+      "tx7_csum_none": 2,
+      "tx7_mpwqe_blks": 2,
+      "tx7_mpwqe_pkts": 2,
+      "tx7_packets": 2,
+      "tx_bytes": 436,
+      "tx_bytes_phy": 892,
+      "tx_cqes": 2,
+      "tx_csum_none": 2,
+      "tx_mpwqe_blks": 2,
+      "tx_mpwqe_pkts": 2,
+      "tx_multicast_phy": 4,
+      "tx_packets": 2,
+      "tx_packets_phy": 4,
+      "tx_prio0_bytes": 892,
+      "tx_prio0_packets": 4,
+      "tx_vport_multicast_bytes": 436,
+      "tx_vport_multicast_packets": 2
+    },
+    "net_delta": {
+      "multicast": 2,
+      "rx_bytes": 627308092412,
+      "rx_packets": 75019019,
+      "tx_bytes": 436,
+      "tx_packets": 2
+    },
+    "ok": true,
+    "rates": {
+      "combined_t510_udp_payload_mbps": 83212.28253866667,
+      "spec_pps": 1250184.5333333334,
+      "time_pps": 0.0
+    },
+    "required": {
+      "payload_mbps_min": 79040.0,
+      "pps_min": 1187500.0,
+      "spec_flows": 16,
+      "time_flows": 0
+    },
+    "warnings": []
+  },
+  "host_evidence": "reports/board/stage32h3_post_purity_320msps_spec_only_60s_20260802_host.json",
+  "host_validator": {
+    "returncode": 0,
+    "stderr": ""
+  },
+  "mode": "spec_only",
+  "ok": true,
+  "qsfp_health": {
+    "after": {
+      "faults": {
+        "local_fault": false,
+        "remote_fault": false,
+        "rx_internal_local_fault": false,
+        "rx_local_fault": false,
+        "tx_local_fault_detail": false,
+        "tx_overflow": false
+      },
+      "link_up_sample": true,
+      "physical_healthy": true,
+      "raw_flags": 2559373341,
+      "required": {
+        "cmac_reset_done": true,
+        "gt_locked": true,
+        "gt_refclk_seen": true,
+        "gt_rx_reset_done": true,
+        "gt_tx_reset_done": true,
+        "module_present": true,
+        "rx_aligned": true,
+        "rx_status": true
+      },
+      "tx_ready_sample": true
+    },
+    "before": {
+      "faults": {
+        "local_fault": false,
+        "remote_fault": false,
+        "rx_internal_local_fault": false,
+        "rx_local_fault": false,
+        "tx_local_fault_detail": false,
+        "tx_overflow": false
+      },
+      "link_up_sample": true,
+      "physical_healthy": true,
+      "raw_flags": 2559373341,
+      "required": {
+        "cmac_reset_done": true,
+        "gt_locked": true,
+        "gt_refclk_seen": true,
+        "gt_rx_reset_done": true,
+        "gt_tx_reset_done": true,
+        "module_present": true,
+        "rx_aligned": true,
+        "rx_status": true
+      },
+      "tx_ready_sample": true
+    }
+  },
+  "receiver": {
+    "base_url": "http://127.0.0.1:8089",
+    "interface": "enp1s0f0np0",
+    "ssh": "astrolab@192.168.100.162"
+  },
+  "seconds": 60.0,
+  "stage": 32,
+  "stop": {
+    "snapshot": {
+      "board_id": 1,
+      "captured_at_unix_ms": 1785652723174,
+      "channelizer": {
+        "capture_backpressure_count": 0,
+        "coefficient_error_count": 0,
+        "coefficient_id": "0x28a40001",
+        "data_halt_count": 0,
+        "frame_count": 0,
+        "frame_sample0_overflow_count": 0,
+        "nchan": 4096,
+        "overflow_count": 0,
+        "packet_chan_count": 256,
+        "packet_time_count": 1,
+        "peak_chan": 0,
+        "peak_power": 0,
+        "taps": 4,
+        "tile_overflow_count": 0,
+        "xfft_data_out_halt_count": 0,
+        "xfft_event_count": 0,
+        "xfft_fft_overflow_count": 0,
+        "xfft_status_halt_count": 0,
+        "xfft_tlast_missing_count": 0,
+        "xfft_tlast_unexpected_count": 0
+      },
+      "clock": {
+        "configured": true,
+        "errors": [],
+        "lmk_clkin": "CLKin2 (manual)",
+        "pll1_lock": 1,
+        "pll2_lock": 1,
+        "profile_id": "stage32_160_10m_cont_manual_clkin2",
+        "selected_ref": "external_10mhz",
+        "sysref_mode": "continuous"
+      },
+      "core_version": "0x00010032",
+      "counters": {
+        "rfdc_dropped": 18,
+        "science_dropped_beats": 0,
+        "spec_dropped": 0,
+        "spec_packets": 0,
+        "time_dropped": 0,
+        "time_packets": 0,
+        "tx_frames_built": 0,
+        "tx_frames_dropped": 0,
+        "tx_frames_sent": 0,
+        "tx_route_error": 0,
+        "tx_route_miss": 0
+      },
+      "error_flags": 0,
+      "halfband": {
+        "active": false,
+        "coefficient_id": "0xaa160055",
+        "primed": false,
+        "taps": 55
+      },
+      "mts": {
+        "adc": {
+          "active_measured_latency": [
+            230,
+            230,
+            230,
+            230
+          ],
+          "measured_latency": [
+            230,
+            230,
+            230,
+            230
+          ],
+          "offset": [
+            4,
+            4,
+            4,
+            4
+          ],
+          "ref_tile": 0,
+          "target_latency": 230,
+          "tiles": 15
+        },
+        "available": true,
+        "captured_at_unix_ms": 1785652612449,
+        "core_version": "0x00010032",
+        "dac": {
+          "active_measured_latency": [
+            334,
+            334,
+            334,
+            334
+          ],
+          "measured_latency": [
+            334,
+            334,
+            334,
+            334
+          ],
+          "offset": [
+            30,
+            30,
+            30,
+            30
+          ],
+          "ref_tile": 0,
+          "target_latency": 336,
+          "tiles": 15
+        }
+      },
+      "pipeline": {
+        "cmac_mux_locked": false,
+        "cmac_mux_selected_source": 2,
+        "cmac_mux_stale_science_frame": false,
+        "first_spec_seen": false,
+        "first_time_seen": false,
+        "flush_clean": true,
+        "pfb_input_fifo_level": 0,
+        "rfdc_downstream_ready": true,
+        "stream_accepting": false,
+        "time_fifo_empty": true,
+        "time_fifo_full": false
+      },
+      "profile": {
+        "aa100_active": false,
+        "bandwidth_code": 2,
+        "bandwidth_mhz": 320,
+        "center_mhz": 169.99999999999886,
+        "display_name": "320 MS/s\uff08\u7ea6256 MHz\u53ef\u7528\u79d1\u5b66\u5e26\u5bbd\uff09",
+        "mode": "spec_only",
+        "output_mode_code": 2
+      },
+      "qsfp": {
+        "link_up": true,
+        "module_present": true,
+        "raw_flags": 2559438877
+      },
+      "sample0": {
+        "rfdc": 9245784964,
+        "time": 0
+      },
+      "streaming": false,
+      "timing": {
+        "configured_clock_ref": 0,
+        "configured_sync_mode": 0,
+        "pps_count": 116,
+        "pps_input_high": true,
+        "pps_recent": true,
+        "reference_locked": true
+      }
+    },
+    "stopped": true
+  },
+  "warnings": []
+}

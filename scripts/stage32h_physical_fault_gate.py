@@ -198,8 +198,8 @@ def main() -> int:
         "config_sha256": _sha256(config_path),
         "script_sha256": _sha256(Path(__file__).resolve()),
         "bitstream_expected_sha256": (
-            "439080046408267493a031efa1d097fcd3c2f818850ee9eac"
-            "1925ae95d6b094c"
+            "47117c9e656cfd8345125ef0130eb91a5ec0868cef59931b"
+            "40b957da29f31234"
         ),
         "timeline": [],
         "errors": [],

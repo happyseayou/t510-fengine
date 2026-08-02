@@ -5,11 +5,25 @@
 2026-07-29 外部绝对RF输入发现Stage 32接收页面把复频率符号映射反向：
 center为170 MHz时，真实280 MHz输入被标为60 MHz，真实60 MHz输入被标为
 280 MHz。随后ADC0/ADC1的外部280 MHz实测分别取得约72.7/74.9 dB镜像抑制，
-证明ADC、PFB和UDP数据本身没有产生此前DAC自环中的强镜像；DAC直接接频谱仪则
-确认梳状杂散真实存在于DAC侧。Stage 32h因此从`PASS`重新置为`IN_PROGRESS`，
+证明ADC、PFB和UDP数据本身没有产生此前DAC自环中的强镜像；当时的DAC直接频谱
+观察把进一步调查指向DAC侧。Stage 32h因此从`PASS`重新置为`IN_PROGRESS`，
 新增依赖链`32h1 -> 32h2 -> 32h3`，分别闭合接收频率轴、DAC DDS复数方向和
 DAC频谱纯度。既有吞吐、切换、故障恢复和长稳证据继续有效，但在三个新增步骤
 全部取得证据前不再声明Stage 32单板release闭合。
+
+2026-08-02，32h2已闭合。最终采用标准正向复数DDS的候选bit SHA256为
+`47117c9e656cfd8345125ef0130eb91a5ec0868cef59931b40b957da29f31234`；完整fresh
+CONFIGURE后，160的120/220 MHz与320的60/280 MHz在ADC0/ADC1上均以0-bin
+误差落在请求频率，正式窗口drop/gap/overflow增量为0。反向相位更新的
+`d4950668...5cb0` bit已由物理测试否决。一次旧初始化会话的符号异常在完整
+`STOP/flush -> bit download -> RFDC init/MTS`后消失，记录为`INIT-STATE-001`，
+并强化为强制发布顺序。32h2判定为`PASS`。
+
+随后32h3完成频谱仪9项矩阵：最差成对镜像抑制72.66 dBc、最差最大已标记杂散
+-53.04 dBc、四组25%到100%功率增量为12.02..12.12 dB，8路同时60 MHz、100%
+对DAC0载波影响仅-0.01 dB；没有复现固定10/20 MHz梳状峰。频谱仪后的160
+TIME_SPEC和320 SPEC_ONLY各60秒回归均约83.21 Gbit/s，主机drop/gap和板端
+PFB/XFFT/drop增量全部为0。32h3和32h现均为`PASS`，Stage 32单板release重新闭合。
 
 Stage 32 已正式进入实施阶段。`32a` 的 LMK 离线集成已经 `PASS`；`32b` 已完成
 10次Stage 32 LMK reload、双PLL锁定和寄存器回读，在“当前无法物理接触板卡”的
@@ -40,8 +54,10 @@ fresh CONFIGURE/MTS和320 TIME_ONLY 20秒无损恢复门禁均`PASS`。所有PYN
 不得自动重启；测试已PASS且没有修改RTL/bitstream。因此`32h-d`改为`PASS`。
 真正整板断电冷启动、服务自启、配置前fail-closed、fresh CONFIGURE/MTS和20秒
 320 TIME_ONLY无损恢复也已`PASS`。最后的160 TIME_SPEC、320 TIME_ONLY和320
-SPEC_ONLY各10分钟针对性soak全部通过，因此`32h`改为`PASS`，Stage 32单板
-release正式闭合。由于实验室当前只有一块 T510，`32i`状态仍为`BLOCKED`，
+SPEC_ONLY各10分钟针对性soak全部通过，因此在新增32h1～32h3之前，`32h`曾改为
+`PASS`并形成历史单板release；该声明曾因32h1～32h3重新打开，现已随三步全部
+通过而重新闭合。由于实验室
+当前只有一块 T510，`32i`状态仍为`BLOCKED`，
 Stage 32总体保持`IN_PROGRESS / BLOCKED_BY_HARDWARE`，不能用单板重复性替代
 双板物理同步。
 
@@ -94,10 +110,10 @@ Stage 32总体保持`IN_PROGRESS / BLOCKED_BY_HARDWARE`，不能用单板重复�
 | 32e | `PASS` | 160 MS/s、80 dB half-band、TIME | `32e_160msps_halfband80_time.md` |
 | 32f | `PASS` | 160 MS/s SPEC_ONLY/TIME_SPEC | `32f_160msps_spec_dual.md` |
 | 32g | `PASS` | 320 MS/s SPEC_ONLY | `32g_320msps_spec_only.md` |
-| 32h | `IN_PROGRESS` | 单板产品矩阵、频率真值和长稳 | `32h_single_board_release_soak.md` |
-| 32h1 | `IN_PROGRESS` | 外部绝对RF频率轴 | `32h1_external_rf_frequency_axis.md` |
-| 32h2 | `NOT_STARTED` | DAC DDS复数方向与新bitstream | `32h2_dac_dds_iq_direction.md` |
-| 32h3 | `NOT_STARTED` | DAC频谱仪纯度门禁 | `32h3_dac_spectral_purity.md` |
+| 32h | `PASS` | 单板产品矩阵、频率真值和长稳 | `32h_single_board_release_soak.md` |
+| 32h1 | `PASS` | 外部绝对RF频率轴 | `32h1_external_rf_frequency_axis.md` |
+| 32h2 | `PASS` | DAC DDS复数方向与bitstream | `32h2_dac_dds_iq_direction.md` |
+| 32h3 | `PASS` | DAC频谱仪纯度门禁 | `32h3_dac_spectral_purity.md` |
 | 32i | `BLOCKED` | 双板共同输入物理闭合 | `32i_multiboard_physical_closure.md` |
 
 ## 依赖和放行规则
@@ -196,11 +212,14 @@ Stage 32执行和准入范围只包含本计划冻结的LMK profile、bitstream�
 
 ## 当前实现证据
 
-- Stage 32 bitstream：
-  `439080046408267493a031efa1d097fcd3c2f818850ee9eac1925ae95d6b094c`。
-- 最终PPS recent guard构建fully routed，routing error为0，WNS
-  `+0.081 ns`、WHS `+0.009 ns`，DRC/Methodology Error和Critical Warning均为0：
-  `../vivado/stage32h_pps_recent_guard/build_summary.md`。
+- Stage 32h2当前候选bitstream：
+  `47117c9e656cfd8345125ef0130eb91a5ec0868cef59931b40b957da29f31234`。
+- 被物理方向测试否决、禁止发布的bitstream：
+  `d4950668aeb42ba1145e1504018934dde838b8a422126dde7178afa9e5575cb0`。
+- 当前32h2候选构建fully routed，routing error为0，WNS/WHS为
+  `+0.115/+0.010 ns`，DRC/Methodology Error和Critical Warning violation均为0：
+  `../vivado/stage32h2_dac_iq_direction/build_summary.md`。其父版本PPS recent guard
+  构建证据继续保存在`../vivado/stage32h_pps_recent_guard/build_summary.md`。
 - 45个Python测试、Board Agent 5个Rust测试、receiver 36个Rust测试、31个默认
   XSim testbench和LMK/half-band离线检查：
   `../vivado/stage32c/local_verification.md`。
@@ -245,6 +264,13 @@ Stage 32执行和准入范围只包含本计划冻结的LMK profile、bitstream�
   PFB/XFFT错误均为0，每项STOP后pipeline clean：
   `../board/stage32h_full_line_summary_20260726.json`，汇总SHA256为
   `24dcbe4541f8f17962f3c7d3c5b7c2f3f0033e52a8cd90d175e8cc6aa16297ad`。
+- 32h3频谱仪9项矩阵全部PASS：最差镜像72.66 dBc、最差最大杂散-53.04 dBc、
+  四组幅度增量12.02..12.12 dB、8路同时输出对DAC0影响-0.01 dB，未复现固定
+  10/20 MHz梳状谱。随后160 TIME_SPEC和320 SPEC_ONLY各60秒约83.21 Gbit/s，
+  主机drop/gap和板端PFB/XFFT/drop增量均为0：
+  `32h3_dac_spectral_purity.md`、
+  `../board/stage32h3_post_purity_160msps_time_spec_60s_20260802.json`和
+  `../board/stage32h3_post_purity_320msps_spec_only_60s_20260802.json`。
 - 32h-c最终PPS guard bitstream的定时320 SPEC_ONLY针对性复测为3/3 PASS：
   60秒一次、20秒两次，SPEC均约`1.2506..1.2507 Mpps /
   83.24 Gbit/s`，16 flow无sequence/frame gap，板端PFB/XFFT和所有drop/error

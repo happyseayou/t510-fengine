@@ -124,6 +124,9 @@ proc create_t510_rfdc_bd {} {
     set_property CONFIG.FREQ_HZ 160000000 [get_bd_pins pl_mts_sync_clk_0/pl_clk]
 
     set rfdc [create_bd_cell -type ip -vlnv xilinx.com:ip:usp_rf_data_converter:2.6 usp_rf_data_converter_0]
+    # DAC_Data_Type describes the analog converter output: Stage 32 uses a
+    # real RF output.  The fine mixer mode below is I/Q->Real, so the PL side
+    # remains four interleaved complex samples (I0,Q0,...,I3,Q3) per beat.
     set_property -dict [list \
         CONFIG.ADC0_Clock_Source {1} \
         CONFIG.ADC0_Multi_Tile_Sync {true} \
@@ -199,7 +202,13 @@ proc create_t510_rfdc_bd {} {
         CONFIG.DAC3_Multi_Tile_Sync {true} \
         CONFIG.DAC3_Sampling_Rate {1.6000} \
         CONFIG.DAC_Data_Type00 {0} \
+        CONFIG.DAC_Data_Type02 {0} \
+        CONFIG.DAC_Data_Type10 {0} \
+        CONFIG.DAC_Data_Type12 {0} \
+        CONFIG.DAC_Data_Type20 {0} \
+        CONFIG.DAC_Data_Type22 {0} \
         CONFIG.DAC_Data_Type30 {0} \
+        CONFIG.DAC_Data_Type32 {0} \
         CONFIG.DAC_Data_Width00 {8} \
         CONFIG.DAC_Data_Width02 {8} \
         CONFIG.DAC_Data_Width10 {8} \
@@ -224,6 +233,14 @@ proc create_t510_rfdc_bd {} {
         CONFIG.DAC_Mixer_Type22 {2} \
         CONFIG.DAC_Mixer_Type30 {2} \
         CONFIG.DAC_Mixer_Type32 {2} \
+        CONFIG.DAC_Mixer_Mode00 {0} \
+        CONFIG.DAC_Mixer_Mode02 {0} \
+        CONFIG.DAC_Mixer_Mode10 {0} \
+        CONFIG.DAC_Mixer_Mode12 {0} \
+        CONFIG.DAC_Mixer_Mode20 {0} \
+        CONFIG.DAC_Mixer_Mode22 {0} \
+        CONFIG.DAC_Mixer_Mode30 {0} \
+        CONFIG.DAC_Mixer_Mode32 {0} \
         CONFIG.DAC_NCO_Freq00 {1.5} \
         CONFIG.DAC_NCO_Freq02 {1.5} \
         CONFIG.DAC_NCO_Freq10 {1.5} \

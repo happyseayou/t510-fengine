@@ -646,8 +646,8 @@ module t510_dac_loopback_source (
             amp = amplitude;
             base_phase = phase_acc + phase0 + phase_inject;
             if (mode == 2'd1) begin
-                i0 = sine_sample(base_phase, amp);
-                q0 = sine_sample(base_phase + 32'h4000_0000, amp);
+                i0 = sine_sample(base_phase + 32'h4000_0000, amp);
+                q0 = sine_sample(base_phase, amp);
                 i1 = i0;
                 q1 = q0;
                 i2 = i0;
@@ -664,14 +664,17 @@ module t510_dac_loopback_source (
                 i3 = 16'sd0;
                 q3 = 16'sd0;
             end else begin
-                i0 = sine_sample(base_phase, amp);
-                q0 = sine_sample(base_phase + 32'h4000_0000, amp);
-                i1 = sine_sample(base_phase + step, amp);
-                q1 = sine_sample(base_phase + step + 32'h4000_0000, amp);
-                i2 = sine_sample(base_phase + (step << 1), amp);
-                q2 = sine_sample(base_phase + (step << 1) + 32'h4000_0000, amp);
-                i3 = sine_sample(base_phase + (step << 1) + step, amp);
-                q3 = sine_sample(base_phase + (step << 1) + step + 32'h4000_0000, amp);
+                // Standard positive complex rotation in the conventional
+                // I=cos,Q=sin frame.  The Agent passes the signed baseband
+                // offset requested_rf-center without an extra sign change.
+                i0 = sine_sample(base_phase + 32'h4000_0000, amp);
+                q0 = sine_sample(base_phase, amp);
+                i1 = sine_sample(base_phase + step + 32'h4000_0000, amp);
+                q1 = sine_sample(base_phase + step, amp);
+                i2 = sine_sample(base_phase + (step << 1) + 32'h4000_0000, amp);
+                q2 = sine_sample(base_phase + (step << 1), amp);
+                i3 = sine_sample(base_phase + (step << 1) + step + 32'h4000_0000, amp);
+                q3 = sine_sample(base_phase + (step << 1) + step, amp);
             end
             channel_word_from = {q3, i3, q2, i2, q1, i1, q0, i0};
         end

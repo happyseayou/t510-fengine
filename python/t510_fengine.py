@@ -8205,9 +8205,8 @@ class T510FEngine:
             tone_hz = (float(step) / float(1 << 32)) * sample_rate
 
         z = iq[:, 0] + 1j * iq[:, 1]
-        # DAC source RTL emits I=sin(phase), Q=cos(phase), so I+jQ rotates in
-        # the negative direction for a positive phase step.
-        basis = np.exp(-1j * 2.0 * np.pi * float(tone_hz) * offsets / sample_rate)
+        # Stage 32h2 emits the standard I=cos, Q=sin positive complex rotation.
+        basis = np.exp(1j * 2.0 * np.pi * float(tone_hz) * offsets / sample_rate)
         residual = z / basis
         amplitude = np.abs(residual)
         phase_deg = np.rad2deg(np.unwrap(np.angle(residual)))

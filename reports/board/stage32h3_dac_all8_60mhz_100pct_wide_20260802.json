@@ -1,0 +1,48 @@
+{
+  "stage": "32h3",
+  "status": "PASS",
+  "timestamp_local": "2026-08-02T14:09:19+08:00",
+  "source": "user_provided_spectrum_analyzer_screenshot",
+  "board": {
+    "streaming": false,
+    "dac_enable_mask": 255,
+    "measured_dac_channel": 0,
+    "enabled_dac_channels": [0, 1, 2, 3, 4, 5, 6, 7],
+    "requested_rf_mhz_all_channels": 60.0,
+    "amplitude_percent_all_channels": 100.0,
+    "sample_rate_msps": 320,
+    "center_mhz": 170.0
+  },
+  "analyzer": {
+    "vendor": "SIGLENT",
+    "start_mhz": 10.0,
+    "stop_mhz": 330.0,
+    "rbw_hz": 10000,
+    "vbw_hz": 10000,
+    "detector": "PEAK",
+    "input_attenuation_db": 12.0,
+    "amplitude_offset_db": 90.0,
+    "reference_level_dbm": 70.0,
+    "overload_warning_present": false,
+    "power_values_are_offset_corrected_display_values": true
+  },
+  "markers": [
+    {"label": "carrier", "frequency_mhz": 60.0, "power_dbm_displayed": 94.21, "relative_dbc": 0.0},
+    {"label": "image_about_170mhz", "frequency_mhz": 280.0, "power_dbm_displayed": 8.62, "relative_dbc": -85.59},
+    {"label": "second_harmonic", "frequency_mhz": 120.253333, "power_dbm_displayed": 41.13, "relative_dbc": -53.08},
+    {"label": "spur", "frequency_mhz": 179.786667, "power_dbm_displayed": 27.67, "relative_dbc": -66.54},
+    {"label": "spur", "frequency_mhz": 260.0, "power_dbm_displayed": 26.76, "relative_dbc": -67.45}
+  ],
+  "assessment": {
+    "image_rejection_db": 85.59,
+    "image_gate_pass": true,
+    "largest_marked_spur_dbc": -53.08,
+    "spur_gate_pass": true,
+    "fixed_10_or_20mhz_comb_observed": false,
+    "dac0_power_dbm_after_offset_removal": 4.21,
+    "dac0_single_channel_reference_dbm": 4.22,
+    "dac0_power_change_with_other_channels_enabled_db": -0.01,
+    "channel_coupling_observed": false,
+    "spectrum_matrix_complete": true
+  }
+}
