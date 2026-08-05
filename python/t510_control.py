@@ -447,7 +447,7 @@ class FEngineController:
                 channel=channel,
                 phase0=phase0,
                 phase_inject=0,
-                mode="single_tone",
+                mode=T510FEngine.STAGE33_DAC_TONE_MODE,
             )
             rows.append({
                 "channel": channel,

@@ -45,9 +45,9 @@ PPS guard bitstream完成Vivado闭合，并通过3次针对性定时PPS 320 SPEC
 `stage32-ref-watchdog-r2-20260727`常驻PS watchdog，通过LMK SPI连续两次确认
 失锁后直接调用现有STOP/flush。最终物理测试锁存`LMK_PLL1_UNLOCKED`，PL确认
 停止延迟`0.257 ms`且flush clean；接线恢复后直接START仍被fault latch拒绝，
-fresh CONFIGURE/MTS和320 TIME_ONLY 20秒无损恢复门禁均`PASS`。所有PYNQ额外
-修改和跨进程CONFIGURE互斥记录在
-`../deployment/stage32_pynq_replication_guide.md`。RFDC驱动
+fresh CONFIGURE/MTS和320 TIME_ONLY 20秒无损恢复门禁均`PASS`。PYNQ安装、逐板
+配置和跨进程CONFIGURE互斥的当前通用说明见
+`../../docs/t510_pynq_deployment.md`。RFDC驱动
 `Reset()`/`ShutDown()`没有使PL可见的`rfdc_ready`下降，现已正式归类为维护动作，
 不再冒充故障注入。生产信号合同由新增XSim闭合：预约流STREAMING中拉低
 `rfdc_ready`，下一拍必须停流、锁存`RFDC_NOT_READY / code 6`，ready恢复后也
@@ -125,8 +125,8 @@ Stage 32总体保持`IN_PROGRESS / BLOCKED_BY_HARDWARE`，不能用单板重复�
 
 - 失败的时钟门禁不得通过修改数据面绕过。
 - 每个步骤必须保存实际命令、Git/bit SHA、`CORE_VERSION`、板卡地址、时间戳和报告。
-- Vivado 证据放在 `reports/vivado/stage32*/`，板端/主机 JSON 放在
-  `reports/board/`。
+- Stage 32 的必要结论已经固化到本目录报告，历史 Vivado 与板端/主机原始运行目录已
+  按 latest-only 规则清理。后续临时证据只写入固定 `build/*/latest/evidence/`。
 - Stage 32 UDP主机门禁使用 `astrolab@192.168.100.162`；sudo凭据只允许在运行时
   交互输入，不得写入仓库、报告、脚本参数或命令日志。
 - 32a 到 32h 全部通过后，只能声明“Stage 32 单板 release”。
@@ -296,9 +296,9 @@ Stage 32执行和准入范围只包含本计划冻结的LMK profile、bitstream�
   `../board/stage32h_physical_10mhz_watchdog_pass_20260727.json`、
   `../board/stage32h_watchdog_recovery_configure_20260727.json`和
   `../board/stage32h_watchdog_recovery_320_time_only_20s_20260727.json`。
-- 当前PYNQ相对基础镜像的全部额外修改、OS/xrfdc基线、GPIO/SPI映射、release
-  SHA256、systemd单元、CONFIGURE互斥、逐板安装和验收步骤见
-  `../deployment/stage32_pynq_replication_guide.md`。
+- 当前PYNQ相对基础镜像的组件、GPIO/SPI映射、systemd单元、CONFIGURE互斥、逐板
+  安装和验收步骤见 `../../docs/t510_pynq_deployment.md`；本阶段的历史release SHA和
+  实测结果仍以本文件及32h系列报告为准。
 - Linux warm reboot的boot-id变化和UART完整启动已归档；配置前Agent正确返回
   `PL_NOT_CONFIGURED`，随后同release完成固定MTS和定时320 SPEC_ONLY 20秒无损
   门禁：

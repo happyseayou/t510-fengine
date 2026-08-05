@@ -5,8 +5,10 @@ import unittest
 from scripts.t510_rf_spectral_metrics import (
     bin_for_rf,
     circular_bin_error,
+    cross_lane_phase_statistics,
     rf_for_bin,
     signed_bin,
+    strongest_spur,
 )
 
 
@@ -28,6 +30,28 @@ class RfSpectralMetricsTest(unittest.TestCase):
     def test_circular_error(self) -> None:
         self.assertEqual(circular_bin_error(0, 4095, 4096), 1)
         self.assertEqual(circular_bin_error(4095, 0, 4096), 1)
+
+    def test_strongest_spur_excludes_carrier_neighborhood(self) -> None:
+        power = [-100.0] * 16
+        power[15] = 0.0
+        power[14] = -10.0
+        power[0] = -20.0
+        power[5] = -52.0
+        self.assertEqual(strongest_spur(power, 15, 1), (5, -52.0))
+
+    def test_strongest_spur_requires_remaining_bins(self) -> None:
+        with self.assertRaises(ValueError):
+            strongest_spur([-1.0, 0.0, -2.0], 1, 1)
+
+    def test_cross_lane_phase_statistics_uses_circular_mean(self) -> None:
+        frames = [
+            {"phases": [[0.0], [0.5]]},
+            {"phases": [[0.1], [0.6]]},
+            {"phases": [[-0.1], [0.4]]},
+        ]
+        phase_deg, coherence = cross_lane_phase_statistics(frames, 0, 1, 0)
+        self.assertAlmostEqual(phase_deg, 28.6478898, places=6)
+        self.assertAlmostEqual(coherence, 1.0, places=6)
 
 
 if __name__ == "__main__":

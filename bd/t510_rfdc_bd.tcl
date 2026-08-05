@@ -141,6 +141,9 @@ proc create_t510_rfdc_bd {} {
     # DAC_Data_Type describes the analog converter output: Stage 33 uses a
     # real RF output.  The fine mixer mode below is I/Q->Real, so the PL side
     # remains four interleaved complex samples (I0,Q0,...,I3,Q3) per beat.
+    # RFDC 2.6 encodes legacy ADC Mode 2 as 1.  Freeze it on the eight physical
+    # converters: the AutoCal=2 diagnostic candidate did not improve the later
+    # isolated Fs/4 RF-ADC residual and was never promoted.
     set_property -dict [list \
         CONFIG.ADC0_Clock_Source {1} \
         CONFIG.ADC0_Multi_Tile_Sync {true} \
@@ -164,6 +167,14 @@ proc create_t510_rfdc_bd {} {
         CONFIG.ADC_Data_Type22 {1} \
         CONFIG.ADC_Data_Type30 {1} \
         CONFIG.ADC_Data_Type32 {1} \
+        CONFIG.ADC_CalOpt_Mode00 {1} \
+        CONFIG.ADC_CalOpt_Mode02 {1} \
+        CONFIG.ADC_CalOpt_Mode10 {1} \
+        CONFIG.ADC_CalOpt_Mode12 {1} \
+        CONFIG.ADC_CalOpt_Mode20 {1} \
+        CONFIG.ADC_CalOpt_Mode22 {1} \
+        CONFIG.ADC_CalOpt_Mode30 {1} \
+        CONFIG.ADC_CalOpt_Mode32 {1} \
         CONFIG.ADC_Data_Width00 {4} \
         CONFIG.ADC_Data_Width02 {4} \
         CONFIG.ADC_Data_Width10 {4} \
@@ -314,6 +325,7 @@ proc create_t510_rfdc_bd {} {
         _assert_bd_property $rfdc CONFIG.ADC_Dither${slice} true
     }
     foreach slice {00 02 10 12 20 22 30 32} {
+        _assert_bd_property $rfdc CONFIG.ADC_CalOpt_Mode${slice} 1
         _assert_bd_property $rfdc CONFIG.DAC_Slice${slice}_Enable true
         _assert_bd_property $rfdc CONFIG.DAC_Data_Width${slice} 8
         _assert_bd_property $rfdc CONFIG.DAC_Data_Type${slice} 0

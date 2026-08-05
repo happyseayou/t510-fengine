@@ -36,6 +36,26 @@ def circular_bin_error(left: int, right: int, bins: int) -> int:
     return min(delta, bins - delta)
 
 
+def strongest_spur(
+    power_db: list[float], carrier_bin: int, exclusion_bins: int
+) -> tuple[int, float]:
+    """Return the strongest bin outside the circular carrier exclusion window."""
+    bins = len(power_db)
+    if bins == 0:
+        raise ValueError("power spectrum must not be empty")
+    if not 0 <= carrier_bin < bins:
+        raise ValueError("carrier bin is outside the spectrum")
+    if exclusion_bins < 0 or 2 * exclusion_bins + 1 >= bins:
+        raise ValueError("carrier exclusion must leave at least one spur bin")
+    candidates = (
+        index
+        for index in range(bins)
+        if circular_bin_error(index, carrier_bin, bins) > exclusion_bins
+    )
+    spur_bin = max(candidates, key=power_db.__getitem__)
+    return spur_bin, power_db[spur_bin] - power_db[carrier_bin]
+
+
 def http_json(url: str, *, timeout: float = 15.0) -> dict[str, Any]:
     with urllib.request.urlopen(url, timeout=timeout) as response:
         value = json.load(response)
@@ -107,12 +127,18 @@ def capture_spectra(host: str, port: int, *, count: int, timeout: float) -> list
             sample_rate_hz = struct.unpack_from("<I", payload, 92)[0]
             if header_bytes < 128 or lane_count == 0 or bins == 0 or sample_rate_hz == 0:
                 raise RuntimeError("receiver spectrum geometry is invalid")
+            amplitudes = []
+            phases = []
             powers = []
             offset = header_bytes
             for _lane in range(lane_count):
                 lane_bytes = bins * 12
                 if offset + lane_bytes > len(payload):
                     raise RuntimeError("receiver spectrum frame is truncated")
+                amplitudes.append(struct.unpack_from(f"<{bins}f", payload, offset))
+                phases.append(
+                    struct.unpack_from(f"<{bins}f", payload, offset + bins * 4)
+                )
                 powers.append(struct.unpack_from(f"<{bins}f", payload, offset + bins * 8))
                 offset += lane_bytes
             frames.append(
@@ -122,6 +148,8 @@ def capture_spectra(host: str, port: int, *, count: int, timeout: float) -> list
                     "gap_before": bool(struct.unpack_from("<I", payload, 28)[0]),
                     "bins": bins,
                     "sample_rate_hz": sample_rate_hz,
+                    "amplitudes": amplitudes,
+                    "phases": phases,
                     "powers": powers,
                 }
             )
@@ -135,6 +163,20 @@ def average_lane_power(frames: list[dict[str, Any]], lane: int) -> list[float]:
         linear = sum(10.0 ** (float(frame["powers"][lane][index]) / 10.0) for frame in frames)
         result.append(10.0 * math.log10(max(linear / len(frames), 1.0e-30)))
     return result
+
+
+def cross_lane_phase_statistics(
+    frames: list[dict[str, Any]], reference_lane: int, lane: int, bin_index: int
+) -> tuple[float, float]:
+    """Return circular-mean phase difference in degrees and its coherence."""
+    phasor = 0j
+    for frame in frames:
+        delta = float(frame["phases"][lane][bin_index]) - float(
+            frame["phases"][reference_lane][bin_index]
+        )
+        phasor += complex(math.cos(delta), math.sin(delta))
+    phasor /= len(frames)
+    return math.degrees(math.atan2(phasor.imag, phasor.real)), abs(phasor)
 
 
 def counter_view(state: dict[str, Any]) -> dict[str, int]:
@@ -157,10 +199,28 @@ def main() -> int:
     parser.add_argument("--receiver-host", default="192.168.100.162")
     parser.add_argument("--receiver-port", type=int, default=8089)
     parser.add_argument("--expected-rf-mhz", type=float, required=True)
+    parser.add_argument(
+        "--probe-rf-mhz",
+        type=float,
+        action="append",
+        default=[],
+        help="RF frequency to report explicitly; repeat for multiple probe points",
+    )
     parser.add_argument("--lanes", default="0,1")
     parser.add_argument("--captures", type=int, default=5)
     parser.add_argument("--bin-tolerance", type=int, default=1)
     parser.add_argument("--min-image-rejection-db", type=float, default=60.0)
+    parser.add_argument(
+        "--max-spur-dbc",
+        type=float,
+        help="optional maximum allowed spur level relative to the carrier (for example -50)",
+    )
+    parser.add_argument(
+        "--carrier-exclusion-bins",
+        type=int,
+        default=2,
+        help="bins on each side of the carrier excluded from the spur search",
+    )
     parser.add_argument("--timeout", type=float, default=15.0)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -170,6 +230,10 @@ def main() -> int:
         raise ValueError("--lanes must contain unique non-negative lane numbers")
     if args.captures <= 0:
         raise ValueError("--captures must be positive")
+    if args.max_spur_dbc is not None and args.max_spur_dbc >= 0.0:
+        raise ValueError("--max-spur-dbc must be negative")
+    if args.carrier_exclusion_bins < 0:
+        raise ValueError("--carrier-exclusion-bins must be non-negative")
 
     before = http_json(args.receiver_base.rstrip("/") + "/api/state")
     config = before.get("config", {})
@@ -196,11 +260,32 @@ def main() -> int:
     image_bin = bin_for_rf(center_mhz, sample_rate_hz, bins, image_rf_mhz)
     errors: list[str] = []
     rows = []
+    lane_powers: dict[int, list[float]] = {}
     for lane in lanes:
         power = average_lane_power(frames, lane)
+        lane_powers[lane] = power
         peak_bin = max(range(bins), key=power.__getitem__)
         bin_error = circular_bin_error(peak_bin, expected_bin, bins)
         image_rejection_db = power[expected_bin] - power[image_bin]
+        spur_bin, max_spur_dbc = strongest_spur(
+            power, peak_bin, args.carrier_exclusion_bins
+        )
+        probes = []
+        for probe_rf_mhz in args.probe_rf_mhz:
+            probe_bin = bin_for_rf(
+                center_mhz, sample_rate_hz, bins, probe_rf_mhz
+            )
+            probes.append(
+                {
+                    "requested_rf_mhz": probe_rf_mhz,
+                    "bin": probe_bin,
+                    "mapped_rf_mhz": rf_for_bin(
+                        center_mhz, sample_rate_hz, bins, probe_bin
+                    ),
+                    "power_db": power[probe_bin],
+                    "dbc_to_expected": power[probe_bin] - power[expected_bin],
+                }
+            )
         row = {
             "lane": lane,
             "peak_bin": peak_bin,
@@ -213,12 +298,57 @@ def main() -> int:
             "image_bin": image_bin,
             "image_power_db": power[image_bin],
             "image_rejection_db": image_rejection_db,
+            "carrier_exclusion_bins": args.carrier_exclusion_bins,
+            "max_spur_bin": spur_bin,
+            "max_spur_rf_mhz": rf_for_bin(
+                center_mhz, sample_rate_hz, bins, spur_bin
+            ),
+            "max_spur_power_db": power[spur_bin],
+            "max_spur_dbc": max_spur_dbc,
+            "probes": probes,
         }
         rows.append(row)
         if bin_error > args.bin_tolerance:
             errors.append(f"LANE{lane}_RF_BIN_MISMATCH")
         if image_bin != expected_bin and image_rejection_db < args.min_image_rejection_db:
             errors.append(f"LANE{lane}_IMAGE_REJECTION_LOW")
+        if args.max_spur_dbc is not None and max_spur_dbc > args.max_spur_dbc:
+            errors.append(f"LANE{lane}_SPUR_TOO_HIGH")
+
+    cross_lane = []
+    reference_lane = lanes[0]
+    comparison_frequencies = list(
+        dict.fromkeys([args.expected_rf_mhz, *args.probe_rf_mhz])
+    )
+    for lane in lanes[1:]:
+        points = []
+        for rf_mhz in comparison_frequencies:
+            bin_index = bin_for_rf(center_mhz, sample_rate_hz, bins, rf_mhz)
+            phase_delta_deg, coherence = cross_lane_phase_statistics(
+                frames, reference_lane, lane, bin_index
+            )
+            points.append(
+                {
+                    "requested_rf_mhz": rf_mhz,
+                    "bin": bin_index,
+                    "mapped_rf_mhz": rf_for_bin(
+                        center_mhz, sample_rate_hz, bins, bin_index
+                    ),
+                    "power_delta_db": (
+                        lane_powers[lane][bin_index]
+                        - lane_powers[reference_lane][bin_index]
+                    ),
+                    "phase_delta_deg": phase_delta_deg,
+                    "phase_coherence": coherence,
+                }
+            )
+        cross_lane.append(
+            {
+                "reference_lane": reference_lane,
+                "lane": lane,
+                "points": points,
+            }
+        )
 
     before_counters = counter_view(before)
     after_counters = counter_view(after)
@@ -242,11 +372,18 @@ def main() -> int:
         "bins": bins,
         "bin_width_hz": sample_rate_hz / bins,
         "captures": args.captures,
+        "limits": {
+            "bin_tolerance": args.bin_tolerance,
+            "min_image_rejection_db": args.min_image_rejection_db,
+            "max_spur_dbc": args.max_spur_dbc,
+            "carrier_exclusion_bins": args.carrier_exclusion_bins,
+        },
         "first_frame_id": frames[0]["frame_id"],
         "last_frame_id": frames[-1]["frame_id"],
         "first_sample0": frames[0]["sample0"],
         "last_sample0": frames[-1]["sample0"],
         "lanes": rows,
+        "cross_lane": cross_lane,
         "receiver_counters_before": before_counters,
         "receiver_counters_after": after_counters,
         "receiver_counter_delta": counter_delta,

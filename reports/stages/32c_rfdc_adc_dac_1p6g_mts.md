@@ -109,8 +109,8 @@ Stage 32b `PASS`。
 
 ## 测试、证据、版本
 
-- Vivado：`reports/vivado/stage32c/` 已归档。
-- 本地验证：`reports/vivado/stage32c/local_verification.md`。当前LMK/half-band
+- Vivado 和本地验证结论已固化在本报告；原始 `reports/vivado` 运行目录已按
+  latest-only 规则清理。当前LMK/half-band
   离线检查、45个Python测试、Board Agent 5个Rust测试、receiver 36个Rust测试和
   31个默认XSim testbench均通过。
 - discovery：

@@ -44,7 +44,7 @@ def create_console(project_root: str | Path):
     import plotly.graph_objects as go
 
     root = Path(project_root).resolve()
-    bitfile = root / "build" / "stage33-vivado" / "latest" / "overlay" / "t510_fengine.bit"
+    bitfile = root / "overlay" / "t510_fengine.bit"
     if not bitfile.exists():
         raise FileNotFoundError(bitfile)
 

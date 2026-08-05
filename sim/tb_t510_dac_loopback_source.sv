@@ -28,6 +28,13 @@ module tb_t510_dac_loopback_source;
     wire s30_axis_tvalid;
     wire s32_axis_tvalid;
     wire all_dac_ready;
+    integer spectral_i [0:15];
+    integer spectral_q [0:15];
+    real spectral_power [0:15];
+
+    localparam real PI = 3.14159265358979323846;
+    localparam real SPUR_POWER_RATIO_85DBC = 3.162277660168379e-9;
+    localparam real DC_POWER_RATIO_75DBC = 3.162277660168379e-8;
 
     always #5 clk = ~clk;
 
@@ -60,6 +67,74 @@ module tb_t510_dac_loopback_source;
             `TB_CHECK(s16(s00_axis_tdata[95:80]) > -16'sd16 && s16(s00_axis_tdata[95:80]) < 16'sd16, {label, " q2 near zero"})
             `TB_CHECK(s16(s00_axis_tdata[111:96]) > -16'sd16 && s16(s00_axis_tdata[111:96]) < 16'sd16, {label, " i3 near zero"})
             `TB_CHECK(s16(s00_axis_tdata[127:112]) > 16'sd4070, {label, " q3 positive full scale"})
+        end
+    endtask
+
+    task automatic capture_ch0_word(input integer base_sample);
+        begin
+            spectral_i[base_sample + 0] = s16(s00_axis_tdata[15:0]);
+            spectral_q[base_sample + 0] = s16(s00_axis_tdata[31:16]);
+            spectral_i[base_sample + 1] = s16(s00_axis_tdata[47:32]);
+            spectral_q[base_sample + 1] = s16(s00_axis_tdata[63:48]);
+            spectral_i[base_sample + 2] = s16(s00_axis_tdata[79:64]);
+            spectral_q[base_sample + 2] = s16(s00_axis_tdata[95:80]);
+            spectral_i[base_sample + 3] = s16(s00_axis_tdata[111:96]);
+            spectral_q[base_sample + 3] = s16(s00_axis_tdata[127:112]);
+        end
+    endtask
+
+    task automatic check_stage33_spectrum;
+        integer k;
+        integer n;
+        real angle;
+        real bin_re;
+        real bin_im;
+        real reference_power;
+        real worst_spur_ratio;
+        begin
+            // DFT convention: X[k] = sum(x[n] * exp(-j*2*pi*k*n/16)).
+            // Mode 2 intentionally contains the +/-60 MHz pair used to
+            // predistort the measured RFDC Q path.  DC is checked separately
+            // because the signed amplitude truncation is not part of this LUT
+            // correction.  Every other bin is an unintended 20 MHz tooth.
+            for (k = 0; k < 16; k = k + 1) begin
+                bin_re = 0.0;
+                bin_im = 0.0;
+                for (n = 0; n < 16; n = n + 1) begin
+                    angle = 2.0 * PI * k * n / 16.0;
+                    bin_re = bin_re
+                        + spectral_i[n] * $cos(angle)
+                        + spectral_q[n] * $sin(angle);
+                    bin_im = bin_im
+                        + spectral_q[n] * $cos(angle)
+                        - spectral_i[n] * $sin(angle);
+                end
+                spectral_power[k] = bin_re * bin_re + bin_im * bin_im;
+            end
+
+            reference_power = spectral_power[3];
+            if (spectral_power[13] > reference_power) begin
+                reference_power = spectral_power[13];
+            end
+            `TB_CHECK(reference_power > 0.0, "Stage 33 spectrum has a nonzero reference tone")
+            `TB_CHECK(spectral_power[0] < reference_power * DC_POWER_RATIO_75DBC,
+                "Stage 33 signed-truncation DC remains below -75 dBc")
+
+            worst_spur_ratio = 0.0;
+            for (k = 0; k < 16; k = k + 1) begin
+                if ((k != 0) && (k != 3) && (k != 13)) begin
+                    if ((spectral_power[k] / reference_power) > worst_spur_ratio) begin
+                        worst_spur_ratio = spectral_power[k] / reference_power;
+                    end
+                    if (spectral_power[k] >= reference_power * SPUR_POWER_RATIO_85DBC) begin
+                        $display("    unexpected 20 MHz tooth: bin=%0d ratio=%0e", k,
+                            spectral_power[k] / reference_power);
+                        `TB_CHECK(1'b0, "Stage 33 unintended 20 MHz tooth exceeds -85 dBc")
+                    end
+                end
+            end
+            $display("    Stage 33 worst unintended 20 MHz tooth = %0.2f dBc",
+                10.0 * $ln(worst_spur_ratio) / $ln(10.0));
         end
     endtask
 
@@ -157,11 +232,55 @@ module tb_t510_dac_loopback_source;
         #1;
         check_ch0_negative_quadrature("negative Fs/4 complex rotation");
 
+        tone_mode_vec[1:0] = 2'd2;
+        tone_phase_step_vec[31:0] = 32'h4000_0000;
+        tone_phase_epoch <= 32'd6;
+        @(posedge clk);
+        #1;
+        `TB_CHECK(s16(s00_axis_tdata[15:0]) > 16'sd4070, "Stage 33 Q-advance keeps i0 at positive full scale")
+        `TB_CHECK(s16(s00_axis_tdata[31:16]) < -16'sd4070, "Stage 33 Q-advance shifts q0 by exactly one sample")
+        `TB_CHECK(s16(s00_axis_tdata[63:48]) > -16'sd16 && s16(s00_axis_tdata[63:48]) < 16'sd16, "Stage 33 Q-advance shifts q1 by exactly one sample")
+        `TB_CHECK(s16(s00_axis_tdata[95:80]) > 16'sd4070, "Stage 33 Q-advance shifts q2 by exactly one sample")
+        `TB_CHECK(s16(s00_axis_tdata[127:112]) > -16'sd16 && s16(s00_axis_tdata[127:112]) < 16'sd16, "Stage 33 Q-advance shifts q3 by exactly one sample")
+
+        tone_mode_vec[1:0] = 2'd3;
+        tone_phase_epoch <= 32'd7;
+        @(posedge clk);
+        #1;
+        `TB_CHECK(s16(s00_axis_tdata[15:0]) > 16'sd4070, "Stage 33 Q-retard keeps i0 at positive full scale")
+        `TB_CHECK(s16(s00_axis_tdata[31:16]) > 16'sd4070, "Stage 33 Q-retard shifts q0 by exactly one sample")
+        `TB_CHECK(s16(s00_axis_tdata[63:48]) > -16'sd16 && s16(s00_axis_tdata[63:48]) < 16'sd16, "Stage 33 Q-retard shifts q1 by exactly one sample")
+        `TB_CHECK(s16(s00_axis_tdata[95:80]) < -16'sd4070, "Stage 33 Q-retard shifts q2 by exactly one sample")
+        `TB_CHECK(s16(s00_axis_tdata[127:112]) > -16'sd16 && s16(s00_axis_tdata[127:112]) < 16'sd16, "Stage 33 Q-retard shifts q3 by exactly one sample")
+
+        // At 320 MS/s, -60 MHz is phase step -3/16 = 0xd0000000.
+        // Four AXIS beats contain the complete 16-sample period whose errors
+        // can only land on the observed 20 MHz comb grid.
+        tone_mode_vec[1:0] = 2'd2;
+        tone_amplitude_vec[15:0] = 16'd8192;
+        tone_phase_step_vec[31:0] = 32'hd000_0000;
+        tone_phase0_vec[31:0] = 32'd0;
+        tone_phase_epoch <= 32'd8;
+        @(posedge clk);
+        #1;
+        capture_ch0_word(0);
+        @(posedge clk);
+        #1;
+        capture_ch0_word(4);
+        @(posedge clk);
+        #1;
+        capture_ch0_word(8);
+        @(posedge clk);
+        #1;
+        capture_ch0_word(12);
+        check_stage33_spectrum();
+
         tone_enable_mask = 8'hff;
         tone_amplitude_vec = {8{16'd4096}};
         tone_phase_step_vec = {8{32'h4000_0000}};
         tone_phase0_vec = 256'd0;
-        tone_phase_epoch <= 32'd6;
+        tone_mode_vec = 16'd0;
+        tone_phase_epoch <= 32'd9;
         @(posedge clk);
         #1;
         check_ch0_quadrature("eight-channel synchronized positive sequence");

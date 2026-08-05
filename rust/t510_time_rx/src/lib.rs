@@ -722,22 +722,19 @@ pub fn spec_payload_complex_offset(
     Ok(HEADER_BYTES + (((time_idx * chan_count + chan_idx) * ninput + input) * 4))
 }
 
-pub fn decode_spectrum_snapshot(
+pub fn decode_spectrum_values<F>(
     udp_payload: &[u8],
     header: &T510Header,
-    src_port: u16,
-    dst_port: u16,
-    gap_before: bool,
-) -> Result<SpectrumSnapshot, String> {
+    mut write_value: F,
+) -> Result<(), String>
+where
+    F: FnMut(usize, usize, f32, f32, f32),
+{
     validate_spec_header(header, udp_payload.len())?;
     let chan_count = header.chan_count as usize;
     let time_count = header.time_count as usize;
     let ninput = header.ninput as usize;
-    let mut lanes = Vec::with_capacity(ninput);
     for input in 0..ninput {
-        let mut amplitude = Vec::with_capacity(chan_count);
-        let mut phase_rad = Vec::with_capacity(chan_count);
-        let mut power_db = Vec::with_capacity(chan_count);
         for chan_idx in 0..chan_count {
             let mut sum_i = 0.0f64;
             let mut sum_q = 0.0f64;
@@ -758,17 +755,45 @@ pub fn decode_spectrum_snapshot(
             let avg_i = sum_i / denom;
             let avg_q = sum_q / denom;
             let avg_power = (sum_power / denom).max(1.0);
-            amplitude.push((avg_i.hypot(avg_q)) as f32);
-            phase_rad.push(avg_q.atan2(avg_i) as f32);
-            power_db.push((10.0 * avg_power.log10()) as f32);
+            write_value(
+                input,
+                chan_idx,
+                avg_i.hypot(avg_q) as f32,
+                avg_q.atan2(avg_i) as f32,
+                (10.0 * avg_power.log10()) as f32,
+            );
         }
-        lanes.push(SpectrumLane {
-            input,
-            amplitude,
-            phase_rad,
-            power_db,
-        });
     }
+    Ok(())
+}
+
+pub fn decode_spectrum_snapshot(
+    udp_payload: &[u8],
+    header: &T510Header,
+    src_port: u16,
+    dst_port: u16,
+    gap_before: bool,
+) -> Result<SpectrumSnapshot, String> {
+    validate_spec_header(header, udp_payload.len())?;
+    let chan_count = header.chan_count as usize;
+    let ninput = header.ninput as usize;
+    let mut lanes: Vec<SpectrumLane> = (0..ninput)
+        .map(|input| SpectrumLane {
+            input,
+            amplitude: Vec::with_capacity(chan_count),
+            phase_rad: Vec::with_capacity(chan_count),
+            power_db: Vec::with_capacity(chan_count),
+        })
+        .collect();
+    decode_spectrum_values(
+        udp_payload,
+        header,
+        |input, _chan_idx, amplitude, phase_rad, power_db| {
+            lanes[input].amplitude.push(amplitude);
+            lanes[input].phase_rad.push(phase_rad);
+            lanes[input].power_db.push(power_db);
+        },
+    )?;
 
     Ok(SpectrumSnapshot {
         sample0: header.sample0,

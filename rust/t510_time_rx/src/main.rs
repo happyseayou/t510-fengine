@@ -15,11 +15,13 @@ use std::sync::atomic::{fence, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use t510_time_rx::SpectrumSnapshot;
 use t510_time_rx::{
     ethernet_ipv4_udp_payload_range_fast, expected_sample0_delta,
     infer_sample_rate_from_sample0_delta, parse_t510_header_fast, time_payload_complex_offset,
     validate_spec_header_fast, validate_time_header_fast, ChannelWaveform, DisplayConfig,
-    FastPacketError, SampleRateMode, SpectrumLane, SpectrumSnapshot, T510Header, WaveformSnapshot,
+    FastPacketError, SampleRateMode, SpectrumLane, T510Header, WaveformSnapshot,
     RAW_SAMPLE_RATE_HZ, SPEC_BLOCK_COUNT, SPEC_TIME_COUNT, STREAM_SPEC, STREAM_TIME, TIME_NINPUT,
     TIME_SUBSAMPLES_PER_BEAT, TIME_UDP_PAYLOAD_BYTES,
 };
@@ -66,6 +68,9 @@ const SPECTRUM_PREVIEW_COLLECT_TIMEOUT: Duration = Duration::from_millis(500);
 const NO_DISPLAY_OWNER: usize = usize::MAX;
 const NO_SPECTRUM_FRAME: u64 = u64::MAX;
 const SPECTRUM_PREVIEW_GROUP_LEAD: u64 = 4096;
+const BINARY_FRAME_SPARE_LIMIT: usize = 64;
+const HTTP_WORKER_COUNT: usize = 16;
+const HTTP_QUEUE_CAPACITY: usize = 128;
 const DEFAULT_FLOW_COUNT: usize = 24;
 const DEFAULT_TIME_FLOW_COUNT: usize = 8;
 const DEFAULT_SPEC_FLOW_COUNT: usize = 16;
@@ -308,6 +313,7 @@ struct WorkerStats {
     spec_frame_gaps: u64,
     waveform_updates: u64,
     spectrum_updates: u64,
+    report_drops: u64,
     packets_per_sec: f64,
     gbps: f64,
     rx_processed_packets_per_sec: f64,
@@ -355,6 +361,7 @@ impl WorkerStats {
             spec_frame_gaps: 0,
             waveform_updates: 0,
             spectrum_updates: 0,
+            report_drops: 0,
             packets_per_sec: 0.0,
             gbps: 0.0,
             rx_processed_packets_per_sec: 0.0,
@@ -418,6 +425,7 @@ struct ReceiverStats {
     spec_frame_gaps: u64,
     waveform_updates: u64,
     spectrum_updates: u64,
+    report_drops: u64,
     websocket_clients: u64,
     waveform_websocket_clients: u64,
     spectrum_websocket_clients: u64,
@@ -511,6 +519,7 @@ impl ReceiverStats {
             spec_frame_gaps: 0,
             waveform_updates: 0,
             spectrum_updates: 0,
+            report_drops: 0,
             websocket_clients: 0,
             waveform_websocket_clients: 0,
             spectrum_websocket_clients: 0,
@@ -606,6 +615,8 @@ struct ApiState {
     waveform_age_ms: Option<u64>,
     spectrum_live: bool,
     spectrum_age_ms: Option<u64>,
+    waveform_binary_cache: BinaryFrameCacheStatus,
+    spectrum_binary_cache: BinaryFrameCacheStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -698,6 +709,7 @@ impl FullSpectrumAssembler {
         frame_id / u64::from(block_count.max(1))
     }
 
+    #[cfg(test)]
     fn reset_for_layout(&mut self, block: &SpectrumSnapshot) {
         self.sample0 = block.sample0;
         self.seq_no = block.seq_no;
@@ -739,6 +751,48 @@ impl FullSpectrumAssembler {
         }
     }
 
+    fn reset_for_header(&mut self, header: &T510Header, src_port: u16, dst_port: u16) {
+        self.sample0 = header.sample0;
+        self.seq_no = header.seq_no;
+        self.frame_id = header.frame_id;
+        self.product_id = header.product_id;
+        self.nchan = header.nchan;
+        self.block_count = header.block_count.max(1);
+        self.pfb_taps = header.pfb_taps;
+        self.fft_shift = header.fft_shift;
+        self.spec_status_flags = header.spec_status_flags;
+        self.spec_sample_rate_hz = header.spec_sample_rate_hz;
+        self.src_port = src_port;
+        self.dst_port = dst_port;
+        self.coverage_mask_lo = 0;
+        self.coverage_mask_hi = 0;
+        self.gap_before = false;
+        if self.lanes.len() != header.ninput as usize
+            || self
+                .lanes
+                .first()
+                .map(|lane| lane.amplitude.len())
+                .unwrap_or(0)
+                != header.nchan as usize
+        {
+            self.lanes = (0..header.ninput as usize)
+                .map(|input| SpectrumLane {
+                    input,
+                    amplitude: vec![0.0; header.nchan as usize],
+                    phase_rad: vec![0.0; header.nchan as usize],
+                    power_db: vec![-160.0; header.nchan as usize],
+                })
+                .collect();
+        } else {
+            for lane in &mut self.lanes {
+                lane.amplitude.fill(0.0);
+                lane.phase_rad.fill(0.0);
+                lane.power_db.fill(-160.0);
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn layout_matches(&self, block: &SpectrumSnapshot) -> bool {
         self.product_id == block.product_id
             && Self::frame_group(self.frame_id, self.block_count)
@@ -749,6 +803,17 @@ impl FullSpectrumAssembler {
             && self.lanes.len() == block.lanes.len()
     }
 
+    fn layout_matches_header(&self, header: &T510Header) -> bool {
+        self.product_id == header.product_id
+            && Self::frame_group(self.frame_id, self.block_count)
+                == Self::frame_group(header.frame_id, header.block_count)
+            && self.nchan == header.nchan
+            && self.block_count == header.block_count.max(1)
+            && self.pfb_taps == header.pfb_taps
+            && self.lanes.len() == header.ninput as usize
+    }
+
+    #[cfg(test)]
     fn ingest_block(&mut self, block: &SpectrumSnapshot) {
         if self.product_id == 0 || !self.layout_matches(block) {
             self.reset_for_layout(block);
@@ -795,15 +860,69 @@ impl FullSpectrumAssembler {
         self.coverage_mask_lo.count_ones() + self.coverage_mask_hi.count_ones()
     }
 
-    fn update(&mut self, block: &SpectrumSnapshot) -> Option<SpectrumSnapshot> {
+    #[cfg(test)]
+    fn update(&mut self, block: &SpectrumSnapshot) -> Option<bool> {
         let block_count = block.block_count.max(1).min(128);
         if block.block_index >= block_count {
             return None;
         }
         self.ingest_block(block);
-        Some(self.snapshot())
+        Some(self.coverage_blocks() >= u32::from(block_count))
     }
 
+    fn update_payload(
+        &mut self,
+        udp_payload: &[u8],
+        header: &T510Header,
+        src_port: u16,
+        dst_port: u16,
+        gap_before: bool,
+    ) -> Result<bool, String> {
+        let block_count = header.block_count.max(1).min(128);
+        if header.block_index >= block_count {
+            return Err("spectrum block index is outside block_count".to_string());
+        }
+        if self.product_id == 0 || !self.layout_matches_header(header) {
+            self.reset_for_header(header, src_port, dst_port);
+        }
+        self.sample0 = header.sample0;
+        self.seq_no = header.seq_no;
+        self.frame_id = header.frame_id;
+        self.product_id = header.product_id;
+        self.nchan = header.nchan;
+        self.block_count = header.block_count.max(1);
+        self.pfb_taps = header.pfb_taps;
+        self.fft_shift = header.fft_shift;
+        self.spec_status_flags = header.spec_status_flags;
+        self.spec_sample_rate_hz = header.spec_sample_rate_hz;
+        self.src_port = src_port;
+        self.dst_port = dst_port;
+        self.gap_before |= gap_before;
+
+        let start = header.chan0 as usize;
+        t510_time_rx::decode_spectrum_values(
+            udp_payload,
+            header,
+            |input, chan_idx, amplitude, phase_rad, power_db| {
+                if let Some(lane) = self.lanes.get_mut(input) {
+                    let index = start + chan_idx;
+                    if index < lane.amplitude.len() {
+                        lane.amplitude[index] = amplitude;
+                        lane.phase_rad[index] = phase_rad;
+                        lane.power_db[index] = power_db;
+                    }
+                }
+            },
+        )?;
+        if header.block_index < 64 {
+            self.coverage_mask_lo |= 1u64 << header.block_index;
+        } else {
+            self.coverage_mask_hi |= 1u64 << (header.block_index - 64);
+        }
+        Ok(self.coverage_blocks() >= u32::from(block_count))
+    }
+
+    #[cfg(test)]
     fn snapshot(&self) -> SpectrumSnapshot {
         SpectrumSnapshot {
             sample0: self.sample0,
@@ -862,10 +981,12 @@ impl SpecPreviewCapture {
         header.frame_id / u64::from(header.block_count.max(1))
     }
 
+    #[cfg(test)]
     fn block_frame_group(block: &SpectrumSnapshot) -> u64 {
         FullSpectrumAssembler::frame_group(block.frame_id, block.block_count)
     }
 
+    #[cfg(test)]
     fn arm_block(&mut self, block: &SpectrumSnapshot) {
         self.active = true;
         self.decode_window_start = Instant::now();
@@ -935,7 +1056,8 @@ impl SpecPreviewCapture {
         true
     }
 
-    fn ingest(&mut self, block: &SpectrumSnapshot, interval: Duration) -> Option<SpectrumSnapshot> {
+    #[cfg(test)]
+    fn ingest(&mut self, block: &SpectrumSnapshot, interval: Duration) -> bool {
         let new_frame = self
             .status
             .frame_id
@@ -948,17 +1070,18 @@ impl SpecPreviewCapture {
             self.arm_block(block);
         }
         let block_count = block.block_count.max(1);
-        let snapshot = self.assembler.update(block)?;
-        let complete = snapshot.coverage_blocks >= u32::from(block_count);
+        let Some(complete) = self.assembler.update(block) else {
+            return false;
+        };
         let was_complete = self.status.complete;
         self.status = SpecPreviewStatus {
-            frame_id: Some(snapshot.frame_id),
-            sample0: Some(snapshot.sample0),
-            coverage_blocks: snapshot.coverage_blocks,
+            frame_id: Some(self.assembler.frame_id),
+            sample0: Some(self.assembler.sample0),
+            coverage_blocks: self.assembler.coverage_blocks(),
             block_count,
             complete,
-            coverage_mask_lo: snapshot.coverage_mask_lo,
-            coverage_mask_hi: snapshot.coverage_mask_hi,
+            coverage_mask_lo: self.assembler.coverage_mask_lo,
+            coverage_mask_hi: self.assembler.coverage_mask_hi,
             last_block_index: Some(block.block_index),
             last_chan0: Some(block.chan0),
             last_chan_count: Some(block.chan_count),
@@ -970,9 +1093,59 @@ impl SpecPreviewCapture {
                 || self.last_publish.elapsed() >= interval.max(Duration::from_millis(1)))
         {
             self.last_publish = Instant::now();
-            Some(snapshot)
+            true
         } else {
-            None
+            false
+        }
+    }
+
+    fn ingest_payload(
+        &mut self,
+        udp_payload: &[u8],
+        header: &T510Header,
+        src_port: u16,
+        dst_port: u16,
+        gap_before: bool,
+        interval: Duration,
+    ) -> Result<bool, String> {
+        let new_frame = self
+            .status
+            .frame_id
+            .map(|frame_id| {
+                FullSpectrumAssembler::frame_group(frame_id, header.block_count)
+                    != Self::header_frame_group(header)
+            })
+            .unwrap_or(true);
+        if !self.active || new_frame {
+            self.arm_frame(header);
+        }
+        let block_count = header.block_count.max(1);
+        let complete =
+            self.assembler
+                .update_payload(udp_payload, header, src_port, dst_port, gap_before)?;
+        let was_complete = self.status.complete;
+        self.status = SpecPreviewStatus {
+            frame_id: Some(self.assembler.frame_id),
+            sample0: Some(self.assembler.sample0),
+            coverage_blocks: self.assembler.coverage_blocks(),
+            block_count,
+            complete,
+            coverage_mask_lo: self.assembler.coverage_mask_lo,
+            coverage_mask_hi: self.assembler.coverage_mask_hi,
+            last_block_index: Some(header.block_index),
+            last_chan0: Some(header.chan0),
+            last_chan_count: Some(header.chan_count),
+            last_dst_port: Some(dst_port),
+            last_error: None,
+        };
+        if complete
+            && (!was_complete
+                || self.last_publish.elapsed() >= interval.max(Duration::from_millis(1)))
+        {
+            self.last_publish = Instant::now();
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -1142,16 +1315,102 @@ impl SpectrumPreviewGate {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct BinaryFrameCache {
+    current: Option<Arc<Vec<u8>>>,
+    spare: Vec<Arc<Vec<u8>>>,
+    allocations: u64,
+    reuses: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct BinaryFrameCacheStatus {
+    current_bytes: usize,
+    spare_buffers: usize,
+    held_spare_buffers: usize,
+    allocations: u64,
+    reuses: u64,
+}
+
+impl BinaryFrameCache {
+    fn take_buffer(&mut self, capacity: usize) -> Arc<Vec<u8>> {
+        if let Some(current) = self.current.take() {
+            self.spare.push(current);
+        }
+        if let Some(index) = self
+            .spare
+            .iter()
+            .position(|frame| Arc::strong_count(frame) == 1)
+        {
+            let mut frame = self.spare.swap_remove(index);
+            let buffer = Arc::get_mut(&mut frame).expect("unshared binary frame");
+            buffer.clear();
+            if buffer.capacity() < capacity {
+                buffer.reserve(capacity - buffer.capacity());
+            }
+            self.reuses = self.reuses.saturating_add(1);
+            return frame;
+        }
+        if self.spare.len() >= BINARY_FRAME_SPARE_LIMIT {
+            self.spare.remove(0);
+        }
+        self.allocations = self.allocations.saturating_add(1);
+        Arc::new(Vec::with_capacity(capacity))
+    }
+
+    fn publish(&mut self, frame: Arc<Vec<u8>>) {
+        self.current = Some(frame);
+    }
+
+    fn current(&self) -> Option<Arc<Vec<u8>>> {
+        self.current.clone()
+    }
+
+    fn clear(&mut self) {
+        if let Some(current) = self.current.take() {
+            self.spare.push(current);
+        }
+    }
+
+    fn status(&self) -> BinaryFrameCacheStatus {
+        BinaryFrameCacheStatus {
+            current_bytes: self.current.as_ref().map(|frame| frame.len()).unwrap_or(0),
+            spare_buffers: self.spare.len(),
+            held_spare_buffers: self
+                .spare
+                .iter()
+                .filter(|frame| Arc::strong_count(frame) > 1)
+                .count(),
+            allocations: self.allocations,
+            reuses: self.reuses,
+        }
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.current.is_none()
+    }
+}
+
+impl From<Vec<u8>> for BinaryFrameCache {
+    fn from(value: Vec<u8>) -> Self {
+        Self {
+            current: Some(Arc::new(value)),
+            spare: Vec::new(),
+            allocations: 1,
+            reuses: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SharedState {
     config: DisplayConfig,
     config_generation: u64,
     stats: ReceiverStats,
-    waveform: Option<WaveformSnapshot>,
-    waveform_binary: Option<Vec<u8>>,
+    waveform_binary: BinaryFrameCache,
     waveform_updated: Option<Instant>,
-    spectrum: Option<SpectrumSnapshot>,
-    spectrum_binary: Option<Vec<u8>>,
+    spectrum_binary: BinaryFrameCache,
     spectrum_updated: Option<Instant>,
     spectrum_preview: SpecPreviewCapture,
 }
@@ -1341,11 +1600,9 @@ fn apply_display_config_patch_to_shared(
 ) -> Result<(DisplayConfig, u64), String> {
     patch.apply_to(&mut state.config)?;
     state.config_generation = state.config_generation.saturating_add(1);
-    state.waveform = None;
-    state.waveform_binary = None;
+    state.waveform_binary.clear();
     state.waveform_updated = None;
-    state.spectrum = None;
-    state.spectrum_binary = None;
+    state.spectrum_binary.clear();
     state.spectrum_updated = None;
     state.spectrum_preview = SpecPreviewCapture::default();
     let selected = state.config.sample_rate_mode().mhz();
@@ -1392,8 +1649,7 @@ fn clear_stale_previews(state: &mut SharedState) {
         || !preview_live(state.waveform_updated)
         || !waveform_rate_live(&state.config, &state.stats)
     {
-        state.waveform = None;
-        state.waveform_binary = None;
+        state.waveform_binary.clear();
         state.waveform_updated = None;
     }
     // A completed spectrum is direct evidence that SPEC packets are live.  The
@@ -1402,8 +1658,7 @@ fn clear_stale_previews(state: &mut SharedState) {
     // not let that reporting race evict the binary frame used by the web GUI;
     // freshness still removes it promptly when the SPEC stream really stops.
     if !state.config.needs_spec() || !preview_live(state.spectrum_updated) {
-        state.spectrum = None;
-        state.spectrum_binary = None;
+        state.spectrum_binary.clear();
         state.spectrum_updated = None;
     }
 }
@@ -2786,10 +3041,52 @@ fn encode_waveform_binary(snapshot: &WaveformSnapshot, seq_end: u32) -> Vec<u8> 
     out
 }
 
-fn encode_spectrum_binary(snapshot: &SpectrumSnapshot) -> Vec<u8> {
-    let lane_count = snapshot.lanes.len() as u32;
-    let bins_per_lane = snapshot
-        .lanes
+#[derive(Clone, Copy)]
+struct SpectrumBinaryHeader {
+    sample0: u64,
+    frame_id: u64,
+    seq_no: u32,
+    gap_before: bool,
+    chan0: u32,
+    chan_count: u16,
+    time_count: u16,
+    ninput: u16,
+    src_port: u16,
+    dst_port: u16,
+    product_id: u16,
+    nchan: u16,
+    block_index: u16,
+    block_count: u16,
+    pfb_taps: u16,
+    fft_shift: u16,
+    spec_status_flags: u32,
+    spec_sample_rate_hz: u32,
+    coverage_blocks: u32,
+    coverage_mask_lo: u64,
+    coverage_mask_hi: u64,
+}
+
+fn spectrum_binary_capacity(lanes: &[SpectrumLane]) -> usize {
+    let bins_per_lane = lanes
+        .iter()
+        .map(|lane| {
+            lane.amplitude
+                .len()
+                .min(lane.phase_rad.len())
+                .min(lane.power_db.len())
+        })
+        .min()
+        .unwrap_or(0);
+    128 + lanes.len() * bins_per_lane * 12
+}
+
+fn encode_spectrum_binary_parts(
+    header: SpectrumBinaryHeader,
+    lanes: &[SpectrumLane],
+    out: &mut Vec<u8>,
+) {
+    let lane_count = lanes.len() as u32;
+    let bins_per_lane = lanes
         .iter()
         .map(|lane| {
             lane.amplitude
@@ -2799,38 +3096,42 @@ fn encode_spectrum_binary(snapshot: &SpectrumSnapshot) -> Vec<u8> {
         })
         .min()
         .unwrap_or(0) as u32;
-    let mut out = Vec::with_capacity(128 + lane_count as usize * bins_per_lane as usize * 12);
-    push_u32(&mut out, SPECTRUM_MAGIC);
-    push_u16(&mut out, 2);
-    push_u16(&mut out, 128);
-    push_u64(&mut out, snapshot.sample0);
-    push_u64(&mut out, snapshot.frame_id);
-    push_u32(&mut out, snapshot.seq_no);
-    push_u32(&mut out, snapshot.gap_before as u32);
-    push_u32(&mut out, snapshot.chan0);
-    push_u32(&mut out, snapshot.chan_count as u32);
-    push_u32(&mut out, snapshot.time_count as u32);
-    push_u32(&mut out, snapshot.ninput as u32);
-    push_u32(&mut out, snapshot.src_port as u32);
-    push_u32(&mut out, snapshot.dst_port as u32);
-    push_u32(&mut out, lane_count);
-    push_u32(&mut out, bins_per_lane);
-    push_u32(&mut out, snapshot.product_id as u32);
-    push_u32(&mut out, snapshot.nchan as u32);
-    push_u32(&mut out, snapshot.block_index as u32);
-    push_u32(&mut out, snapshot.block_count as u32);
-    push_u32(&mut out, snapshot.pfb_taps as u32);
-    push_u32(&mut out, snapshot.fft_shift as u32);
-    push_u32(&mut out, snapshot.spec_status_flags);
-    push_u32(&mut out, snapshot.spec_sample_rate_hz);
-    push_u32(&mut out, snapshot.coverage_blocks);
-    push_u32(&mut out, 0);
-    push_u64(&mut out, snapshot.coverage_mask_lo);
-    push_u64(&mut out, snapshot.coverage_mask_hi);
+    out.clear();
+    let capacity = 128 + lane_count as usize * bins_per_lane as usize * 12;
+    if out.capacity() < capacity {
+        out.reserve(capacity - out.capacity());
+    }
+    push_u32(out, SPECTRUM_MAGIC);
+    push_u16(out, 2);
+    push_u16(out, 128);
+    push_u64(out, header.sample0);
+    push_u64(out, header.frame_id);
+    push_u32(out, header.seq_no);
+    push_u32(out, header.gap_before as u32);
+    push_u32(out, header.chan0);
+    push_u32(out, header.chan_count as u32);
+    push_u32(out, header.time_count as u32);
+    push_u32(out, header.ninput as u32);
+    push_u32(out, header.src_port as u32);
+    push_u32(out, header.dst_port as u32);
+    push_u32(out, lane_count);
+    push_u32(out, bins_per_lane);
+    push_u32(out, header.product_id as u32);
+    push_u32(out, header.nchan as u32);
+    push_u32(out, header.block_index as u32);
+    push_u32(out, header.block_count as u32);
+    push_u32(out, header.pfb_taps as u32);
+    push_u32(out, header.fft_shift as u32);
+    push_u32(out, header.spec_status_flags);
+    push_u32(out, header.spec_sample_rate_hz);
+    push_u32(out, header.coverage_blocks);
+    push_u32(out, 0);
+    push_u64(out, header.coverage_mask_lo);
+    push_u64(out, header.coverage_mask_hi);
     while out.len() < 128 {
         out.push(0);
     }
-    for lane in &snapshot.lanes {
+    for lane in lanes {
         for value in lane.amplitude.iter().take(bins_per_lane as usize) {
             out.extend_from_slice(&value.to_le_bytes());
         }
@@ -2841,6 +3142,69 @@ fn encode_spectrum_binary(snapshot: &SpectrumSnapshot) -> Vec<u8> {
             out.extend_from_slice(&value.to_le_bytes());
         }
     }
+}
+
+#[cfg(test)]
+fn spectrum_header_from_snapshot(snapshot: &SpectrumSnapshot) -> SpectrumBinaryHeader {
+    SpectrumBinaryHeader {
+        sample0: snapshot.sample0,
+        frame_id: snapshot.frame_id,
+        seq_no: snapshot.seq_no,
+        gap_before: snapshot.gap_before,
+        chan0: snapshot.chan0,
+        chan_count: snapshot.chan_count,
+        time_count: snapshot.time_count,
+        ninput: snapshot.ninput,
+        src_port: snapshot.src_port,
+        dst_port: snapshot.dst_port,
+        product_id: snapshot.product_id,
+        nchan: snapshot.nchan,
+        block_index: snapshot.block_index,
+        block_count: snapshot.block_count,
+        pfb_taps: snapshot.pfb_taps,
+        fft_shift: snapshot.fft_shift,
+        spec_status_flags: snapshot.spec_status_flags,
+        spec_sample_rate_hz: snapshot.spec_sample_rate_hz,
+        coverage_blocks: snapshot.coverage_blocks,
+        coverage_mask_lo: snapshot.coverage_mask_lo,
+        coverage_mask_hi: snapshot.coverage_mask_hi,
+    }
+}
+
+fn spectrum_header_from_assembler(assembler: &FullSpectrumAssembler) -> SpectrumBinaryHeader {
+    SpectrumBinaryHeader {
+        sample0: assembler.sample0,
+        frame_id: assembler.frame_id,
+        seq_no: assembler.seq_no,
+        gap_before: assembler.gap_before,
+        chan0: 0,
+        chan_count: assembler.nchan,
+        time_count: SPEC_TIME_COUNT,
+        ninput: assembler.lanes.len() as u16,
+        src_port: assembler.src_port,
+        dst_port: assembler.dst_port,
+        product_id: assembler.product_id,
+        nchan: assembler.nchan,
+        block_index: 0,
+        block_count: assembler.block_count,
+        pfb_taps: assembler.pfb_taps,
+        fft_shift: assembler.fft_shift,
+        spec_status_flags: assembler.spec_status_flags,
+        spec_sample_rate_hz: assembler.spec_sample_rate_hz,
+        coverage_blocks: assembler.coverage_blocks(),
+        coverage_mask_lo: assembler.coverage_mask_lo,
+        coverage_mask_hi: assembler.coverage_mask_hi,
+    }
+}
+
+#[cfg(test)]
+fn encode_spectrum_binary(snapshot: &SpectrumSnapshot) -> Vec<u8> {
+    let mut out = Vec::with_capacity(spectrum_binary_capacity(&snapshot.lanes));
+    encode_spectrum_binary_parts(
+        spectrum_header_from_snapshot(snapshot),
+        &snapshot.lanes,
+        &mut out,
+    );
     out
 }
 
@@ -3085,8 +3449,7 @@ impl ReceiverRuntime {
                             .unwrap_or(waveform.seq_no);
                         let binary = encode_waveform_binary(&waveform, seq_end);
                         if let Ok(mut guard) = self.shared.lock() {
-                            guard.waveform = Some(waveform);
-                            guard.waveform_binary = Some(binary);
+                            guard.waveform_binary.publish(Arc::new(binary));
                             guard.waveform_updated = Some(Instant::now());
                         }
                     }
@@ -3143,35 +3506,43 @@ impl ReceiverRuntime {
             false
         };
         if should_decode {
-            match t510_time_rx::decode_spectrum_snapshot(
-                udp_payload,
-                &header,
-                src_port,
-                dst_port,
-                gap_before,
-            ) {
-                Ok(block) => {
-                    if let Ok(mut guard) = self.shared.lock() {
-                        if let Some(spectrum) = guard
-                            .spectrum_preview
-                            .ingest(&block, self.spectrum_interval)
-                        {
+            let decode_result = if let Ok(mut guard) = self.shared.lock() {
+                match guard.spectrum_preview.ingest_payload(
+                    udp_payload,
+                    &header,
+                    src_port,
+                    dst_port,
+                    gap_before,
+                    self.spectrum_interval,
+                ) {
+                    Ok(publish) => {
+                        if publish {
                             self.stats.spectrum_updates =
                                 self.stats.spectrum_updates.saturating_add(1);
                             self.rate_spectrum_updates =
                                 self.rate_spectrum_updates.saturating_add(1);
-                            let binary = encode_spectrum_binary(&spectrum);
-                            guard.spectrum = Some(spectrum);
-                            guard.spectrum_binary = Some(binary);
+                            let capacity =
+                                spectrum_binary_capacity(&guard.spectrum_preview.assembler.lanes);
+                            let mut frame = guard.spectrum_binary.take_buffer(capacity);
+                            encode_spectrum_binary_parts(
+                                spectrum_header_from_assembler(&guard.spectrum_preview.assembler),
+                                &guard.spectrum_preview.assembler.lanes,
+                                Arc::get_mut(&mut frame).expect("reusable spectrum frame"),
+                            );
+                            guard.spectrum_binary.publish(frame);
                             guard.spectrum_updated = Some(Instant::now());
                             self.last_spectrum = Instant::now();
                         }
+                        Ok(())
                     }
+                    Err(err) => Err(err),
                 }
-                Err(err) => {
-                    self.stats.last_error = Some(err.clone());
-                    record_spec_preview_error(&self.shared, Some(&header), err);
-                }
+            } else {
+                Ok(())
+            };
+            if let Err(err) = decode_result {
+                self.stats.last_error = Some(err.clone());
+                record_spec_preview_error(&self.shared, Some(&header), err);
             }
         }
     }
@@ -3434,6 +3805,31 @@ struct FanoutWorkerReport {
     per_flow: Vec<FlowStats>,
 }
 
+impl FanoutWorkerReport {
+    fn new(worker_id: usize, dst_port_base: u16, src_port_base: u16, flow_count: usize) -> Self {
+        Self {
+            worker_id,
+            stats: WorkerStats::new(worker_id),
+            per_flow: (0..flow_count)
+                .map(|flow_id| {
+                    FlowStats::new(
+                        flow_id,
+                        dst_port_base.saturating_add(flow_id as u16),
+                        src_port_base.saturating_add(flow_id as u16),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn refresh(&mut self, stats: &WorkerStats, per_flow: &[FlowStats]) {
+        self.worker_id = stats.worker_id;
+        self.stats.clone_from(stats);
+        self.per_flow.clear();
+        self.per_flow.extend_from_slice(per_flow);
+    }
+}
+
 struct FanoutWorkerConfig {
     worker_id: usize,
     interface: String,
@@ -3448,7 +3844,7 @@ struct FanoutWorkerConfig {
     web_fps: u32,
     waveform_max_points: usize,
     shared: Arc<Mutex<SharedState>>,
-    tx: mpsc::Sender<FanoutWorkerReport>,
+    report_slot: Arc<Mutex<FanoutWorkerReport>>,
     display_owner: Arc<AtomicUsize>,
     spectrum_gate: Arc<SpectrumPreviewGate>,
 }
@@ -3460,7 +3856,7 @@ struct FanoutWorkerRuntime {
     time_flow_count: usize,
     spec_flow_count: usize,
     shared: Arc<Mutex<SharedState>>,
-    tx: mpsc::Sender<FanoutWorkerReport>,
+    report_slot: Arc<Mutex<FanoutWorkerReport>>,
     display_owner: Arc<AtomicUsize>,
     spectrum_gate: Arc<SpectrumPreviewGate>,
     stats: WorkerStats,
@@ -3517,7 +3913,7 @@ impl FanoutWorkerRuntime {
             time_flow_count: config.time_flow_count,
             spec_flow_count: config.spec_flow_count,
             shared: config.shared.clone(),
-            tx: config.tx.clone(),
+            report_slot: config.report_slot.clone(),
             spectrum_gate: config.spectrum_gate.clone(),
             stats: WorkerStats::new(config.worker_id),
             per_flow: (0..config.flow_count)
@@ -3699,8 +4095,7 @@ impl FanoutWorkerRuntime {
                             .unwrap_or(waveform.seq_no);
                         let binary = encode_waveform_binary(&waveform, seq_end);
                         if let Ok(mut guard) = self.shared.lock() {
-                            guard.waveform = Some(waveform);
-                            guard.waveform_binary = Some(binary);
+                            guard.waveform_binary.publish(Arc::new(binary));
                             guard.waveform_updated = Some(Instant::now());
                         }
                     }
@@ -3749,34 +4144,42 @@ impl FanoutWorkerRuntime {
                 .spectrum_gate
                 .should_decode(&header, self.spectrum_interval);
         if should_decode {
-            match t510_time_rx::decode_spectrum_snapshot(
-                udp_payload,
-                &header,
-                src_port,
-                dst_port,
-                gap_before,
-            ) {
-                Ok(block) => {
-                    if let Ok(mut guard) = self.shared.lock() {
-                        if let Some(spectrum) = guard
-                            .spectrum_preview
-                            .ingest(&block, self.spectrum_interval)
-                        {
+            let decode_result = if let Ok(mut guard) = self.shared.lock() {
+                match guard.spectrum_preview.ingest_payload(
+                    udp_payload,
+                    &header,
+                    src_port,
+                    dst_port,
+                    gap_before,
+                    self.spectrum_interval,
+                ) {
+                    Ok(publish) => {
+                        if publish {
                             self.rate_spectrum_updates =
                                 self.rate_spectrum_updates.saturating_add(1);
                             self.spectrum_gate.mark_complete();
-                            let binary = encode_spectrum_binary(&spectrum);
-                            guard.spectrum = Some(spectrum);
-                            guard.spectrum_binary = Some(binary);
+                            let capacity =
+                                spectrum_binary_capacity(&guard.spectrum_preview.assembler.lanes);
+                            let mut frame = guard.spectrum_binary.take_buffer(capacity);
+                            encode_spectrum_binary_parts(
+                                spectrum_header_from_assembler(&guard.spectrum_preview.assembler),
+                                &guard.spectrum_preview.assembler.lanes,
+                                Arc::get_mut(&mut frame).expect("reusable spectrum frame"),
+                            );
+                            guard.spectrum_binary.publish(frame);
                             guard.spectrum_updated = Some(Instant::now());
                             self.last_spectrum = Instant::now();
                         }
+                        Ok(())
                     }
+                    Err(err) => Err(err),
                 }
-                Err(err) => {
-                    self.stats.last_error = Some(err.clone());
-                    record_spec_preview_error(&self.shared, Some(&header), err);
-                }
+            } else {
+                Ok(())
+            };
+            if let Err(err) = decode_result {
+                self.stats.last_error = Some(err.clone());
+                record_spec_preview_error(&self.shared, Some(&header), err);
             }
         }
     }
@@ -3999,22 +4402,23 @@ impl FanoutWorkerRuntime {
             }
             self.last_rate = Instant::now();
         }
-        if self.last_report.elapsed() >= Duration::from_millis(100) {
-            let _ = self.tx.send(FanoutWorkerReport {
-                worker_id: self.worker_id,
-                stats: self.stats.clone(),
-                per_flow: self.per_flow.clone(),
-            });
+        if self.last_report.elapsed() >= Duration::from_secs(1) {
+            self.refresh_report_slot();
             self.last_report = Instant::now();
         }
     }
 
     fn force_report(&mut self) {
-        let _ = self.tx.send(FanoutWorkerReport {
-            worker_id: self.worker_id,
-            stats: self.stats.clone(),
-            per_flow: self.per_flow.clone(),
-        });
+        self.refresh_report_slot();
+    }
+
+    fn refresh_report_slot(&mut self) {
+        match self.report_slot.lock() {
+            Ok(mut report) => report.refresh(&self.stats, &self.per_flow),
+            Err(_) => {
+                self.stats.report_drops = self.stats.report_drops.saturating_add(1);
+            }
+        }
     }
 }
 
@@ -4224,6 +4628,7 @@ fn aggregate_fanout_stats(
         stats.spectrum_updates = stats
             .spectrum_updates
             .saturating_add(worker.spectrum_updates);
+        stats.report_drops = stats.report_drops.saturating_add(worker.report_drops);
         stats.packets_per_sec += worker.packets_per_sec;
         stats.gbps += worker.gbps;
         stats.rx_processed_packets_per_sec += worker.rx_processed_packets_per_sec;
@@ -4309,9 +4714,18 @@ fn run_fanout_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::
     let flow_count = args.flow_count_clamped();
     let time_flow_count = args.time_flow_count_clamped();
     let spec_flow_count = args.spec_flow_count_clamped();
-    let (tx, rx) = mpsc::channel::<FanoutWorkerReport>();
     let display_owner = Arc::new(AtomicUsize::new(NO_DISPLAY_OWNER));
     let spectrum_gate = Arc::new(SpectrumPreviewGate::default());
+    let report_slots: Vec<Arc<Mutex<FanoutWorkerReport>>> = (0..worker_count)
+        .map(|worker_id| {
+            Arc::new(Mutex::new(FanoutWorkerReport::new(
+                worker_id,
+                args.dst_port_base(),
+                args.src_port_base,
+                flow_count,
+            )))
+        })
+        .collect();
     let fanout = PacketFanoutConfig {
         group: args.fanout_group,
         mode: args.fanout_mode,
@@ -4332,13 +4746,12 @@ fn run_fanout_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::
             web_fps: args.web_fps,
             waveform_max_points: args.waveform_max_points,
             shared: shared.clone(),
-            tx: tx.clone(),
+            report_slot: report_slots[worker_id].clone(),
             display_owner: display_owner.clone(),
             spectrum_gate: spectrum_gate.clone(),
         };
         thread::spawn(move || run_fanout_worker(worker));
     }
-    drop(tx);
 
     let mut base = ReceiverStats::new(&args);
     base.backend = "fanout".to_string();
@@ -4353,22 +4766,14 @@ fn run_fanout_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::
     let mut nic_reader = NicStatsReader::new(&args.interface);
     let mut last_nic = Instant::now();
     loop {
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(report) => {
-                let worker_id = report.worker_id;
-                if worker_id < reports.len() {
-                    reports[worker_id] = Some(report);
+        thread::sleep(Duration::from_secs(1));
+        for (worker_id, slot) in report_slots.iter().enumerate() {
+            if let Ok(slot) = slot.lock() {
+                match reports.get_mut(worker_id) {
+                    Some(Some(report)) => report.clone_from(&slot),
+                    Some(report @ None) => *report = Some(slot.clone()),
+                    None => {}
                 }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                base.last_error = Some("all fanout workers exited".to_string());
-            }
-        }
-        for report in rx.try_iter() {
-            let worker_id = report.worker_id;
-            if worker_id < reports.len() {
-                reports[worker_id] = Some(report);
             }
         }
         let (config, websocket_clients, waveform_websocket_clients, spectrum_websocket_clients) = {
@@ -4641,6 +5046,8 @@ fn handle_http(
                 waveform_age_ms,
                 spectrum_live,
                 spectrum_age_ms,
+                waveform_binary_cache: guard.waveform_binary.status(),
+                spectrum_binary_cache: guard.spectrum_binary.status(),
             }
         };
         let body = serde_json::to_vec(&state).unwrap_or_else(|_| b"{}".to_vec());
@@ -4725,10 +5132,10 @@ fn handle_waveform_ws(
         let payload = {
             let mut guard = shared.lock().unwrap();
             clear_stale_previews(&mut guard);
-            guard.waveform_binary.clone()
+            guard.waveform_binary.current()
         };
         if let Some(payload) = payload {
-            if let Err(err) = write_ws_binary_frame(&mut stream, &payload) {
+            if let Err(err) = write_ws_binary_frame(&mut stream, payload.as_ref()) {
                 break Err(err);
             }
         }
@@ -4774,10 +5181,10 @@ fn handle_spectrum_ws(
         let payload = {
             let mut guard = shared.lock().unwrap();
             clear_stale_previews(&mut guard);
-            guard.spectrum_binary.clone()
+            guard.spectrum_binary.current()
         };
         if let Some(payload) = payload {
-            if let Err(err) = write_ws_binary_frame(&mut stream, &payload) {
+            if let Err(err) = write_ws_binary_frame(&mut stream, payload.as_ref()) {
                 break Err(err);
             }
         }
@@ -4809,19 +5216,27 @@ fn websocket_accept(key: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(digest)
 }
 
-fn write_ws_binary_frame(stream: &mut TcpStream, payload: &[u8]) -> std::io::Result<()> {
-    let mut header = Vec::with_capacity(10);
-    header.push(0x82);
-    if payload.len() < 126 {
-        header.push(payload.len() as u8);
-    } else if payload.len() <= u16::MAX as usize {
-        header.push(126);
-        header.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+fn websocket_binary_header(payload_len: usize) -> ([u8; 10], usize) {
+    let mut header = [0u8; 10];
+    header[0] = 0x82;
+    let header_len = if payload_len < 126 {
+        header[1] = payload_len as u8;
+        2
+    } else if payload_len <= u16::MAX as usize {
+        header[1] = 126;
+        header[2..4].copy_from_slice(&(payload_len as u16).to_be_bytes());
+        4
     } else {
-        header.push(127);
-        header.extend_from_slice(&(payload.len() as u64).to_be_bytes());
-    }
-    stream.write_all(&header)?;
+        header[1] = 127;
+        header[2..10].copy_from_slice(&(payload_len as u64).to_be_bytes());
+        10
+    };
+    (header, header_len)
+}
+
+fn write_ws_binary_frame(stream: &mut TcpStream, payload: &[u8]) -> std::io::Result<()> {
+    let (header, header_len) = websocket_binary_header(payload.len());
+    stream.write_all(&header[..header_len])?;
     stream.write_all(payload)
 }
 
@@ -4875,13 +5290,35 @@ fn write_response(
 fn run_http(bind: String, shared: Arc<Mutex<SharedState>>, web_fps: u32) -> std::io::Result<()> {
     let listener = bind_reuse_tcp_listener(&bind)?;
     eprintln!("T510 TIME receiver HTML: http://{}", bind);
+    let (tx, rx) = mpsc::sync_channel::<TcpStream>(HTTP_QUEUE_CAPACITY);
+    let rx = Arc::new(Mutex::new(rx));
+    for worker_id in 0..HTTP_WORKER_COUNT {
+        let worker_rx = rx.clone();
+        let worker_shared = shared.clone();
+        thread::Builder::new()
+            .name(format!("t510-http-{worker_id}"))
+            .spawn(move || loop {
+                let stream = {
+                    let Ok(receiver) = worker_rx.lock() else {
+                        break;
+                    };
+                    match receiver.recv() {
+                        Ok(stream) => stream,
+                        Err(_) => break,
+                    }
+                };
+                let _ = handle_http(stream, worker_shared.clone(), web_fps);
+            })?;
+    }
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let shared = shared.clone();
-                thread::spawn(move || {
-                    let _ = handle_http(stream, shared, web_fps);
-                });
+                if tx.send(stream).is_err() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "all HTTP workers exited",
+                    ));
+                }
             }
             Err(err) => eprintln!("HTTP accept error: {err}"),
         }
@@ -5298,17 +5735,55 @@ mod tests {
     }
 
     #[test]
+    fn binary_frame_cache_reuses_unshared_payload_storage() {
+        let mut cache = BinaryFrameCache::default();
+        let mut first = cache.take_buffer(4096);
+        Arc::get_mut(&mut first)
+            .unwrap()
+            .extend_from_slice(&[1, 2, 3]);
+        let first_ptr = first.as_ptr();
+        cache.publish(first);
+
+        let web_reference = cache.current().unwrap();
+        assert_eq!(web_reference.as_slice(), &[1, 2, 3]);
+        drop(web_reference);
+
+        let second = cache.take_buffer(4096);
+        assert_eq!(second.as_ptr(), first_ptr);
+        assert!(second.is_empty());
+        assert!(second.capacity() >= 4096);
+        assert_eq!(cache.status().allocations, 1);
+        assert_eq!(cache.status().reuses, 1);
+    }
+
+    #[test]
+    fn websocket_binary_headers_are_built_without_heap_storage() {
+        let (small, small_len) = websocket_binary_header(125);
+        assert_eq!(&small[..small_len], &[0x82, 125]);
+
+        let (medium, medium_len) = websocket_binary_header(393_344.min(u16::MAX as usize));
+        assert_eq!(medium_len, 4);
+        assert_eq!(medium[1], 126);
+
+        let (large, large_len) = websocket_binary_header(393_344);
+        assert_eq!(large_len, 10);
+        assert_eq!(large[1], 127);
+        assert_eq!(
+            u64::from_be_bytes(large[2..10].try_into().unwrap()),
+            393_344
+        );
+    }
+
+    #[test]
     fn config_patch_increments_generation_and_resets_previews() {
         let args = test_args();
         let mut state = SharedState {
             config: DisplayConfig::default(),
             config_generation: 7,
             stats: ReceiverStats::new(&args),
-            waveform: None,
-            waveform_binary: Some(vec![1, 2, 3]),
+            waveform_binary: vec![1, 2, 3].into(),
             waveform_updated: Some(Instant::now()),
-            spectrum: None,
-            spectrum_binary: Some(vec![4, 5, 6]),
+            spectrum_binary: vec![4, 5, 6].into(),
             spectrum_updated: Some(Instant::now()),
             spectrum_preview: SpecPreviewCapture::default(),
         };
@@ -5340,9 +5815,9 @@ mod tests {
         assert_eq!(generation, 8);
         assert_eq!(config.sample_rate_msps, 320);
         assert_eq!(state.config_generation, 8);
-        assert!(state.waveform_binary.is_none());
+        assert!(state.waveform_binary.is_empty());
         assert!(state.waveform_updated.is_none());
-        assert!(state.spectrum_binary.is_none());
+        assert!(state.spectrum_binary.is_empty());
         assert!(state.spectrum_updated.is_none());
         assert!(!state.spectrum_preview.status.complete);
         assert_eq!(state.stats.selected_sample_rate_msps, 320);
@@ -5360,20 +5835,18 @@ mod tests {
             config: DisplayConfig::default(),
             config_generation: 0,
             stats,
-            waveform: None,
-            waveform_binary: Some(vec![1, 2, 3]),
+            waveform_binary: vec![1, 2, 3].into(),
             waveform_updated: Some(Instant::now() - PREVIEW_STALE_AFTER - Duration::from_millis(1)),
-            spectrum: None,
-            spectrum_binary: Some(vec![4, 5, 6]),
+            spectrum_binary: vec![4, 5, 6].into(),
             spectrum_updated: Some(Instant::now()),
             spectrum_preview: SpecPreviewCapture::default(),
         };
 
         clear_stale_previews(&mut state);
 
-        assert!(state.waveform_binary.is_none());
+        assert!(state.waveform_binary.is_empty());
         assert!(state.waveform_updated.is_none());
-        assert!(state.spectrum_binary.is_some());
+        assert!(!state.spectrum_binary.is_empty());
         assert!(state.spectrum_updated.is_some());
     }
 
@@ -5388,20 +5861,18 @@ mod tests {
             config: DisplayConfig::default(),
             config_generation: 0,
             stats,
-            waveform: None,
-            waveform_binary: Some(vec![1, 2, 3]),
+            waveform_binary: vec![1, 2, 3].into(),
             waveform_updated: Some(Instant::now()),
-            spectrum: None,
-            spectrum_binary: Some(vec![4, 5, 6]),
+            spectrum_binary: vec![4, 5, 6].into(),
             spectrum_updated: Some(Instant::now()),
             spectrum_preview: SpecPreviewCapture::default(),
         };
 
         clear_stale_previews(&mut state);
 
-        assert!(state.waveform_binary.is_none());
+        assert!(state.waveform_binary.is_empty());
         assert!(state.waveform_updated.is_none());
-        assert!(state.spectrum_binary.is_some());
+        assert!(!state.spectrum_binary.is_empty());
         assert!(state.spectrum_updated.is_some());
     }
 
@@ -5513,6 +5984,28 @@ mod tests {
         assert_eq!(stats.detected_sample_rate_msps, Some(320));
         assert_eq!(stats.per_flow[0].time_packets, 10);
         assert_eq!(stats.per_flow[1].time_packets, 20);
+    }
+
+    #[test]
+    fn fanout_report_refresh_reuses_preallocated_flow_storage() {
+        let args = test_args();
+        let mut report = FanoutWorkerReport::new(
+            0,
+            args.dst_port_base(),
+            args.src_port_base,
+            args.flow_count_clamped(),
+        );
+        let original_ptr = report.per_flow.as_ptr();
+        let mut worker = WorkerStats::new(0);
+        worker.spec_packets = 123;
+        let mut flows = report.per_flow.clone();
+        flows[8].spec_packets = 456;
+
+        report.refresh(&worker, &flows);
+
+        assert_eq!(report.per_flow.as_ptr(), original_ptr);
+        assert_eq!(report.stats.spec_packets, 123);
+        assert_eq!(report.per_flow[8].spec_packets, 456);
     }
 
     #[test]
@@ -6065,30 +6558,63 @@ mod tests {
 
         let block1_header = spec_preview_header(7, 1, 2);
         assert!(capture.should_decode(&block1_header, interval));
-        assert!(capture
-            .ingest(&spec_preview_block(7, 1, 2), interval)
-            .is_none());
+        assert!(!capture.ingest(&spec_preview_block(7, 1, 2), interval));
         assert_eq!(capture.status.coverage_blocks, 1);
 
         let block0_header = spec_preview_header(8, 0, 2);
         assert!(capture.should_decode(&block0_header, interval));
-        assert!(capture
-            .ingest(&spec_preview_block(8, 0, 2), interval)
-            .is_none());
+        assert!(!capture.ingest(&spec_preview_block(8, 0, 2), interval));
         assert_eq!(capture.status.frame_id, Some(8));
         assert_eq!(capture.status.coverage_blocks, 1);
         assert!(!capture.status.complete);
 
         let block1_header = spec_preview_header(8, 1, 2);
         assert!(capture.should_decode(&block1_header, interval));
-        let snapshot = capture
-            .ingest(&spec_preview_block(8, 1, 2), Duration::from_millis(1))
-            .unwrap();
+        assert!(capture.ingest(&spec_preview_block(8, 1, 2), Duration::from_millis(1)));
+        let snapshot = capture.assembler.snapshot();
         assert_eq!(snapshot.coverage_blocks, 2);
         assert_eq!(snapshot.coverage_mask_lo & 0b11, 0b11);
         assert_eq!(snapshot.lanes[0].amplitude[0], 1.0);
         assert_eq!(snapshot.lanes[0].amplitude[1], 2.0);
         assert!(capture.status.complete);
+    }
+
+    #[test]
+    fn spec_preview_payload_decode_writes_preallocated_assembler() {
+        let mut capture = SpecPreviewCapture::default();
+        capture.last_publish = Instant::now() - Duration::from_secs(1);
+        let mut payload = vec![0u8; t510_time_rx::SPEC_UDP_PAYLOAD_BYTES];
+        for sample in payload[128..].chunks_exact_mut(4) {
+            sample[..2].copy_from_slice(&3i16.to_le_bytes());
+            sample[2..].copy_from_slice(&4i16.to_le_bytes());
+        }
+
+        for block_index in 0..SPEC_BLOCK_COUNT {
+            let mut header = spec_preview_header(160 + u64::from(block_index), block_index, 16);
+            header.sample0 = 1234;
+            header.seq_no = u32::from(block_index);
+            header.chan0 = u32::from(block_index) * 256;
+            header.chan_count = 256;
+            header.ninput = TIME_NINPUT as u16;
+            header.nchan = 4096;
+            let publish = capture
+                .ingest_payload(
+                    &payload,
+                    &header,
+                    4008 + block_index,
+                    4308 + block_index,
+                    false,
+                    Duration::from_millis(1),
+                )
+                .unwrap();
+            assert_eq!(publish, block_index + 1 == SPEC_BLOCK_COUNT);
+        }
+
+        assert!(capture.status.complete);
+        assert_eq!(capture.status.coverage_blocks, u32::from(SPEC_BLOCK_COUNT));
+        assert!((capture.assembler.lanes[0].amplitude[0] - 5.0).abs() < 1.0e-6);
+        assert!((capture.assembler.lanes[0].phase_rad[0] - 4.0f32.atan2(3.0)).abs() < 1.0e-6);
+        assert!((capture.assembler.lanes[0].power_db[0] - 10.0 * 25.0f32.log10()).abs() < 1.0e-5);
     }
 
     #[test]
@@ -6184,11 +6710,9 @@ fn main() -> std::io::Result<()> {
         config: initial_config,
         config_generation: 0,
         stats,
-        waveform: None,
-        waveform_binary: None,
+        waveform_binary: BinaryFrameCache::default(),
         waveform_updated: None,
-        spectrum: None,
-        spectrum_binary: None,
+        spectrum_binary: BinaryFrameCache::default(),
         spectrum_updated: None,
         spectrum_preview: SpecPreviewCapture::default(),
     }));

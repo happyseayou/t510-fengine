@@ -708,8 +708,8 @@ wire ref_chain_locked = data_rst_n && all_dac_ready;
 ### PS reference watchdog：实现、部署和CONFIGURE互斥
 
 已选择上述第1种方案，不修改RTL、bitstream、UDP或REST合同。最终板端release为
-`stage32-ref-watchdog-r2-20260727`，独立复刻说明为
-`../deployment/stage32_pynq_replication_guide.md`。
+`stage32-ref-watchdog-r2-20260727`。当前通用的PYNQ安装、逐板配置与多板部署方法
+见 `../../docs/t510_pynq_deployment.md`。
 
 实现组成：
 

@@ -12,10 +12,40 @@
 
 # stage 27j TIME + SPEC， 加入PFB
 
-# 预计stage 28开始生产力收紧，具体要求
-## 1、去除所有的多余的模块，包括RTL和本地接收端
-## 2、根据新的RTL顶层设计（现在还没有），收紧所有的接口，payload
-## 3、根据新的X-engine设计，收紧所有的接口，payload
-## 4、板卡端模式定义：TIME only， TIME+SPEC， SPEC only
-## 5、rust接收端模式定义：监控预览（常驻，根据板卡模式，显示不同的内容），X-engine和Beamformer模式（暂不实现）
-## 6、负载设计，不同模式下，如果存在多个板块，多个接受端，SPEC负载按照频率来分配，那么TIME呢？
+# stage 28 推进200MHz频宽的全速率的 TIME_only / SPEC_only 模式
+在保持100MHz模式都正常的情况下，推进200MHz模式的TIME_only / SPEC_only模式，解决现有的200MHz模式下的F-engine/output backpressure问题。
+注意每次改完后都要在100MHz模式下验证（TIME_SPEC），确保没有引入新的问题。
+要用vivado的mcp，等待使用阶梯式等待
+
+
+# 预计stage 29开始生产力，具体要求
+F-engine生产力
+
+
+# stage 30
+PYNQ上使用API模式
+
+# stage 31
+多板同步准备，协同API
+
+# stage 32
+修改时钟策略，改为10M的倍数，320MHz
+
+
+# stage 33
+原始采样率太低了，这样第一Nyquist区间内的射频输入只能到800 MHz。使用的3840MSps的采样率，DDC+12倍下抽样，这样射频输入可以到1.92GHz
+
+# stage 33a
+杂散相关的调研
+
+# stage 34
+把pfb提高到8-tap
+
+# stage 35
+多板同步，把stage 32i搞过来
+
+
+# 后续规划，忽略
+规划：
+限制adu数值到正负8192，预留一些给突发的rfi
+扫一遍bandpass

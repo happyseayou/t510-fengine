@@ -65,12 +65,27 @@ for index in $(seq 0 $((PORT_COUNT - 1))); do
 done
 
 if command -v iptables >/dev/null 2>&1; then
+  # Normalize upgrades to one current raw-table hook.  Older receiver releases
+  # used stage-numbered chains; leaving those hooks installed makes the active
+  # host configuration depend on deployment history.
+  while read -r legacy_chain; do
+    while iptables -t raw -C PREROUTING -j "${legacy_chain}" 2>/dev/null; do
+      iptables -t raw -D PREROUTING -j "${legacy_chain}"
+    done
+    iptables -t raw -F "${legacy_chain}"
+    iptables -t raw -X "${legacy_chain}"
+  done < <(
+    iptables -t raw -S |
+      awk '$1 == "-N" && $2 ~ /^T510_STAGE[0-9][[:alnum:]_]*_RX$/ { print $2 }'
+  )
+
   iptables -t raw -N T510_RX 2>/dev/null || true
+  while iptables -t raw -C PREROUTING -j T510_RX 2>/dev/null; do
+    iptables -t raw -D PREROUTING -j T510_RX
+  done
   iptables -t raw -F T510_RX
   iptables -t raw -A T510_RX -i "${IFACE}" -p udp --dport "${PORT_BASE}:$((PORT_BASE + PORT_COUNT - 1))" -j DROP
-  if ! iptables -t raw -C PREROUTING -j T510_RX 2>/dev/null; then
-    iptables -t raw -I PREROUTING 1 -j T510_RX
-  fi
+  iptables -t raw -I PREROUTING 1 -j T510_RX
 fi
 
 printf 'T510 RX tuning applied\n'

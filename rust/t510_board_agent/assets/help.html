@@ -71,7 +71,7 @@ curl -s http://192.168.100.117:8010/api/v2/status | jq</pre>
     <p><code>endpoints</code> 必须恰好 24 项，ID 0..23 各一次；0..7 为 <code>TIME</code>，8..23 为 <code>SPEC</code>。字段 <code>sample_rate_msps</code> 表示复采样率档位：<code>160</code> 是 160 MS/s，中心范围 80..1840 MHz；<code>320</code> 是 320 MS/s，中心范围 160..1760 MHz。160 支持三种 mode；320 明确拒绝 <code>time_spec</code>。ADC/DAC 模拟采样率为 3.84 GS/s，分别使用 12× 抽取/插值；UDP 数据格式保持不变。</p>
 <pre>curl -sS -X POST http://192.168.100.117:8010/api/v2/configure \
   -H 'Content-Type: application/json' \
-  --data @config/stage33/configure_160_time_only.example.json | jq</pre>
+  --data @config/t510/configure_160_time_only.example.json | jq</pre>
     <p>启动、停止和 reset：</p>
 <pre>curl -sS -X POST http://192.168.100.117:8010/api/v2/start \
   -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq
@@ -91,7 +91,7 @@ curl -sS http://192.168.100.117:8010/api/v2/sync/status | jq</pre>
     <h2>DAC 请求</h2>
 <pre>curl -sS -X PUT http://192.168.100.117:8010/api/v2/dac \
   -H 'Content-Type: application/json' \
-  --data @config/stage33/dac.example.json | jq</pre>
+  --data @config/t510/dac.example.json | jq</pre>
     <p>请求必须包含 <code>expected_board_id</code>、与当前 RFDC mixer 完全一致的 <code>center_mhz</code>，以及 channel 0..7 的完整八路 <code>enabled</code>、<code>rf_frequency_mhz</code>、<code>amplitude_percent</code>、<code>phase_deg</code>。RF 频率须满足 1 ≤ f &lt; 1920 MHz，并位于当前中心 ±80 MHz（160 MS/s）或 ±160 MHz（320 MS/s）。</p>
   </section>
 

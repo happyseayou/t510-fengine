@@ -24,7 +24,7 @@ from python.t510_control import (
     TIME_SRC_PORT_BASE,
 )
 from python.t510_fengine import RegisterMap, T510FEngine
-from scripts.stage33_agent_host_gate import _qsfp_physical_health, _stage33_rfdc_health
+from scripts.t510_board_host_gate import _qsfp_physical_health, _t510_rfdc_health
 
 
 class FakeCore:
@@ -270,9 +270,9 @@ class FEngineConfigTests(unittest.TestCase):
                 },
             },
         }
-        self.assertTrue(_stage33_rfdc_health(snapshot, require_valid=True)["ok"])
+        self.assertTrue(_t510_rfdc_health(snapshot, require_valid=True)["ok"])
         snapshot["rfdc"]["readback"]["blocks"][0]["factor"] = 5
-        health = _stage33_rfdc_health(snapshot, require_valid=True)
+        health = _t510_rfdc_health(snapshot, require_valid=True)
         self.assertFalse(health["ok"])
         self.assertIn("RFDC_ADC_FACTOR_MISMATCH", health["errors"])
 
@@ -505,6 +505,12 @@ class FEngineConfigTests(unittest.TestCase):
         tones = [event for event in core.events if event[0] == "tone"]
         self.assertEqual(len(tones), 8)
         self.assertTrue(all(event[1]["enable"] is False for event in tones))
+        self.assertTrue(
+            all(
+                event[1]["mode"] == T510FEngine.STAGE33_DAC_TONE_MODE
+                for event in tones
+            )
+        )
         self.assertEqual(core.events[-2], ("epoch",))
         self.assertEqual(core.events[-1], ("mask", 0x7F))
         self.assertEqual(result["enable_mask"], 0x7F)
@@ -557,6 +563,16 @@ class FEngineConfigTests(unittest.TestCase):
         self.assertEqual([row["enabled"] for row in result["channels"]], [True, False, True, False, False, True, False, True])
         self.assertEqual([row["amplitude_code"] for row in result["channels"]], list(range(1000, 1008)))
         self.assertAlmostEqual(result["channels"][2]["phase_deg"], 45.0)
+
+    def test_stage33_dac_compensation_modes_have_distinct_readback(self) -> None:
+        core = FakeFEngineFEngine()
+        core.set_dac_tone(channel=0, mode="stage33_q_advance")
+        core.set_dac_tone(channel=1, mode="stage33_q_retard")
+        result = core.read_dac_channels()
+        self.assertEqual(result["channels"][0]["mode"], 2)
+        self.assertEqual(result["channels"][0]["mode_name"], "stage33_q_advance")
+        self.assertEqual(result["channels"][1]["mode"], 3)
+        self.assertEqual(result["channels"][1]["mode_name"], "stage33_q_retard")
 
     def test_low_level_profiles_fix_routes_pfb_and_wire_parameters(self) -> None:
         for mode, clear_time, clear_spec, pfb_control in (("time_only", False, True, 0), ("spec_only", True, False, 3), ("time_spec", False, False, 3)):

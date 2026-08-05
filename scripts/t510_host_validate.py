@@ -67,7 +67,7 @@ def _delta(after: dict[str, Any], before: dict[str, Any], key: str) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Stage 33 Rust receiver/NIC gate")
+    parser = argparse.ArgumentParser(description="current T510 release Rust receiver/NIC gate")
     parser.add_argument("--sample-rate-msps", type=int, choices=(160, 320), required=True)
     parser.add_argument("--mode", choices=("time_only", "spec_only", "time_spec"), required=True)
     parser.add_argument("--center-mhz", type=float, default=200.0)
@@ -82,7 +82,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     if args.sample_rate_msps == 320 and args.mode == "time_spec":
-        parser.error("Stage 33 rejects 320 MS/s TIME_SPEC")
+        parser.error("current T510 release rejects 320 MS/s TIME_SPEC")
 
     needs_time = args.mode in ("time_only", "time_spec")
     needs_spec = args.mode in ("spec_only", "time_spec")
@@ -219,9 +219,9 @@ def main() -> int:
 
     ok = not errors
     result = {
-        "classification": f"HOST_STAGE33_{args.sample_rate_msps}MSPS_{args.mode}_RUST_RX_{'PASS' if ok else 'FAIL'}",
+        "classification": f"HOST_T510_{args.sample_rate_msps}MSPS_{args.mode}_RUST_RX_{'PASS' if ok else 'FAIL'}",
         "ok": ok,
-        "stage": 33,
+        "release": "latest",
         "sample_rate_msps": args.sample_rate_msps,
         "mode": args.mode,
         "center_mhz": args.center_mhz,
@@ -236,7 +236,11 @@ def main() -> int:
         "warnings": warnings,
         "errors": errors,
     }
-    output = Path(args.output) if args.output else _root() / "reports" / "board" / f"stage33_{args.sample_rate_msps}msps_{args.mode}_host.json"
+    output = (
+        Path(args.output)
+        if args.output
+        else _root() / "build" / "receiver" / "latest" / "evidence" / "host_validation.json"
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2, sort_keys=True))

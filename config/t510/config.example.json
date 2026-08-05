@@ -1,0 +1,56 @@
+{
+  "listen": "0.0.0.0:8010",
+  "management_interface": "eth0",
+  "python_executable": "/usr/local/share/pynq-venv/bin/python3",
+  "helper_path": "/opt/t510-agent/current/python/t510_hw.py",
+  "helper_pythonpath": "/opt/t510-agent/current",
+  "default_bitstream_id": "fengine-0x00010033",
+  "configure_timeout_seconds": 180,
+  "operation_timeout_seconds": 30,
+  "bitstreams": [
+    {
+      "id": "fengine-0x00010033",
+      "path": "/opt/t510-agent/current/overlay/t510_fengine.bit",
+      "sha256": "23c3eb507558820e786dd7247b6b43a59a2f3141ed3599d1f6655f19de5dd3da",
+      "core_version": "0x00010033",
+      "mts_adc_target_latency": 452,
+      "mts_dac_target_latency": 88,
+      "mts_campaign": {
+        "discovery": {
+          "rfdc_reset": 20,
+          "overlay_reload": 10,
+          "lmk_reload": 10,
+          "passed": 40
+        },
+        "fixed": {
+          "rfdc_reset": 20,
+          "overlay_reload": 10,
+          "lmk_reload": 10,
+          "passed": 40
+        },
+        "observed_adc_max": 432,
+        "observed_dac_max": 72,
+        "adc_margin": 20,
+        "dac_margin": 16,
+        "evidence_sha256": "a8199588f9f0cec7d4d130f011ac03626a3cb524cbcc8def86aacdd79d482f4a"
+      },
+      "profiles": [
+        {
+          "sample_rate_msps": 160,
+          "modes": [
+            "time_only",
+            "spec_only",
+            "time_spec"
+          ]
+        },
+        {
+          "sample_rate_msps": 320,
+          "modes": [
+            "time_only",
+            "spec_only"
+          ]
+        }
+      ]
+    }
+  ]
+}

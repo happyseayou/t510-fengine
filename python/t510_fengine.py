@@ -504,6 +504,9 @@ class T510FEngine:
     PRODUCTION_SYNC_MODE = "external_pps"
     RFDC_ADC_ANALOG_SAMPLE_RATE_HZ = 3_840_000_000
     RFDC_DAC_ANALOG_SAMPLE_RATE_HZ = 3_840_000_000
+    # API v1 compatibility: fs_analog historically used this shared alias.
+    # Stage 33 also reports the ADC and DAC analog rates explicitly.
+    RFDC_ANALOG_SAMPLE_RATE_HZ = RFDC_ADC_ANALOG_SAMPLE_RATE_HZ
     RFDC_COMPLEX_SAMPLE_RATE_HZ = 320_000_000
     RFDC_DECIMATION = 12
     RFDC_INTERPOLATION = 12
@@ -519,7 +522,14 @@ class T510FEngine:
         "constant_phasor": 1,
         "constant": 1,
         "phasor": 1,
+        "stage33_q_advance": 2,
+        "stage33_q_retard": 3,
     }
+    # Stage 33 direct-SSA measurements select the new compensated mode while
+    # mode 0 remains the unchanged accepted DDS contract.  The same bitstream
+    # also implements stage33_q_retard so physical direction can be reversed
+    # by software alone if the first on-board comparison requires it.
+    STAGE33_DAC_TONE_MODE = "stage33_q_advance"
     SCIENCE_SAMPLE_RATES: dict[int, dict[str, Any]] = {
         160: {"code": 1, "pl_decim": 2, "sample_rate_hz": 160_000_000.0},
         320: {"code": 2, "pl_decim": 1, "sample_rate_hz": 320_000_000.0},
@@ -1438,6 +1448,10 @@ class T510FEngine:
         except ImportError:
             xrfdc = None  # type: ignore[assignment]
         event_sysref = self._xrfdc_const(xrfdc, ("EVNT_SRC_SYSREF", "XRFDC_EVNT_SRC_SYSREF"), 2)
+        # Keep the immediate-event value in the status payload for API
+        # compatibility even though the Stage 33 production sequences use
+        # SYSREF, SLICE, or TILE events only.
+        event_immediate = self._xrfdc_const(xrfdc, ("EVNT_SRC_IMMEDIATE", "XRFDC_EVNT_SRC_IMMEDIATE"), 0)
         event_slice = self._xrfdc_const(xrfdc, ("EVNT_SRC_SLICE", "XRFDC_EVNT_SRC_SLICE"), 1)
         event_tile = self._xrfdc_const(xrfdc, ("EVNT_SRC_TILE", "XRFDC_EVNT_SRC_TILE"), 2)
         event_mixer = self._xrfdc_const(xrfdc, ("EVENT_MIXER", "XRFDC_EVENT_MIXER"), 1)
@@ -2308,7 +2322,11 @@ class T510FEngine:
 
         dac_nco_hz = observe_center_hz
         dac_tone_hz = 0.0 if dac_source_mode == "constant_phasor" else (dac_signal_hz - observe_center_hz)
-        dac_tone_mode = "constant_phasor" if dac_source_mode == "constant_phasor" else "single_tone"
+        dac_tone_mode = (
+            "constant_phasor"
+            if dac_source_mode == "constant_phasor"
+            else self.STAGE33_DAC_TONE_MODE
+        )
 
         self.configure_rfdc(
             rfdc_complex_sample_rate_hz=self.RFDC_COMPLEX_SAMPLE_RATE_HZ,

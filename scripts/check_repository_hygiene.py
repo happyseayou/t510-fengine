@@ -54,7 +54,7 @@ TEXT_FILENAMES = {".gitignore", "Cargo.lock", "Cargo.toml", "Makefile"}
 def _retired_stage_pattern(*, path: bool) -> re.Pattern[str]:
     separator = r"[ _-]?" if path else r"[ _]?"
     return re.compile(
-        rf"(?i)\bstage{separator}(?:3[0-2]|[12][0-9]|[0-9])(?![0-9])"
+        rf"(?i)\bstage{separator}(?:3[01]|[12][0-9]|[0-9])(?![0-9])"
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,6 +35,42 @@ class RepositoryHygieneTests(unittest.TestCase):
 
         self.assertEqual(len(violations), 2)
         self.assertTrue(all(item.startswith("python/old.py:1") or item.startswith("python/old.py:2") for item in violations))
+
+    def test_latest_only_layout_and_stage_archive(self) -> None:
+        for retired in (
+            ROOT / "config" / "stage33",
+            ROOT / "deploy" / "stage33",
+            ROOT / "reports" / "maintenance",
+            ROOT / "reports" / "board",
+            ROOT / "reports" / "vivado",
+        ):
+            self.assertFalse(retired.exists(), retired)
+
+        for root_name in ("config", "deploy", "scripts"):
+            for path in (ROOT / root_name).rglob("*"):
+                if path.is_file():
+                    self.assertNotIn("stage33", path.relative_to(ROOT).as_posix().lower())
+
+        active_reports = {
+            path.name
+            for path in (ROOT / "reports" / "stages").glob("*.md")
+            if path.name != "README.md"
+        }
+        self.assertTrue(active_reports)
+        self.assertTrue(
+            all(re.match(r"(?:32|33)", name) for name in active_reports),
+            active_reports,
+        )
+        archived_reports = list((ROOT / "reports" / "stages" / "arch").glob("*.md"))
+        self.assertTrue(archived_reports)
+        self.assertTrue(
+            all(not re.match(r"(?:32|33)", path.name) for path in archived_reports)
+        )
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("build/vivado/latest", readme)
+        self.assertIn("10s -> 20s -> 30s -> 60s", readme)
+        self.assertIn("单次最长 `600s`", readme)
 
 
 if __name__ == "__main__":
