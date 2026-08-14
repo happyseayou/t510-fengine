@@ -977,6 +977,32 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "SPUR_CORRECTION_HARDWARE_INACTIVE")
         self.assertIn("active_phase_step", caught.exception.details["identity_mismatch"])
 
+    def test_spur_window_converts_adc_mixer_sign_to_physical_rf_center(self) -> None:
+        core = mock.Mock()
+        core.read_status.return_value = {"science_sample_rate_msps": 160}
+        core.read_rfdc_mixer_frequencies.return_value = {
+            "available": True,
+            "errors": [],
+            "mixers": [
+                {
+                    "kind": "adc",
+                    "tile": adc // 2,
+                    "block": adc % 2,
+                    "frequency_mhz": -420.0,
+                }
+                for adc in range(8)
+            ],
+        }
+        controller = mock.Mock()
+        controller.require_core.return_value = core
+
+        window, spur = t510_hw._spur_current_window(controller)
+
+        self.assertEqual(window["center_mhz"], 420.0)
+        self.assertEqual(window["adc_mixer_readback_mhz"], [-420.0] * 8)
+        self.assertEqual(spur["spur_id"], 1)
+        self.assertEqual(spur["offset_hz"], 60_000_000.0)
+
     def test_static_tracker_mode_is_restricted_to_diagnostic_credential(self) -> None:
         state = {
             "credential_valid": True,

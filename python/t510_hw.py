@@ -3190,11 +3190,17 @@ def _spur_current_window(controller: FEngineController) -> tuple[dict[str, Any],
             details={"sample_rate_msps": sample_rate_msps},
         )
     mixers = core.read_rfdc_mixer_frequencies()
-    adc_centers = [
+    adc_mixer_readbacks = [
         float(row["frequency_mhz"])
         for row in mixers.get("mixers", [])
         if row.get("kind") == "adc" and row.get("frequency_mhz") is not None
     ]
+    # RFDC reports the ADC complex-mixer NCO with the digital downconversion
+    # sign.  The configured physical RF centre has the opposite sign (for
+    # example a 420 MHz RF centre reads back as an ADC mixer at -420 MHz).
+    # Spur identity is defined on the physical RF axis, not the signed NCO
+    # rotation, so restore that axis before applying the in-band test.
+    adc_centers = [-frequency_mhz for frequency_mhz in adc_mixer_readbacks]
     if len(adc_centers) != 8 or max(adc_centers) - min(adc_centers) > 1.0e-6:
         raise HelperError(
             "SPUR_CORRECTION_MIXER_READBACK_INVALID",
@@ -3208,6 +3214,7 @@ def _spur_current_window(controller: FEngineController) -> tuple[dict[str, Any],
         "sample_rate_hz": sample_rate_msps * 1_000_000,
         "center_mhz": center_hz / 1.0e6,
         "center_hz": center_hz,
+        "adc_mixer_readback_mhz": adc_mixer_readbacks,
     }
     return window, find_in_band_spur(center_hz, sample_rate_msps * 1.0e6)
 
