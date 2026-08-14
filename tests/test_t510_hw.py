@@ -1003,6 +1003,11 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(spur["spur_id"], 1)
         self.assertEqual(spur["offset_hz"], 60_000_000.0)
 
+    def test_spur_model_crc32_has_frozen_zlib_identity(self) -> None:
+        self.assertEqual(t510_hw._spur_model_crc32("a" * 64), 0x89B46555)
+        with self.assertRaises(ValueError):
+            t510_hw._spur_model_crc32("not-a-sha256")
+
     def test_static_tracker_mode_is_restricted_to_diagnostic_credential(self) -> None:
         state = {
             "credential_valid": True,

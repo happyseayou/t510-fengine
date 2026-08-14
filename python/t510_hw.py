@@ -22,6 +22,7 @@ import tempfile
 import time
 import traceback
 from typing import Any, Callable, TYPE_CHECKING
+import zlib
 
 from python.t510_ams import read_ams_snapshot
 
@@ -3225,6 +3226,14 @@ def _spur_temperature_c() -> float | None:
     return max(values) if values else None
 
 
+def _spur_model_crc32(model_sha256: str) -> int:
+    """Return the registered CRC32 identity for a frozen model SHA256."""
+    value = str(model_sha256).strip().lower()
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("spur correction model SHA256 must contain 64 hexadecimal characters")
+    return zlib.crc32(value.encode("ascii")) & 0xFFFF_FFFF
+
+
 def _spur_ocb_dft(calibration: dict[str, Any], adc: int, k: int) -> complex:
     channels = {int(row["adc"]): row for row in calibration.get("channels", [])}
     rows = dict(channels[int(adc)].get("ocb1_diagnostics", {})).get("dft", [])
@@ -3465,7 +3474,7 @@ def _spur_correction_calibrate(request: dict[str, Any]) -> dict[str, Any]:
     # identity.  Residual refinement changes C0, so the final frozen model is
     # re-hashed and committed once more below before a credential is issued.
     provisional_model_sha = canonical_sha256(model_payload)
-    model_crc32 = zlib.crc32(provisional_model_sha.encode("ascii")) & 0xFFFF_FFFF
+    model_crc32 = _spur_model_crc32(provisional_model_sha)
     quantized = [quantize_q8_16(value) for value in coefficient_values]
     load = core.load_spur_correction_shadow(
         spur_id=int(spur["spur_id"]),
@@ -3540,7 +3549,7 @@ def _spur_correction_calibrate(request: dict[str, Any]) -> dict[str, Any]:
     model_payload["residual_refinement"] = residual_history
     model_payload["final_coefficients_q8_16"] = [list(value) for value in quantized]
     model_sha = canonical_sha256(model_payload)
-    model_crc32 = zlib.crc32(model_sha.encode("ascii")) & 0xFFFF_FFFF
+    model_crc32 = _spur_model_crc32(model_sha)
     load = core.load_spur_correction_shadow(
         spur_id=int(spur["spur_id"]),
         phase_step=step,
