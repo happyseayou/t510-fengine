@@ -87,10 +87,10 @@ module tb_feng_ctrl_axi;
     logic [31:0]  pfb_input_fifo_level = 32'd0;
     logic [31:0]  pfb_peak_chan = 32'd0;
     logic [31:0]  pfb_peak_power = 32'd0;
-    logic [31:0]  pfb_coeff_status = 32'h0000_0401;
-    logic [31:0]  pfb_coeff_loaded_count = 32'd16384;
-    logic [31:0]  pfb_coeff_active_id = 32'h27a4_0001;
-    logic [31:0]  pfb_coeff_active_checksum = 32'd0;
+    logic [31:0]  pfb_coeff_status = 32'h0000_0801;
+    logic [31:0]  pfb_coeff_loaded_count = 32'd32768;
+    logic [31:0]  pfb_coeff_active_id = 32'h34a8_0001;
+    logic [31:0]  pfb_coeff_active_checksum = 32'hb9ba_227c;
     logic [31:0]  pfb_coeff_error_count = 32'd0;
     logic [31:0]  time_ddr_ring_status = 32'd0;
     logic [31:0]  time_ddr_ring_occupancy = 32'd0;
@@ -126,7 +126,7 @@ module tb_feng_ctrl_axi;
     wire        pfb_coeff_abort_pulse;
     wire        pfb_coeff_write_pulse;
     wire [3:0]  pfb_coeff_requested_taps;
-    wire [13:0] pfb_coeff_index;
+    wire [14:0] pfb_coeff_index;
     wire signed [17:0] pfb_coeff_data;
     wire [31:0] pfb_coeff_id;
     wire [31:0] chan_split;
@@ -206,6 +206,10 @@ module tb_feng_ctrl_axi;
         .waiting_for_epoch(waiting_for_epoch),
         .pps_seen(pps_seen),
         .pps_count(pps_count),
+        .sysref_capture_levels(3'b101),
+        .sysref_pl_edge_count(32'd101),
+        .sysref_adc_edge_count(32'd100),
+        .sysref_dac_edge_count(32'd99),
         .ref_locked(ref_locked),
         .error_flags(error_flags),
         .monitor_sample_count(monitor_sample_count),
@@ -526,7 +530,15 @@ module tb_feng_ctrl_axi;
         reset_dut();
 
         axi_read(16'h0000, rd);
-        `TB_CHECK_EQ(rd, 32'h0001_0033, "CORE_VERSION Stage 33")
+        `TB_CHECK_EQ(rd, 32'h0001_0035, "CORE_VERSION Stage 34c-2R")
+        axi_read(32'h0000_002c, rd);
+        `TB_CHECK_EQ(rd, 32'h0000_0005, "SYSREF capture levels")
+        axi_read(32'h0000_0030, rd);
+        `TB_CHECK_EQ(rd, 32'd101, "PL SYSREF edge count")
+        axi_read(32'h0000_0034, rd);
+        `TB_CHECK_EQ(rd, 32'd100, "ADC SYSREF edge count")
+        axi_read(32'h0000_0038, rd);
+        `TB_CHECK_EQ(rd, 32'd99, "DAC SYSREF edge count")
         axi_read(16'h0008, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default MODE")
         axi_read(16'h0114, rd);
@@ -538,30 +550,30 @@ module tb_feng_ctrl_axi;
         axi_read(16'h0908, rd);
         `TB_CHECK_EQ(rd, 32'd4096, "default PFB nchan")
         axi_read(16'h090c, rd);
-        `TB_CHECK_EQ(rd, 32'd4, "current PFB uses four taps")
+        `TB_CHECK_EQ(rd, 32'd8, "current PFB uses eight taps")
         axi_write(16'h090c, 32'd0);
         axi_read(16'h090c, rd);
-        `TB_CHECK_EQ(rd, 32'd4, "PFB tap count is fixed")
+        `TB_CHECK_EQ(rd, 32'd8, "PFB tap count is fixed")
         axi_read(16'h0960, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0040, "default PFB coefficient control")
-        axi_write(16'h0968, 32'h0000_1234);
+        `TB_CHECK_EQ(rd, 32'h0000_0080, "default PFB coefficient control")
+        axi_write(16'h0968, 32'h0000_5234);
         axi_read(16'h0968, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_1234, "PFB coefficient index readback")
+        `TB_CHECK_EQ(rd, 32'h0000_5234, "PFB 15-bit coefficient index readback")
         axi_write(16'h096c, 32'h0001_ffff);
         axi_read(16'h096c, rd);
         `TB_CHECK_EQ(rd, 32'h0001_ffff, "PFB coefficient data readback")
-        axi_write(16'h0960, 32'h0000_0048);
-        axi_write(16'h0968, 32'h0000_1234);
+        axi_write(16'h0960, 32'h0000_0088);
+        axi_write(16'h0968, 32'h0000_5234);
         axi_write(16'h096c, 32'h0000_1111);
-        `TB_CHECK_EQ(pfb_coeff_index, 14'h1234, "coefficient payload index")
+        `TB_CHECK_EQ(pfb_coeff_index, 15'h5234, "coefficient payload index")
         `TB_CHECK_EQ(pfb_coeff_data, 18'h01111, "coefficient payload data")
         axi_read(16'h0968, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_1235, "coefficient index auto-increments")
+        `TB_CHECK_EQ(rd, 32'h0000_5235, "coefficient index auto-increments")
         axi_write(16'h096c, 32'h0000_2222);
-        `TB_CHECK_EQ(pfb_coeff_index, 14'h1235, "next coefficient payload index")
+        `TB_CHECK_EQ(pfb_coeff_index, 15'h5235, "next coefficient payload index")
         `TB_CHECK_EQ(pfb_coeff_data, 18'h02222, "next coefficient payload data")
         axi_read(16'h0968, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_1236, "coefficient index remains monotonic")
+        `TB_CHECK_EQ(rd, 32'h0000_5236, "coefficient index remains monotonic")
         axi_read(16'h0974, rd);
         `TB_CHECK_EQ(rd, pfb_coeff_active_id, "active coefficient id status")
         axi_read(16'h0918, rd);

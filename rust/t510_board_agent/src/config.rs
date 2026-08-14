@@ -185,71 +185,86 @@ impl RuntimeConfig {
                 ));
             }
             let core_value = u32::from_str_radix(core, 16).expect("validated core version");
-            if core_value != 0x0001_0033 {
+            let stage34c2r_diagnostic =
+                core_value == 0x0001_0035 && item.id == "fengine-0x00010035";
+            if core_value != 0x0001_0034 && !stage34c2r_diagnostic {
                 return Err(format!(
-                    "bitstream {} must use current CORE_VERSION 0x00010033",
+                    "bitstream {} must use production CORE_VERSION 0x00010034 or the isolated Stage 34c-2R diagnostic 0x00010035",
                     item.id
                 ));
             }
             if item.mts_adc_target_latency.is_none()
                 || item.mts_dac_target_latency.is_none()
-                || item.mts_adc_target_latency.is_some_and(|value| value < 0)
-                || item.mts_dac_target_latency.is_some_and(|value| value < 0)
+                || (!stage34c2r_diagnostic
+                    && (item.mts_adc_target_latency.is_some_and(|value| value < 0)
+                        || item.mts_dac_target_latency.is_some_and(|value| value < 0)))
+                || (stage34c2r_diagnostic
+                    && (item.mts_adc_target_latency != Some(-1)
+                        || item.mts_dac_target_latency != Some(-1)))
             {
-                return Err(format!(
-                    "Stage 33 bitstream {} requires frozen non-negative ADC/DAC MTS target latencies",
-                    item.id
-                ));
+                return Err(if stage34c2r_diagnostic {
+                    format!(
+                        "Stage 34c-2R diagnostic bitstream {} requires discovery ADC/DAC targets -1/-1",
+                        item.id
+                    )
+                } else {
+                    format!(
+                        "Stage 34 bitstream {} requires frozen non-negative ADC/DAC MTS target latencies",
+                        item.id
+                    )
+                });
             }
             if item.mts_adc_target_latency == Some(230) || item.mts_dac_target_latency == Some(336)
             {
                 return Err(format!(
-                    "Stage 33 bitstream {} must not reuse the retired ADC/DAC MTS targets 230/336; use newly discovered targets",
+                    "Stage 34 bitstream {} must not reuse the retired ADC/DAC MTS targets 230/336; use newly discovered targets",
                     item.id
                 ));
             }
-            let campaign = item.mts_campaign.as_ref().ok_or_else(|| {
-                format!(
-                    "Stage 33 bitstream {} requires an MTS discovery/fixed campaign proof",
-                    item.id
-                )
-            })?;
-            for (name, cycles) in [
-                ("discovery", &campaign.discovery),
-                ("fixed", &campaign.fixed),
-            ] {
-                if cycles.rfdc_reset != 20
-                    || cycles.overlay_reload != 10
-                    || cycles.lmk_reload != 10
-                    || cycles.passed != 40
-                {
-                    return Err(format!(
-                            "Stage 33 bitstream {} {name} MTS campaign must pass 20 RFDC reset + 10 overlay reload + 10 LMK reload cycles (40/40)",
+            if !stage34c2r_diagnostic {
+                let campaign = item.mts_campaign.as_ref().ok_or_else(|| {
+                    format!(
+                        "Stage 34 bitstream {} requires an MTS discovery/fixed campaign proof",
+                        item.id
+                    )
+                })?;
+                for (name, cycles) in [
+                    ("discovery", &campaign.discovery),
+                    ("fixed", &campaign.fixed),
+                ] {
+                    if cycles.rfdc_reset != 20
+                        || cycles.overlay_reload != 10
+                        || cycles.lmk_reload != 10
+                        || cycles.passed != 40
+                    {
+                        return Err(format!(
+                            "Stage 34 bitstream {} {name} MTS campaign must pass 20 RFDC reset + 10 overlay reload + 10 LMK reload cycles (40/40)",
                             item.id
                         ));
+                    }
                 }
-            }
-            if campaign.adc_margin != 20 || campaign.dac_margin != 16 {
-                return Err(format!(
-                    "Stage 33 bitstream {} MTS margins must be ADC +20 and DAC +16",
-                    item.id
-                ));
-            }
-            if item.mts_adc_target_latency != Some(campaign.observed_adc_max + 20)
-                || item.mts_dac_target_latency != Some(campaign.observed_dac_max + 16)
-            {
-                return Err(format!(
-                        "Stage 33 bitstream {} MTS targets must equal observed maxima plus the frozen margins",
+                if campaign.adc_margin != 20 || campaign.dac_margin != 16 {
+                    return Err(format!(
+                        "Stage 34 bitstream {} MTS margins must be ADC +20 and DAC +16",
                         item.id
                     ));
-            }
-            if campaign.evidence_sha256.len() != 64
-                || hex::decode(&campaign.evidence_sha256).is_err()
-            {
-                return Err(format!(
-                    "Stage 33 bitstream {} MTS evidence_sha256 must be 64 hex digits",
-                    item.id
-                ));
+                }
+                if item.mts_adc_target_latency != Some(campaign.observed_adc_max + 20)
+                    || item.mts_dac_target_latency != Some(campaign.observed_dac_max + 16)
+                {
+                    return Err(format!(
+                        "Stage 34 bitstream {} MTS targets must equal observed maxima plus the frozen margins",
+                        item.id
+                    ));
+                }
+                if campaign.evidence_sha256.len() != 64
+                    || hex::decode(&campaign.evidence_sha256).is_err()
+                {
+                    return Err(format!(
+                        "Stage 34 bitstream {} MTS evidence_sha256 must be 64 hex digits",
+                        item.id
+                    ));
+                }
             }
             if item.profiles.is_empty() {
                 return Err(format!("bitstream {} profiles must not be empty", item.id));

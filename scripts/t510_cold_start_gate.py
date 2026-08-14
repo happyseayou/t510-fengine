@@ -208,7 +208,7 @@ def main() -> int:
         idle_health = _t510_rfdc_health(idle, require_valid=False)
         evidence["idle"] = idle
         evidence["idle_rfdc_health"] = idle_health
-        if str(idle.get("core_version", "")).lower() != "0x00010033":
+        if str(idle.get("core_version", "")).lower() != "0x00010034":
             evidence["errors"].append("CORE_VERSION_MISMATCH")
         if not idle_health["ok"]:
             evidence["errors"].extend(idle_health["errors"])

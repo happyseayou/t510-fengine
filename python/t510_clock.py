@@ -3,6 +3,8 @@ from __future__ import annotations
 import array
 import ctypes
 import fcntl
+import hashlib
+import json
 import os
 from pathlib import Path
 import struct
@@ -161,17 +163,143 @@ LMK04828_INIT_160M_10M_CONTINUOUS = (
     0x018500, 0x018800, 0x018900, 0x018A00, 0x018B00, 0x1FFD00, 0x1FFE00, 0x1FFF53,
 )
 
-LMK_SYSREF_REQ_MODE = (
-    0x0143D1,
-    0x014400,
-    0x0143F1,
-    0x0143D1,
-    0x0144FF,
-    0x014351,
-    0x014350,
-    0x013902,
-    0x016A60,
+def _replace_profile_registers(
+    values: tuple[int, ...], replacements: dict[int, int]
+) -> tuple[int, ...]:
+    """Return a full TICS write table with selected register bytes replaced."""
+    missing = set(int(address) for address in replacements)
+    result: list[int] = []
+    for word in values:
+        address = (int(word) >> 8) & 0xFFFF
+        if address in replacements:
+            word = (address << 8) | (int(replacements[address]) & 0xFF)
+            missing.discard(address)
+        result.append(int(word))
+    if missing:
+        raise ValueError(f"LMK profile replacements contain unknown addresses: {sorted(missing)}")
+    return tuple(result)
+
+
+def _profile_sha256(values: tuple[int, ...]) -> str:
+    payload = b"".join(int(value).to_bytes(3, "big") for value in values)
+    return hashlib.sha256(payload).hexdigest()
+
+
+# These complete profiles were exported by the official TICS Pro 1.7.9.1
+# application from the frozen Stage 32 project.  The request-mode export
+# differs only in documented SYSREF/SYNC fields.  The CLKin0 export adds only
+# manual CLKin0 selection and its PLL1 R divider (10 MHz / 1).
+LMK04828_INIT_160M_10M_REQUEST_CLKIN2 = _replace_profile_registers(
+    LMK04828_INIT_160M_10M_CONTINUOUS,
+    {
+        0x139: 0x02,
+        # External request uses the pulser and the SYSREF digital-delay path;
+        # both power-down bits must be clear while reset/MTS is performed.
+        0x140: 0x00,
+        # TI Table 1 external SYSREF request mode keeps SYNC_MODE at 0
+        # (SYNC pin disabled) while SYSREF_REQ_EN makes the pin a request input.
+        # TICS Pro's SYSREF Request shortcut selects the SPI pulser (0x53), so
+        # the exported profile is explicitly returned to the documented mode.
+        0x143: 0x50,
+        # CLKin0 stays disabled for the external-reference profile. TICS
+        # enables it as a side effect of the SYSREF Request shortcut even
+        # though this mode uses the separate SYNC/SYSREF_REQ pin.
+        0x146: 0x20,
+        0x16A: 0x60,
+    },
 )
+
+LMK04828_INIT_160M_10M_REQUEST_CLKIN0 = _replace_profile_registers(
+    LMK04828_INIT_160M_10M_REQUEST_CLKIN2,
+    {
+        0x146: 0x28,
+        0x147: 0x0F,
+        0x154: 0x01,
+    },
+)
+
+LMK04828_PROFILE_SHA256 = {
+    "160m_10m_cont_manual_clkin2": _profile_sha256(
+        LMK04828_INIT_160M_10M_CONTINUOUS
+    ),
+    "160m_10m_request_manual_clkin2": _profile_sha256(
+        LMK04828_INIT_160M_10M_REQUEST_CLKIN2
+    ),
+    "160m_10m_request_manual_clkin0": _profile_sha256(
+        LMK04828_INIT_160M_10M_REQUEST_CLKIN0
+    ),
+}
+
+LMK04828_PROFILE_SYSREF_FREQUENCY_HZ = {
+    "160m_10m_cont_manual_clkin2": 10_000_000,
+    "160m_10m_request_manual_clkin2": 10_000_000,
+    "160m_10m_request_manual_clkin0": 10_000_000,
+}
+
+# The diagnostic image deliberately starts with the frozen Stage 32 phase.
+# A routed-datasheet-backed phase eye is measured with that image; only the
+# selected eye centre is allowed to become a non-None production value in the
+# second, release-candidate build.
+LMK04828_PROFILE_PL_SYSREF_DELAY_PS = {
+    profile_id: None for profile_id in LMK04828_PROFILE_SYSREF_FREQUENCY_HZ
+}
+
+DIAGNOSTIC_PROFILE_MANIFEST_ENV = "T510_CLOCK_DIAGNOSTIC_PROFILE_MANIFEST"
+DIAGNOSTIC_PROFILE_MANIFEST_SHA_ENV = "T510_CLOCK_DIAGNOSTIC_PROFILE_MANIFEST_SHA256"
+ACTIVE_PROFILE_STATE_PATH = Path("/run/t510-clock-active-profile.json")
+
+
+def _load_tics_diagnostic_profiles() -> dict[str, dict[str, object]]:
+    """Load only SHA-verified full TICS exports from the diagnostic manifest."""
+    manifest_text = os.environ.get(DIAGNOSTIC_PROFILE_MANIFEST_ENV, "").strip()
+    if not manifest_text:
+        return {}
+    path = Path(manifest_text)
+    payload = path.read_bytes()
+    expected_manifest_sha = os.environ.get(DIAGNOSTIC_PROFILE_MANIFEST_SHA_ENV, "").strip().lower()
+    actual_manifest_sha = hashlib.sha256(payload).hexdigest()
+    if expected_manifest_sha and actual_manifest_sha != expected_manifest_sha:
+        raise RuntimeError("TICS diagnostic profile manifest SHA256 mismatch")
+    manifest = json.loads(payload)
+    if manifest.get("stage") != "34c-2R" or manifest.get("device") != "LMK04828B":
+        raise RuntimeError("unsupported TICS diagnostic profile manifest identity")
+    profiles: dict[str, dict[str, object]] = {}
+    for row in manifest.get("profiles", []):
+        profile_id = str(row.get("profile_id", ""))
+        if profile_id == "160m_5m_request_manual_clkin2" or (
+            profile_id.startswith("160m_10m_request_clkin2_sdclkout3_phase_")
+            or profile_id.startswith("160m_5m_request_clkin2_sdclkout3_phase_")
+        ):
+            words = tuple(int(value, 0) if isinstance(value, str) else int(value) for value in row["register_words"])
+            actual_register_sha = _profile_sha256(words)
+            if actual_register_sha != str(row.get("register_sha256", "")).lower():
+                raise RuntimeError(f"{profile_id}: TICS register SHA256 mismatch")
+            profiles[profile_id] = {
+                "register_words": words,
+                "register_sha256": actual_register_sha,
+                "file_sha256": str(row.get("file_sha256", "")).lower(),
+                "sysref_frequency_hz": int(row["sysref_frequency_hz"]),
+                "pl_sysref_delay_ps": row.get("phase_ps"),
+            }
+    return profiles
+
+
+LMK04828_TICS_DIAGNOSTIC_PROFILES = _load_tics_diagnostic_profiles()
+
+
+def _profile_metadata(profile_id: str) -> dict[str, object]:
+    if profile_id in LMK04828_TICS_DIAGNOSTIC_PROFILES:
+        return LMK04828_TICS_DIAGNOSTIC_PROFILES[profile_id]
+    return {
+        "register_words": {
+            "160m_10m_cont_manual_clkin2": LMK04828_INIT_160M_10M_CONTINUOUS,
+            "160m_10m_request_manual_clkin2": LMK04828_INIT_160M_10M_REQUEST_CLKIN2,
+            "160m_10m_request_manual_clkin0": LMK04828_INIT_160M_10M_REQUEST_CLKIN0,
+        }.get(profile_id, ()),
+        "register_sha256": LMK04828_PROFILE_SHA256.get(profile_id, ""),
+        "sysref_frequency_hz": LMK04828_PROFILE_SYSREF_FREQUENCY_HZ.get(profile_id),
+        "pl_sysref_delay_ps": LMK04828_PROFILE_PL_SYSREF_DELAY_PS.get(profile_id),
+    }
 
 
 class T510ClockController:
@@ -184,11 +312,15 @@ class T510ClockController:
     LMK_REF_SELECT1 = 34
     LMK_SYNC = 78
     PROFILE_ID_160M_10M_CONTINUOUS = "160m_10m_cont_manual_clkin2"
+    PROFILE_ID_160M_10M_REQUEST_CLKIN2 = "160m_10m_request_manual_clkin2"
+    PROFILE_ID_160M_10M_REQUEST_CLKIN0 = "160m_10m_request_manual_clkin0"
+    PROFILE_ID_160M_5M_REQUEST_CLKIN2 = "160m_5m_request_manual_clkin2"
     SYSREF_REQUEST = "request"
     SYSREF_CONTINUOUS = "continuous"
     KEY_REGISTERS = (
         0x000, 0x004, 0x005, 0x006, 0x00C, 0x00D,
         0x100, 0x101, 0x102, 0x103, 0x104, 0x105, 0x106, 0x107,
+        0x10C, 0x10D,
         0x118,
         0x138, 0x139, 0x13A, 0x13B, 0x13C, 0x13D, 0x13E, 0x13F,
         0x140, 0x143, 0x144, 0x145, 0x146, 0x147, 0x148, 0x149,
@@ -366,7 +498,10 @@ class T510ClockController:
             registers = self.read_registers(
                 self.KEY_REGISTERS
                 if include_registers
-                else (0x006, 0x118, 0x138, 0x139, 0x143, 0x182, 0x183)
+                else (
+                    0x006, 0x10C, 0x10D, 0x118, 0x138, 0x139, 0x13A, 0x13B, 0x143, 0x146, 0x147,
+                    0x154, 0x16A, 0x182, 0x183,
+                )
             )
             status["registers"] = registers
             pll1 = (int(registers.get("0x182", 0)) >> 1) & 0x1
@@ -375,20 +510,96 @@ class T510ClockController:
             status["pll2_lock"] = pll2
             status["reg6"] = int(registers.get("0x006", 0))
             status["configured"] = bool(pll1 and pll2)
-            current_profile_signature = (
+            common_profile_signature = (
                 int(registers.get("0x118", -1)) == 0x0F
                 and int(registers.get("0x138", -1)) == 0x00
+            )
+            continuous_signature = (
+                common_profile_signature
                 and int(registers.get("0x139", -1)) == 0x03
                 and int(registers.get("0x143", -1)) == 0x50
+                and int(registers.get("0x146", -1)) == 0x20
+                and int(registers.get("0x16a", -1)) == 0x20
             )
-            if current_profile_signature:
+            request_signature = (
+                common_profile_signature
+                and int(registers.get("0x139", -1)) == 0x02
+                and int(registers.get("0x143", -1)) == 0x50
+                and int(registers.get("0x146", -1)) == 0x20
+                and int(registers.get("0x147", -1)) == 0x2F
+                and int(registers.get("0x154", -1)) == 0x7D
+                and int(registers.get("0x16a", -1)) == 0x60
+            )
+            tcxo_signature = (
+                common_profile_signature
+                and int(registers.get("0x139", -1)) == 0x02
+                and int(registers.get("0x143", -1)) == 0x50
+                and int(registers.get("0x146", -1)) == 0x28
+                and int(registers.get("0x147", -1)) == 0x0F
+                and int(registers.get("0x154", -1)) == 0x01
+                and int(registers.get("0x16a", -1)) == 0x60
+            )
+            if continuous_signature:
                 status["profile_id"] = self.PROFILE_ID_160M_10M_CONTINUOUS
                 status["sysref_mode"] = self.SYSREF_CONTINUOUS
+                status["sysref_policy"] = "continuous"
                 status["lmk_clkin"] = "CLKin2 (manual)"
                 status["selected_ref"] = "external_10mhz"
+                status["clock_reference"] = "external_gpsdo"
+            elif tcxo_signature:
+                status["profile_id"] = self.PROFILE_ID_160M_10M_REQUEST_CLKIN0
+                status["sysref_mode"] = self.SYSREF_REQUEST
+                status["sysref_policy"] = "mts_only"
+                status["lmk_clkin"] = "CLKin0 (manual)"
+                status["selected_ref"] = "tcxo_10mhz"
+                status["clock_reference"] = "onboard_tcxo"
+            elif request_signature:
+                status["profile_id"] = self.PROFILE_ID_160M_10M_REQUEST_CLKIN2
+                status["sysref_mode"] = self.SYSREF_REQUEST
+                status["sysref_policy"] = "mts_only"
+                status["lmk_clkin"] = "CLKin2 (manual)"
+                status["selected_ref"] = "external_10mhz"
+                status["clock_reference"] = "external_gpsdo"
             else:
                 status["profile_id"] = "unknown"
                 status["sysref_mode"] = "unknown"
+                status["sysref_policy"] = "unknown"
+                status["clock_reference"] = "unknown"
+            profile_id = str(status["profile_id"])
+            try:
+                active = json.loads(ACTIVE_PROFILE_STATE_PATH.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                active = {}
+            active_id = str(active.get("profile_id", ""))
+            active_meta = LMK04828_TICS_DIAGNOSTIC_PROFILES.get(active_id)
+            if active_meta and request_signature:
+                expected_words = tuple(active_meta["register_words"])
+                expected_last = {
+                    (int(word) >> 8) & 0xFFFF: int(word) & 0xFF for word in expected_words
+                }
+                identity_addresses = (0x10C, 0x10D, 0x13A, 0x13B)
+                if all(
+                    int(registers.get(f"0x{address:03x}", -1)) == expected_last.get(address)
+                    for address in identity_addresses
+                ):
+                    profile_id = active_id
+                    status["profile_id"] = active_id
+            metadata = _profile_metadata(profile_id)
+            status["profile_sha256"] = metadata.get("register_sha256")
+            status["tics_file_sha256"] = metadata.get("file_sha256")
+            status["sysref_frequency_hz"] = metadata.get("sysref_frequency_hz")
+            status["pl_sysref_delay_ps"] = metadata.get("pl_sysref_delay_ps")
+            request_value = int(
+                status.get("gpio", {}).get("sysref_sync", {}).get("value", 0)  # type: ignore[union-attr]
+            )
+            status["sysref_request_gpio"] = request_value
+            status["sysref_output_expected_on"] = bool(
+                status.get("sysref_mode") == self.SYSREF_CONTINUOUS
+                or (
+                    status.get("sysref_mode") == self.SYSREF_REQUEST
+                    and request_value
+                )
+            )
         except Exception as exc:
             status["errors"].append(f"lmk_register_read: {exc}")  # type: ignore[index]
         return status
@@ -436,11 +647,7 @@ class T510ClockController:
                 self._write24(spi, value)
                 if register_delay_s:
                     time.sleep(register_delay_s)
-            if sysref_mode == self.SYSREF_REQUEST:
-                for value in LMK_SYSREF_REQ_MODE:
-                    time.sleep(0.01)
-                    self._write24(spi, value)
-            elif sysref_mode != self.SYSREF_CONTINUOUS:
+            if sysref_mode not in (self.SYSREF_REQUEST, self.SYSREF_CONTINUOUS):
                 raise ValueError(f"unsupported SYSREF mode: {sysref_mode!r}")
 
             for attempt in range(1, max_attempts + 1):
@@ -454,6 +661,34 @@ class T510ClockController:
                 if not poll_lock or (pll1 and pll2):
                     break
         result["configured"] = bool(result["pll1_lock"] and result["pll2_lock"])
+        metadata = _profile_metadata(profile_id)
+        result["profile_sha256"] = str(metadata.get("register_sha256", ""))
+        result["tics_file_sha256"] = str(metadata.get("file_sha256", ""))
+        result["sysref_frequency_hz"] = metadata.get("sysref_frequency_hz")
+        result["pl_sysref_delay_ps"] = metadata.get("pl_sysref_delay_ps")
+        result["clock_reference"] = (
+            "onboard_tcxo" if ref == "tcxo_10mhz" else "external_gpsdo"
+        )
+        result["sysref_policy"] = (
+            "continuous" if sysref_mode == self.SYSREF_CONTINUOUS else "mts_only"
+        )
+        result["sysref_request_gpio"] = 0
+        result["sysref_output_expected_on"] = sysref_mode == self.SYSREF_CONTINUOUS
+        if result["configured"]:
+            temporary = ACTIVE_PROFILE_STATE_PATH.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    {
+                        "profile_id": profile_id,
+                        "register_sha256": result["profile_sha256"],
+                        "configured_at_unix_ms": time.time_ns() // 1_000_000,
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(ACTIVE_PROFILE_STATE_PATH)
         return result
 
     def configure_external_10mhz_160m_continuous(
@@ -474,6 +709,73 @@ class T510ClockController:
             profile_id=self.PROFILE_ID_160M_10M_CONTINUOUS,
             init_values=LMK04828_INIT_160M_10M_CONTINUOUS,
             sysref_mode=self.SYSREF_CONTINUOUS,
+            poll_lock=poll_lock,
+            max_attempts=max_attempts,
+            register_delay_s=register_delay_s,
+        )
+
+    def configure_external_10mhz_160m_request(
+        self,
+        *,
+        poll_lock: bool = True,
+        max_attempts: int = 24,
+        register_delay_s: float = 0.005,
+    ) -> dict[str, int | bool | str]:
+        """Program the TICS-generated manual-CLKin2 MTS-only profile."""
+        return self._configure_profile(
+            ref="external_10mhz",
+            lmk_clkin="CLKin2 (manual)",
+            ref_select0=0,
+            ref_select1=1,
+            profile_id=self.PROFILE_ID_160M_10M_REQUEST_CLKIN2,
+            init_values=LMK04828_INIT_160M_10M_REQUEST_CLKIN2,
+            sysref_mode=self.SYSREF_REQUEST,
+            poll_lock=poll_lock,
+            max_attempts=max_attempts,
+            register_delay_s=register_delay_s,
+        )
+
+    def configure_tcxo_10mhz_160m_request(
+        self,
+        *,
+        poll_lock: bool = True,
+        max_attempts: int = 24,
+        register_delay_s: float = 0.005,
+    ) -> dict[str, int | bool | str]:
+        """Program the TICS-generated manual-CLKin0 MTS-only profile."""
+        return self._configure_profile(
+            ref="tcxo_10mhz",
+            lmk_clkin="CLKin0 (manual)",
+            ref_select0=0,
+            ref_select1=0,
+            profile_id=self.PROFILE_ID_160M_10M_REQUEST_CLKIN0,
+            init_values=LMK04828_INIT_160M_10M_REQUEST_CLKIN0,
+            sysref_mode=self.SYSREF_REQUEST,
+            poll_lock=poll_lock,
+            max_attempts=max_attempts,
+            register_delay_s=register_delay_s,
+        )
+
+    def configure_tics_diagnostic_profile(
+        self,
+        profile_id: str,
+        *,
+        poll_lock: bool = True,
+        max_attempts: int = 24,
+        register_delay_s: float = 0.005,
+    ) -> dict[str, int | bool | str]:
+        """Program one SHA-verified Stage 34c-2R full TICS register table."""
+        metadata = LMK04828_TICS_DIAGNOSTIC_PROFILES.get(profile_id)
+        if metadata is None:
+            raise ValueError(f"diagnostic TICS profile is unavailable: {profile_id}")
+        return self._configure_profile(
+            ref="external_10mhz",
+            lmk_clkin="CLKin2 (manual)",
+            ref_select0=0,
+            ref_select1=1,
+            profile_id=profile_id,
+            init_values=tuple(metadata["register_words"]),
+            sysref_mode=self.SYSREF_REQUEST,
             poll_lock=poll_lock,
             max_attempts=max_attempts,
             register_delay_s=register_delay_s,

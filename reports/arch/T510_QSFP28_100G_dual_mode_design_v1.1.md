@@ -3,7 +3,7 @@
 > **版本**：v1.1
 > **目标硬件**：MicroPhase ANTSDR T510 / ZU47DR / LMK04828 / 单 QSFP28 100GbE
 > **输入假设**：8 路复数输入，网络量化为 signed IQ16，即每个复样本 32 bit
-> **频域处理假设**：4096-channel、4-tap、临界采样 PFB，频域输出同样为 complex IQ16
+> **频域处理假设**：4096-channel、固定 8-tap、临界采样 PFB，频域输出同样为 complex IQ16
 > **状态**：数据输出架构建议冻结；LMK 时钟基线已修正为同款 T510 论文验证的 10 MHz nested zero-delay 方案。最终 `.tcs`、输出引脚映射和初始化脚本仍需寄存器级复核与上板回归
 > **v1.1 关键修订**：不再把“外部 10 MHz 经 `/2` 后生成 5 MHz PLL1 比较频率和 SYSREF”作为主方案。优先复现 Zhou et al. (2026) 在同款 MicroPhase ANTSDR T510 上验证的 10 MHz nested zero-delay 配置。10 MHz SYSREF 与 AMD PG269 当前的 `<10 MHz` 条件存在已知规范偏差，必须作为工程偏差记录并重新回归验证。
 
@@ -131,7 +131,7 @@ F_{\rm complex}.
 R_{\rm FREQ}=R_{\rm TIME}.
 \]
 
-4-tap 只增加 PFB 内部计算和存储，不会令网络输出率变成 4 倍。
+固定 8-tap 只增加 PFB 内部计算和存储，不会令网络输出率变成 8 倍。
 
 ---
 
@@ -325,11 +325,11 @@ flowchart LR
     E2 --> F[160 MS/s complex IQ16]
 
     E1 --> G1[TIME packetizer]
-    E1 --> H1[4096-ch 4-tap PFB]
+    E1 --> H1[4096-ch fixed 8-tap PFB]
     H1 --> I1[FREQ packetizer]
 
     F --> G2[TIME packetizer]
-    F --> H2[4096-ch 4-tap PFB]
+    F --> H2[4096-ch fixed 8-tap PFB]
     H2 --> I2[FREQ packetizer]
 
     G1 --> S[Packet-mode scheduler]
@@ -899,7 +899,7 @@ STAGE32_MIN_DELTA
 | Stage 32 PL data/reference | 160 MHz | RFDC-PL 接口与主 F-engine | 仅修改确有需要的论文 100 MHz 输出 |
 | auxiliary/control | 100 MHz 或板级要求值 | MMIO、控制或其他消费者 | 不得无依据改动 |
 | Analog SYSREF | 10 MHz continuous | RFDC MTS | 保留论文值 |
-| PL SYSREF | 10 MHz continuous | PL MTS 捕获、PPS 低速捕获域 | 保留论文值 |
+| PL SYSREF | Stage 32基线为10 MHz continuous；Stage 34c-2R候选为MTS-only | 仅用于RFDC/PL MTS捕获 | PPS不依赖SYSREF；v35按PG269修复160→80 MHz重捕获 |
 | ADC sample clock | 1.6 GHz | RFDC internal PLL 生成 | 固定 |
 | CMAC clock | 约 322.266 MHz | 100GbE CMAC/GT | 独立时钟域 |
 
@@ -1078,22 +1078,26 @@ SYSREF = 10 MHz
 
 该 SYSREF 同时承担：
 
-1. RFDC MTS 期间的 Analog SYSREF 和 PL SYSREF；
-2. 低速同步域捕获外部 1PPS，再跨到 AXI/data 时钟域。
+1. RFDC MTS 期间的 Analog SYSREF 和 PL SYSREF。
+
+当前产品RTL中的外部1PPS直接在ADC 80 MHz数据域用独立双触发器同步，然后送入
+scheduled-start状态机；它不经过SYSREF域，也不依赖采集期间持续输出SYSREF。
 
 因此第一份 Stage 32 profile 应保持 continuous 10 MHz。下面两种模式不能混为一谈：
 
 ```text
-论文黄金基线：
+论文/Stage 32历史基线：
     continuous 10 MHz SYSREF
-    MTS + PPS capture
+    MTS
 
 当前 req_mode 候选：
     pulser / SYSREF Request
     只在请求期间输出
 ```
 
-如果未来希望 MTS 后关闭 SYSREF以降低 spur，必须先重构 PPS 捕获路径。否则关闭 SYSREF 会破坏论文采用的 PPS 同步链。
+Stage 34c-2R已经审计并冻结这一边界：MTS完成后可以关闭SYSREF，PPS和scheduled START仍由
+独立ADC 80 MHz同步链工作。关闭SYSREF前必须完成PL捕获时序修复、PPS/scheduled START回归
+以及全速资格，不能仅凭软件GPIO状态发布。
 
 `lmk04828_160_pl_160_pin_sel_pd_3.84_req_mode.tcs` 应视为实验性 request-mode profile，不是论文 profile 的直接升级版。
 
@@ -1115,9 +1119,9 @@ SYSREF = 10 MHz
 9. 执行 MTS
 10. 读取并保存 tile latency、offset 和 target latency
 11. 验证 deterministic latency
-12. Arm 数据流
-13. 用 10 MHz SYSREF 域捕获下一次公共 1PPS
-14. 安全跨到 160 MHz data/AXI 域
+12. MTS完成后按合格profile关闭SYSREF（Stage 32历史profile保持continuous）
+13. Arm 数据流
+14. 在ADC 80 MHz域用独立同步链捕获下一次公共1PPS
 15. 清零 sample_index、time_seq、packet_seq
 16. 同时开始 UDP 输出
 ```
@@ -1197,9 +1201,9 @@ flowchart LR
     C2 --> R2[RFDC MTS]
     C3 --> R3[RFDC MTS]
 
-    P --> S1[PPS captured by\n10 MHz SYSREF domain]
-    P --> S2[PPS captured by\n10 MHz SYSREF domain]
-    P --> S3[PPS captured by\n10 MHz SYSREF domain]
+    P --> S1[PPS captured by\nADC 80 MHz domain]
+    P --> S2[PPS captured by\nADC 80 MHz domain]
+    P --> S3[PPS captured by\nADC 80 MHz domain]
 ```
 
 | 信号/步骤 | 作用 |
@@ -1207,7 +1211,7 @@ flowchart LR
 | 公共 10 MHz | 所有板长期同频，并作为 nested zero-delay 相位参考 |
 | PLL1 nested zero-delay | 使 10/100/160 MHz secondary clocks 具有确定关系 |
 | continuous 10 MHz Analog SYSREF | RFDC divider 相位和 MTS |
-| continuous 10 MHz PL SYSREF | PL 侧 MTS 捕获和 PPS 低速捕获域 |
+| PL SYSREF（continuous或MTS-only，须经过资格） | PL/RFDC MTS捕获；不承担PPS捕获 |
 | RFDC MTS | 单片内多 tile divider/FIFO 固定延迟对齐 |
 | 公共 1PPS | 绝对整秒与多板数据流起点 |
 | deterministic target latency | 保持 RFDC 初始化后数据起点重复 |
@@ -1217,12 +1221,13 @@ PPS 捕获链：
 
 ```text
 1PPS
-  -> continuous 10 MHz SYSREF domain
-  -> 160 MHz AXI/data domain
+  -> ADC 80 MHz two-flop synchronizer
+  -> scheduled-start epoch FSM
   -> one-cycle start_epoch
 ```
 
-论文此前直接用约 100 MHz AXI 时钟捕获 PPS，压力测试中观察到一个 AXI clock 的错位；改为先由 10 MHz SYSREF 捕获后降低了这一风险。
+旧文档曾把PPS描述为由10 MHz SYSREF域捕获，但当前RTL并非如此。Stage 34c-2R按实际网表
+纠正为ADC 80 MHz独立同步链，并要求对scheduled START做完整回归。
 
 ### 15.1 可校准固定延迟
 
@@ -1684,7 +1689,7 @@ Codex 必须同时比较：
 | 大模式网络率 | 320 MS/s |
 | 小模式可用 BW | 约 128 MHz |
 | 大模式可用 BW | 约 256 MHz |
-| PFB | 4096 channel, 4 tap, critical |
+| PFB | 4096 channel, fixed 8 tap, critical |
 | TIME payload | 8192 B |
 | FREQ payload | 8192 B |
 | T510 header | 128 B |
@@ -1699,7 +1704,7 @@ Codex 必须同时比较：
 | LMK auxiliary clock | 100 MHz 或按板级消费者确认 |
 | SYSREF | 10 MHz continuous；记录为 `CLK-DEV-001` 规范偏差 |
 | PPS | 外部公共 1PPS |
-| 多板同步 | 公共10 MHz + 10 MHz nested zero-delay + continuous SYSREF + MTS + SYSREF域捕获PPS |
+| 多板同步 | 公共10 MHz + nested zero-delay + MTS期间SYSREF + ADC 80 MHz域捕获PPS |
 | 100G scheduler | packet-mode, per-flow FIFO |
 | 生产接收 | AF_XDP/DPDK/RDMA 优先 |
 
@@ -1778,7 +1783,7 @@ Vivado RFDC/GT/CMAC 时钟配置
 3. Stage 32 真正必须修改哪些输出？哪些必须保持论文值？
 4. 当前候选相对论文改了哪些寄存器？逐项给出原因和风险。
 5. `PLL2 PFD=3.84 MHz` 是否与 T510 实际 loop filter 匹配？无模拟环路证据时是否应退回 0.08 MHz？
-6. 候选是否把 continuous SYSREF 改成 pulser/request？是否与 SYSREF 域捕获 PPS 的 RTL 冲突？
+6. 候选是否把 continuous SYSREF 改成pulser/request？是否已验证当前ADC 80 MHz独立PPS同步链和scheduled START不受影响？
 7. 每个 DCLKout/SDCLKout 对应哪个 T510 net、频率、source mux、format 和 consumer？
 8. 哪些输出是 RFDC clock、Analog SYSREF、PL SYSREF、PL ref、PS/B128/B129 MGT 或 REF OUT？
 9. `/15` DCC 是否真的需要修改？必须同时考虑论文 profile、TICS 和实测。

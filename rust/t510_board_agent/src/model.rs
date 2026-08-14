@@ -69,6 +69,110 @@ pub struct ConfigureRequest {
 #[serde(deny_unknown_fields)]
 pub struct ExpectedBoardRequest {
     pub expected_board_id: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocb1_transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_load_transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rfdc_power_transaction_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticMutationRequest {
+    pub expected_board_id: u16,
+    pub receiver_stream_accepting: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputLoadRequest {
+    pub expected_board_id: u16,
+    pub receiver_stream_accepting: bool,
+    pub mode: ProfileMode,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationRequest {
+    pub expected_board_id: u16,
+    #[serde(default)]
+    pub training_dac_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training_amplitude_percent: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ocb1Request {
+    pub expected_board_id: u16,
+    pub receiver_stream_accepting: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocb1_transaction_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MtsTargetMode {
+    #[default]
+    Catalog,
+    Discovery,
+    Fixed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClockDiagnosticPrepareRequest {
+    pub expected_board_id: u16,
+    pub profile_id: String,
+    pub sample_rate_msps: u16,
+    pub center_mhz: f64,
+    pub receiver_stream_accepting: bool,
+    #[serde(default)]
+    pub mts_target_mode: MtsTargetMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mts_adc_target_latency: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mts_dac_target_latency: Option<i32>,
+    #[serde(default)]
+    pub verify_sysref_negative_control: bool,
+    #[serde(default = "default_clock_attempt_kind")]
+    pub attempt_kind: String,
+}
+
+fn default_clock_attempt_kind() -> String {
+    "overlay_reload".into()
+}
+
+fn is_stage34c2_phase_profile(profile_id: &str) -> bool {
+    [
+        "160m_10m_request_clkin2_sdclkout3_phase_",
+        "160m_5m_request_clkin2_sdclkout3_phase_",
+    ]
+    .iter()
+    .any(|prefix| {
+        profile_id.strip_prefix(prefix).is_some_and(|suffix| {
+            suffix.len() == 2
+                && suffix.chars().all(|value| value.is_ascii_digit())
+                && suffix.parse::<u8>().is_ok_and(|value| value < 32)
+        })
+    })
+}
+
+fn is_external_request_profile(profile_id: &str) -> bool {
+    matches!(
+        profile_id,
+        "160m_10m_request_manual_clkin2" | "160m_5m_request_manual_clkin2"
+    ) || is_stage34c2_phase_profile(profile_id)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClockDiagnosticRestoreRequest {
+    pub expected_board_id: u16,
+    pub receiver_stream_accepting: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -86,6 +190,14 @@ pub struct ScheduledSyncPrepareRequest {
     #[serde(default)]
     pub schedule_tag: u32,
     pub mts_result_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocb1_transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_load_transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rfdc_power_transaction_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -156,7 +268,7 @@ impl ConfigureRequest {
         );
         if !legal_profile {
             return Err(
-                "Stage 33 profile supports 160MS/s time_only/spec_only/time_spec and 320MS/s time_only/spec_only"
+                "Stage 34 profile supports 160MS/s time_only/spec_only/time_spec and 320MS/s time_only/spec_only"
                     .into(),
             );
         }
@@ -282,6 +394,15 @@ impl DacRequest {
     }
 }
 
+impl OutputLoadRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if !matches!(self.mode, ProfileMode::SpecOnly | ProfileMode::TimeSpec) {
+            return Err("output-load mode must be spec_only or time_spec".into());
+        }
+        Ok(())
+    }
+}
+
 impl ScheduledSyncPrepareRequest {
     pub fn validate(&self) -> Result<(), String> {
         if self.generation == 0 {
@@ -309,6 +430,61 @@ impl ScheduledSyncPrepareRequest {
         }
         if self.signal_chain_tag == 0 {
             return Err("signal_chain_tag must identify the immutable configuration".into());
+        }
+        Ok(())
+    }
+}
+
+impl ClockDiagnosticPrepareRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        const PROFILES: [&str; 4] = [
+            "160m_10m_cont_manual_clkin2",
+            "160m_10m_request_manual_clkin2",
+            "160m_10m_request_manual_clkin0",
+            "160m_5m_request_manual_clkin2",
+        ];
+        let phase_profile = is_stage34c2_phase_profile(&self.profile_id);
+        if !PROFILES.contains(&self.profile_id.as_str()) && !phase_profile {
+            return Err("profile_id is not a frozen Stage 34c-2 diagnostic profile".into());
+        }
+        let (center_min, center_max) = center_bounds_mhz(self.sample_rate_msps)
+            .ok_or_else(|| "sample_rate_msps must be 160 or 320".to_string())?;
+        if !self.center_mhz.is_finite()
+            || !(center_min..=center_max).contains(&self.center_mhz)
+        {
+            return Err(format!(
+                "center_mhz must be finite and within {center_min:.0}..{center_max:.0} MHz for {} MS/s",
+                self.sample_rate_msps
+            ));
+        }
+        match self.mts_target_mode {
+            MtsTargetMode::Fixed => {
+                if self.mts_adc_target_latency.is_none_or(|value| value < 0)
+                    || self.mts_dac_target_latency.is_none_or(|value| value < 0)
+                {
+                    return Err("fixed MTS mode requires non-negative ADC and DAC targets".into());
+                }
+            }
+            MtsTargetMode::Catalog | MtsTargetMode::Discovery => {
+                if self.mts_adc_target_latency.is_some()
+                    || self.mts_dac_target_latency.is_some()
+                {
+                    return Err("explicit MTS targets are only valid in fixed mode".into());
+                }
+            }
+        }
+        if self.verify_sysref_negative_control
+            && !is_external_request_profile(&self.profile_id)
+        {
+            return Err(
+                "SYSREF negative control is only valid for the external request profile".into(),
+            );
+        }
+        if !matches!(self.attempt_kind.as_str(), "overlay_reload" | "rfdc_reset") {
+            return Err("attempt_kind must be overlay_reload or rfdc_reset".into());
+        }
+        if self.verify_sysref_negative_control && self.attempt_kind != "overlay_reload" {
+            return Err("SYSREF negative control requires attempt_kind=overlay_reload".into());
         }
         Ok(())
     }

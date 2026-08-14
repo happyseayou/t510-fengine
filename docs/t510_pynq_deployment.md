@@ -177,7 +177,8 @@ scripts/t510_publish_board.sh --build-only
 - 交叉编译静态aarch64 Board Agent；
 - 组装Python helper、watchdog、overlay、catalog和systemd资产；
 - 验证二进制架构与静态链接；
-- 固定覆盖开发机`build/board/latest`，不访问板卡、不下载bitstream。
+- 固定覆盖开发机`build/board/latest/package`，不访问板卡、不下载bitstream；同级
+  `build/board/latest/evidence`中的MTS和板级证据不得被打包过程删除。
 
 多块板应安装同一份`latest`内容；身份由catalog SHA和bitstream SHA确定，不再生成
 release ID、时间戳目录或本地回滚副本。
@@ -273,6 +274,31 @@ CONFIGURE必须留下 `streaming=false`，并逐项核对：
 每个receiver实例都要核对目标MAC、MTU 9000、硬件队列/ntuple、ring大小和测试窗
 口内drop/gap delta。没有数据口L3地址不一定是错误：当前receiver使用AF_PACKET，
 但链路、目的MAC和端口映射必须正确。
+
+### SPEC 科学稳定性诊断
+
+receiver 可从已有 PACKET_MMAP worker 内部选择最多 32 个精确 PFB bin 做正式 600/3600 秒
+统计，不创建第二个 packet socket，也不改变 UDP 协议：
+
+- `POST /api/measure/spec-stability` 启动异步任务；body 提供固定
+  `duration_seconds=600`、`sample_rate_msps`、`center_mhz`、
+  `rf_frequencies_mhz`或`signed_bins`，以及可选的`correlation_pair`。
+- `GET /api/measure/spec-stability/status` 返回任务状态、16 个 block 的收包数和已完成秒数。
+- `GET /api/measure/spec-stability/result` 在结束后返回逐秒八路
+  `sum_power/sum_power_squared`及可选复数互相关累加量。
+- Stage 34d扩展参数`bucket_ms=100|1000`、`correlation_mode=none|single|all`和
+  `result_format=json|binary`。`all`固定计算八路的28对`Xi·conj(Xj)`，且要求
+  `lane_mask=0xff`与binary结果；旧`correlation_pair`继续作为single兼容入口。
+- `GET /api/measure/spec-stability/data`下载完成任务的小端`TIS1`。时间桶由
+  FPGA `sample0`严格划分，文件包含target/pair映射、每桶首尾sample0、八路I/Q与
+  功率矩、28对复相关实虚和样本数；`result`同时返回文件字节数及SHA256。
+
+启动时 receiver Web 配置必须已经是相同 center/rate 的`spec_only`；接口只接受当前
+固定600/3600秒合同和精确落bin的频点。运行中会检查全部16个block的v34可观察
+数据合同（4096 通道、8 tap、采样率、chan0/block 映射）以及 seq/frame/sample0
+连续性；任一不符立即失败。`CORE_VERSION`、PFB profile ID、MTS target、DAC 静音和
+FPGA计数器由 campaign 同时通过 Board Agent 核对，因为这些字段并非都在 UDP v2
+header 内。
 
 ## 11. 可选多板预约同步
 

@@ -38,7 +38,7 @@ def _jsonable(value: Any) -> Any:
 
 
 def create_console(project_root: str | Path):
-    """Build the Stage 33 PYNQ production console."""
+    """Build the Stage 34 PYNQ production console."""
     import ipywidgets as W
     import numpy as np
     import plotly.graph_objects as go
@@ -162,7 +162,7 @@ def create_console(project_root: str | Path):
     spectrum_max = W.IntSlider(value=-20, min=-80, max=10, step=5, description="Spectrum max", style=label_style, layout=wide)
     smoothing = W.Checkbox(value=True, description="Smooth spectrum")
 
-    status = W.HTML("<pre>Stage 33 console ready. Apply + Start performs a fresh download.</pre>")
+    status = W.HTML("<pre>Stage 34 console ready. Apply + Start performs a fresh download.</pre>")
     board_status = W.HTML("<pre>Board not connected.</pre>")
     rust_status = W.HTML("<pre>Rust receiver not queried.</pre>")
     network_status = W.HTML("<pre>Network source/endpoints not applied.</pre>")
@@ -338,7 +338,7 @@ def create_console(project_root: str | Path):
     def apply_clicked(_button: Any) -> None:
         try:
             config = current_config()
-            set_status("Fresh download and deterministic Stage 33 start in progress…")
+            set_status("Fresh download and deterministic Stage 34 start in progress…")
             result = controller.apply(config, fresh_download=True)
             refresh_visibility(config)
             show_network_apply(result, config)
@@ -395,7 +395,7 @@ def create_console(project_root: str | Path):
         source_mac,
         W.HTML("<small>Board ID is written into every T510 packet header. CMAC source IP/MAC are shared by all 24 flows. All three must be unique per board in a multi-board deployment.</small>"),
     ])
-    science_tab = W.VBox([sample_rate, mode, center_mhz, rust_url, source_identity, W.HTML("<small>Sample-rate/center/network changes require Apply + Start. Release gates remain in the Stage 33 host gate.</small>")])
+    science_tab = W.VBox([sample_rate, mode, center_mhz, rust_url, source_identity, W.HTML("<small>Sample-rate/center/network changes require Apply + Start. Release gates remain in the Stage 34 host gate.</small>")])
     time_tab = W.VBox([bulk_controls(time_rows, 4300, 4000), destination_table(time_rows, 0)])
     spec_tab = W.VBox([bulk_controls(spec_rows, 4308, 4008), destination_table(spec_rows, 8)])
     dac_tab = W.VBox([dac_table, W.HBox([apply_dac]), W.HTML("<small>Live apply briefly mutes DAC only; RFDC and science streaming remain running.</small>")])
@@ -410,7 +410,7 @@ def create_console(project_root: str | Path):
         health.set_title(index, title)
     health.selected_index = None
     preview_box = W.VBox([wave_panel, spec_panel])
-    return W.VBox([W.HTML("<h2>Stage 33 F-engine Production Control</h2>"), status, controls, tabs, health, preview_box])
+    return W.VBox([W.HTML("<h2>Stage 34 F-engine Production Control</h2>"), status, controls, tabs, health, preview_box])
 
 
 __all__ = ["create_console"]

@@ -58,7 +58,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         }
         self.assertTrue(active_reports)
         self.assertTrue(
-            all(re.match(r"(?:32|33)", name) for name in active_reports),
+            all(re.match(r"(?:32|33|34)", name) for name in active_reports),
             active_reports,
         )
         archived_reports = list((ROOT / "reports" / "stages" / "arch").glob("*.md"))

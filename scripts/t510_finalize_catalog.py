@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 
-EXPECTED_CORE_VERSION = "0x00010033"
-EXPECTED_BITSTREAM_ID = "fengine-0x00010033"
+EXPECTED_CORE_VERSION = "0x00010034"
+EXPECTED_BITSTREAM_ID = "fengine-0x00010034"
 EXPECTED_ACTIONS = {"rfdc_reset": 20, "overlay_reload": 10, "lmk_reload": 10}
 EXPECTED_LATENCY_QUANTA = {"adc": 12, "dac": 12}
 

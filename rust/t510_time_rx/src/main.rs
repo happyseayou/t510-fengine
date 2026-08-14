@@ -1,7 +1,8 @@
 use base64::Engine;
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs;
@@ -11,8 +12,8 @@ use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{FromRawFd, RawFd};
 use std::ptr;
 use std::slice;
-use std::sync::atomic::{fence, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{fence, AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(test)]
@@ -76,6 +77,1303 @@ const DEFAULT_TIME_FLOW_COUNT: usize = 8;
 const DEFAULT_SPEC_FLOW_COUNT: usize = 16;
 const MAX_FLOW_COUNT: usize = 24;
 const MAX_WORKER_COUNT: usize = 64;
+const RAW_SPEC_CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
+const RAW_SPEC_CAPTURE_MAX_PACKETS_PER_BLOCK: usize = 256;
+const SPEC_STABILITY_MAX_TARGETS: usize = 32;
+const SPEC_STABILITY_FORMAL_DURATION_SECONDS: u32 = 600;
+const SPEC_STABILITY_LONG_DURATION_SECONDS: u32 = 3600;
+
+#[derive(Debug)]
+struct CapturedEthernetFrame {
+    timestamp: Duration,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct RawSpecCaptureState {
+    generation: u64,
+    target_per_block: usize,
+    slots: Vec<Vec<CapturedEthernetFrame>>,
+    slot_count: usize,
+    include_time: bool,
+    in_progress: bool,
+}
+
+#[derive(Debug)]
+struct RawSpecCapture {
+    active: AtomicBool,
+    target_per_block: AtomicUsize,
+    include_time: AtomicBool,
+    captured_per_block: Vec<AtomicUsize>,
+    state: Mutex<RawSpecCaptureState>,
+    completed: Condvar,
+}
+
+impl Default for RawSpecCapture {
+    fn default() -> Self {
+        Self {
+            active: AtomicBool::new(false),
+            target_per_block: AtomicUsize::new(0),
+            include_time: AtomicBool::new(false),
+            captured_per_block: (0..MAX_FLOW_COUNT).map(|_| AtomicUsize::new(0)).collect(),
+            state: Mutex::new(RawSpecCaptureState {
+                generation: 0,
+                target_per_block: 0,
+                slots: (0..MAX_FLOW_COUNT).map(|_| Vec::new()).collect(),
+                slot_count: SPEC_BLOCK_COUNT as usize,
+                include_time: false,
+                in_progress: false,
+            }),
+            completed: Condvar::new(),
+        }
+    }
+}
+
+impl RawSpecCapture {
+    fn begin(&self, target_per_block: usize, include_time: bool) -> Result<u64, String> {
+        if target_per_block == 0 || target_per_block > RAW_SPEC_CAPTURE_MAX_PACKETS_PER_BLOCK {
+            return Err(format!(
+                "packets_per_block must be in 1..={RAW_SPEC_CAPTURE_MAX_PACKETS_PER_BLOCK}"
+            ));
+        }
+        let mut state = self.state.lock().map_err(|_| "capture lock poisoned")?;
+        if state.in_progress {
+            return Err("a raw spectrum capture is already active".to_string());
+        }
+        state.generation = state.generation.wrapping_add(1).max(1);
+        state.target_per_block = target_per_block;
+        state.include_time = include_time;
+        state.slot_count = if include_time {
+            DEFAULT_FLOW_COUNT
+        } else {
+            SPEC_BLOCK_COUNT as usize
+        };
+        for slot in &mut state.slots {
+            slot.clear();
+            slot.reserve(target_per_block);
+        }
+        for count in &self.captured_per_block {
+            count.store(0, Ordering::Relaxed);
+        }
+        self.target_per_block
+            .store(target_per_block, Ordering::Relaxed);
+        self.include_time.store(include_time, Ordering::Relaxed);
+        state.in_progress = true;
+        self.active.store(true, Ordering::Release);
+        Ok(state.generation)
+    }
+
+    fn ingest_slot(&self, block: usize, frame: &[u8]) {
+        if !self.active.load(Ordering::Acquire) {
+            return;
+        }
+        let slot_count = if self.include_time.load(Ordering::Relaxed) {
+            DEFAULT_FLOW_COUNT
+        } else {
+            SPEC_BLOCK_COUNT as usize
+        };
+        if block >= slot_count {
+            return;
+        }
+        let target = self.target_per_block.load(Ordering::Relaxed);
+        if self.captured_per_block[block].load(Ordering::Relaxed) >= target {
+            return;
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if !state.in_progress || state.slots[block].len() >= state.target_per_block {
+            return;
+        }
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        state.slots[block].push(CapturedEthernetFrame {
+            timestamp,
+            bytes: frame.to_vec(),
+        });
+        self.captured_per_block[block].store(state.slots[block].len(), Ordering::Relaxed);
+        if state
+            .slots
+            .iter()
+            .take(state.slot_count)
+            .all(|slot| slot.len() >= state.target_per_block)
+        {
+            state.in_progress = false;
+            self.active.store(false, Ordering::Release);
+            self.completed.notify_all();
+        }
+    }
+
+    fn ingest_spec(&self, block_index: u16, frame: &[u8]) {
+        let block = block_index as usize;
+        let slot = if self.include_time.load(Ordering::Relaxed) {
+            DEFAULT_TIME_FLOW_COUNT + block
+        } else {
+            block
+        };
+        self.ingest_slot(slot, frame);
+    }
+
+    fn ingest_time(&self, flow_id: usize, frame: &[u8]) {
+        if self.include_time.load(Ordering::Relaxed) && flow_id < DEFAULT_TIME_FLOW_COUNT {
+            self.ingest_slot(flow_id, frame);
+        }
+    }
+
+    fn wait_pcap(&self, generation: u64, timeout: Duration) -> Result<Vec<u8>, String> {
+        let state = self.state.lock().map_err(|_| "capture lock poisoned")?;
+        let (mut state, wait_result) = self
+            .completed
+            .wait_timeout_while(state, timeout, |state| {
+                state.generation == generation && state.in_progress
+            })
+            .map_err(|_| "capture lock poisoned")?;
+        if state.generation != generation {
+            return Err("raw spectrum capture was superseded".to_string());
+        }
+        if wait_result.timed_out() && state.in_progress {
+            state.in_progress = false;
+            self.active.store(false, Ordering::Release);
+            let counts: Vec<usize> = state.slots.iter().map(Vec::len).collect();
+            return Err(format!(
+                "raw spectrum capture timed out; block counts={counts:?}"
+            ));
+        }
+        Ok(encode_pcap(&state.slots[..state.slot_count]))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct SpecStabilityRequest {
+    duration_seconds: u32,
+    #[serde(default = "default_true")]
+    formal: bool,
+    sample_rate_msps: u32,
+    center_mhz: f64,
+    #[serde(default, alias = "rf_mhz")]
+    rf_frequencies_mhz: Vec<f64>,
+    #[serde(default)]
+    signed_bins: Vec<i32>,
+    #[serde(default)]
+    correlation_pair: Option<[usize; 2]>,
+    #[serde(default)]
+    correlation_mode: Option<SpecCorrelationMode>,
+    #[serde(default = "default_spec_bucket_ms")]
+    bucket_ms: u32,
+    #[serde(default)]
+    result_format: SpecStabilityResultFormat,
+    #[serde(default = "default_lane_mask")]
+    lane_mask: u16,
+    #[serde(default)]
+    include_time_statistics: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SpecCorrelationMode {
+    None,
+    Single,
+    All,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SpecStabilityResultFormat {
+    #[default]
+    Json,
+    Binary,
+}
+
+fn default_spec_bucket_ms() -> u32 {
+    1000
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_lane_mask() -> u16 {
+    0x00ff
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SpecStabilityTarget {
+    target_index: usize,
+    requested_rf_mhz: Option<f64>,
+    actual_rf_mhz: f64,
+    signed_bin: i32,
+    global_bin: u16,
+    block_index: u16,
+    local_bin: u16,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct SpecPowerAccumulator {
+    sample_count: u64,
+    sum_i: f64,
+    sum_q: f64,
+    sum_power: f64,
+    sum_power_squared: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct SpecCrossAccumulator {
+    sample_count: u64,
+    sum_cross_re: f64,
+    sum_cross_im: f64,
+    sum_power_a: f64,
+    sum_power_b: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SpecStabilitySecond {
+    second: u32,
+    target_index: usize,
+    lane: usize,
+    #[serde(flatten)]
+    accumulator: SpecPowerAccumulator,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SpecStabilityCrossSecond {
+    second: u32,
+    target_index: usize,
+    channel_a: usize,
+    channel_b: usize,
+    #[serde(flatten)]
+    accumulator: SpecCrossAccumulator,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct TimePowerAccumulator {
+    sample_count: u64,
+    sum_i: f64,
+    sum_q: f64,
+    sum_power: f64,
+    max_abs: i16,
+    clipped: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TimeStabilitySecond {
+    second: u32,
+    lane: usize,
+    #[serde(flatten)]
+    accumulator: TimePowerAccumulator,
+}
+
+#[derive(Debug, Clone)]
+struct SpecStabilityTargetAccumulator {
+    target_index: usize,
+    local_bin: usize,
+    lanes: [SpecPowerAccumulator; TIME_NINPUT],
+    crosses: Vec<SpecCrossAccumulator>,
+    first_sample0: Option<u64>,
+    last_sample0: u64,
+}
+
+impl SpecStabilityTargetAccumulator {
+    fn new(target_index: usize, local_bin: usize, pair_count: usize) -> Self {
+        Self {
+            target_index,
+            local_bin,
+            lanes: std::array::from_fn(|_| SpecPowerAccumulator::default()),
+            crosses: (0..pair_count)
+                .map(|_| SpecCrossAccumulator::default())
+                .collect(),
+            first_sample0: None,
+            last_sample0: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SpecStabilityBinaryRecord {
+    bucket: u32,
+    target_index: usize,
+    first_sample0: u64,
+    last_sample0: u64,
+    sample_count: u64,
+    lanes: [SpecPowerAccumulator; TIME_NINPUT],
+    crosses: Vec<SpecCrossAccumulator>,
+}
+
+#[derive(Debug)]
+struct SpecStabilityBlock {
+    generation: u64,
+    duration_seconds: u32,
+    sample_rate: SampleRateMode,
+    current_second: Option<u32>,
+    bucket_ms: u32,
+    first_absolute_bucket: Option<u64>,
+    correlation_pairs: Vec<[usize; 2]>,
+    result_format: SpecStabilityResultFormat,
+    lane_mask: u16,
+    targets: Vec<SpecStabilityTargetAccumulator>,
+    power_seconds: Vec<SpecStabilitySecond>,
+    cross_seconds: Vec<SpecStabilityCrossSecond>,
+    binary_records: Vec<SpecStabilityBinaryRecord>,
+    previous_header: Option<T510Header>,
+    packet_count: u64,
+}
+
+impl Default for SpecStabilityBlock {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            duration_seconds: 0,
+            sample_rate: SampleRateMode::Msps160,
+            current_second: None,
+            bucket_ms: 1000,
+            first_absolute_bucket: None,
+            correlation_pairs: Vec::new(),
+            result_format: SpecStabilityResultFormat::Json,
+            lane_mask: 0xff,
+            targets: Vec::new(),
+            power_seconds: Vec::new(),
+            cross_seconds: Vec::new(),
+            binary_records: Vec::new(),
+            previous_header: None,
+            packet_count: 0,
+        }
+    }
+}
+
+impl SpecStabilityBlock {
+    fn finalize_current(&mut self) {
+        let Some(bucket) = self.current_second.take() else {
+            return;
+        };
+        for target in &mut self.targets {
+            if self.result_format == SpecStabilityResultFormat::Binary {
+                let sample_count = target
+                    .lanes
+                    .iter()
+                    .map(|lane| lane.sample_count)
+                    .max()
+                    .unwrap_or(0);
+                if sample_count != 0 {
+                    self.binary_records.push(SpecStabilityBinaryRecord {
+                        bucket,
+                        target_index: target.target_index,
+                        first_sample0: target.first_sample0.unwrap_or_default(),
+                        last_sample0: target.last_sample0,
+                        sample_count,
+                        lanes: std::array::from_fn(|lane| std::mem::take(&mut target.lanes[lane])),
+                        crosses: target.crosses.iter_mut().map(std::mem::take).collect(),
+                    });
+                }
+                target.first_sample0 = None;
+                target.last_sample0 = 0;
+                continue;
+            }
+            for (lane, accumulator) in target.lanes.iter_mut().enumerate() {
+                if self.lane_mask & (1 << lane) == 0 {
+                    continue;
+                }
+                self.power_seconds.push(SpecStabilitySecond {
+                    second: bucket.saturating_mul(self.bucket_ms) / 1000,
+                    target_index: target.target_index,
+                    lane,
+                    accumulator: std::mem::take(accumulator),
+                });
+            }
+            for (pair, accumulator) in self
+                .correlation_pairs
+                .iter()
+                .copied()
+                .zip(target.crosses.iter_mut())
+            {
+                self.cross_seconds.push(SpecStabilityCrossSecond {
+                    second: bucket.saturating_mul(self.bucket_ms) / 1000,
+                    target_index: target.target_index,
+                    channel_a: pair[0],
+                    channel_b: pair[1],
+                    accumulator: std::mem::take(accumulator),
+                });
+            }
+            target.first_sample0 = None;
+            target.last_sample0 = 0;
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TimeStabilityState {
+    generation: u64,
+    duration_seconds: u32,
+    sample_rate: SampleRateMode,
+    start: Instant,
+    current_second: Option<u32>,
+    lane_mask: u16,
+    lanes: [TimePowerAccumulator; TIME_NINPUT],
+    seconds: Vec<TimeStabilitySecond>,
+    previous_header: Option<T510Header>,
+    packet_count: u64,
+}
+
+impl Default for TimeStabilityState {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            duration_seconds: 0,
+            sample_rate: SampleRateMode::Msps160,
+            start: Instant::now(),
+            current_second: None,
+            lane_mask: 0,
+            lanes: std::array::from_fn(|_| TimePowerAccumulator::default()),
+            seconds: Vec::new(),
+            previous_header: None,
+            packet_count: 0,
+        }
+    }
+}
+
+impl TimeStabilityState {
+    fn finalize_current(&mut self) {
+        let Some(second) = self.current_second.take() else {
+            return;
+        };
+        for (lane, accumulator) in self.lanes.iter_mut().enumerate() {
+            if self.lane_mask & (1 << lane) == 0 {
+                continue;
+            }
+            self.seconds.push(TimeStabilitySecond {
+                second,
+                lane,
+                accumulator: std::mem::take(accumulator),
+            });
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SpecStabilityControl {
+    generation: u64,
+    status: String,
+    request: Option<SpecStabilityRequest>,
+    targets: Vec<SpecStabilityTarget>,
+    started_unix_ms: Option<u64>,
+    finished_unix_ms: Option<u64>,
+    error: Option<String>,
+}
+
+impl Default for SpecStabilityControl {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            status: "idle".to_string(),
+            request: None,
+            targets: Vec::new(),
+            started_unix_ms: None,
+            finished_unix_ms: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SpecStabilityStatus {
+    generation: u64,
+    status: String,
+    request: Option<SpecStabilityRequest>,
+    targets: Vec<SpecStabilityTarget>,
+    started_unix_ms: Option<u64>,
+    finished_unix_ms: Option<u64>,
+    error: Option<String>,
+    packet_count_by_block: Vec<u64>,
+    completed_seconds: usize,
+    time_packet_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct SpecStabilityResult {
+    generation: u64,
+    status: String,
+    request: SpecStabilityRequest,
+    targets: Vec<SpecStabilityTarget>,
+    started_unix_ms: u64,
+    finished_unix_ms: u64,
+    error: Option<String>,
+    packet_count_by_block: Vec<u64>,
+    power_seconds: Vec<SpecStabilitySecond>,
+    cross_seconds: Vec<SpecStabilityCrossSecond>,
+    time_seconds: Vec<TimeStabilitySecond>,
+    time_packet_count: u64,
+    binary_bytes: Option<u64>,
+    binary_sha256: Option<String>,
+}
+
+#[derive(Debug)]
+struct SpecStabilityMonitor {
+    active: AtomicBool,
+    generation: AtomicU64,
+    control: Mutex<SpecStabilityControl>,
+    blocks: Vec<Mutex<SpecStabilityBlock>>,
+    time: Mutex<TimeStabilityState>,
+}
+
+impl Default for SpecStabilityMonitor {
+    fn default() -> Self {
+        Self {
+            active: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            control: Mutex::new(SpecStabilityControl::default()),
+            blocks: (0..SPEC_BLOCK_COUNT)
+                .map(|_| Mutex::new(SpecStabilityBlock::default()))
+                .collect(),
+            time: Mutex::new(TimeStabilityState::default()),
+        }
+    }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn signed_bin_to_global(signed_bin: i32) -> Result<u16, String> {
+    if !(-2048..=2047).contains(&signed_bin) {
+        return Err(format!("signed bin {signed_bin} is outside -2048..2047"));
+    }
+    Ok(signed_bin.rem_euclid(4096) as u16)
+}
+
+fn all_adc_pairs() -> Vec<[usize; 2]> {
+    let mut pairs = Vec::with_capacity(TIME_NINPUT * (TIME_NINPUT - 1) / 2);
+    for channel_a in 0..TIME_NINPUT {
+        for channel_b in (channel_a + 1)..TIME_NINPUT {
+            pairs.push([channel_a, channel_b]);
+        }
+    }
+    pairs
+}
+
+fn spec_stability_pairs(request: &SpecStabilityRequest) -> Result<Vec<[usize; 2]>, String> {
+    let mode = request
+        .correlation_mode
+        .unwrap_or(if request.correlation_pair.is_some() {
+            SpecCorrelationMode::Single
+        } else {
+            SpecCorrelationMode::None
+        });
+    match mode {
+        SpecCorrelationMode::None => {
+            if request.correlation_pair.is_some() {
+                return Err(
+                    "correlation_pair cannot be used with correlation_mode=none".to_string()
+                );
+            }
+            Ok(Vec::new())
+        }
+        SpecCorrelationMode::Single => {
+            let pair = request
+                .correlation_pair
+                .ok_or_else(|| "correlation_mode=single requires correlation_pair".to_string())?;
+            if pair[0] >= TIME_NINPUT || pair[1] >= TIME_NINPUT || pair[0] == pair[1] {
+                return Err(
+                    "correlation_pair must contain two different channels in 0..7".to_string(),
+                );
+            }
+            if request.lane_mask & (1 << pair[0]) == 0 || request.lane_mask & (1 << pair[1]) == 0 {
+                return Err(
+                    "correlation_pair channels must both be selected by lane_mask".to_string(),
+                );
+            }
+            Ok(vec![pair])
+        }
+        SpecCorrelationMode::All => {
+            if request.correlation_pair.is_some() {
+                return Err(
+                    "correlation_pair must be omitted with correlation_mode=all".to_string()
+                );
+            }
+            if request.lane_mask != 0x00ff {
+                return Err("correlation_mode=all requires lane_mask=0xff".to_string());
+            }
+            Ok(all_adc_pairs())
+        }
+    }
+}
+
+fn build_spec_stability_targets(
+    request: &SpecStabilityRequest,
+) -> Result<Vec<SpecStabilityTarget>, String> {
+    let mode = SampleRateMode::from_mhz(request.sample_rate_msps)
+        .ok_or_else(|| "sample_rate_msps must be 160 or 320".to_string())?;
+    if !request.center_mhz.is_finite() {
+        return Err("center_mhz must be finite".to_string());
+    }
+    let total = request.rf_frequencies_mhz.len() + request.signed_bins.len();
+    if total == 0 || total > SPEC_STABILITY_MAX_TARGETS {
+        return Err(format!(
+            "select 1..={SPEC_STABILITY_MAX_TARGETS} RF frequencies/bins"
+        ));
+    }
+    if request.lane_mask == 0 || request.lane_mask & !0x00ff != 0 {
+        return Err("lane_mask must select one or more lanes within bits 0..7".to_string());
+    }
+    spec_stability_pairs(request)?;
+    let spacing_mhz = mode.mhz() as f64 / 4096.0;
+    let mut requested = Vec::with_capacity(total);
+    for rf_mhz in &request.rf_frequencies_mhz {
+        if !rf_mhz.is_finite() {
+            return Err("RF frequencies must be finite".to_string());
+        }
+        let exact_bin = (*rf_mhz - request.center_mhz) / spacing_mhz;
+        let signed_bin = exact_bin.round() as i32;
+        if (exact_bin - signed_bin as f64).abs() > 1.0e-6 {
+            return Err(format!(
+                "RF {rf_mhz:.9} MHz is not on an exact PFB bin for center {:.9} MHz at {} MS/s",
+                request.center_mhz, request.sample_rate_msps
+            ));
+        }
+        requested.push((Some(*rf_mhz), signed_bin));
+    }
+    requested.extend(request.signed_bins.iter().copied().map(|bin| (None, bin)));
+
+    let mut targets = Vec::with_capacity(total);
+    for (target_index, (requested_rf_mhz, signed_bin)) in requested.into_iter().enumerate() {
+        let global_bin = signed_bin_to_global(signed_bin)?;
+        if targets
+            .iter()
+            .any(|target: &SpecStabilityTarget| target.global_bin == global_bin)
+        {
+            return Err(format!("duplicate selected bin {signed_bin}"));
+        }
+        targets.push(SpecStabilityTarget {
+            target_index,
+            requested_rf_mhz,
+            actual_rf_mhz: request.center_mhz + signed_bin as f64 * spacing_mhz,
+            signed_bin,
+            global_bin,
+            block_index: global_bin / 256,
+            local_bin: global_bin % 256,
+        });
+    }
+    Ok(targets)
+}
+
+impl SpecStabilityMonitor {
+    fn begin(
+        self: &Arc<Self>,
+        request: SpecStabilityRequest,
+    ) -> Result<SpecStabilityStatus, String> {
+        if request.formal
+            && !matches!(
+                request.duration_seconds,
+                SPEC_STABILITY_FORMAL_DURATION_SECONDS | SPEC_STABILITY_LONG_DURATION_SECONDS
+            )
+        {
+            return Err(format!(
+                "formal spectrum stability duration_seconds must be {SPEC_STABILITY_FORMAL_DURATION_SECONDS} or {SPEC_STABILITY_LONG_DURATION_SECONDS}"
+            ));
+        }
+        if !request.formal
+            && !(1..=SPEC_STABILITY_LONG_DURATION_SECONDS).contains(&request.duration_seconds)
+        {
+            return Err(format!(
+                "diagnostic spectrum stability duration_seconds must be within 1..={SPEC_STABILITY_LONG_DURATION_SECONDS}"
+            ));
+        }
+        let mode = SampleRateMode::from_mhz(request.sample_rate_msps)
+            .ok_or_else(|| "sample_rate_msps must be 160 or 320".to_string())?;
+        if !matches!(request.bucket_ms, 100 | 1000) {
+            return Err("bucket_ms must be 100 or 1000".to_string());
+        }
+        if request.duration_seconds.saturating_mul(1000) % request.bucket_ms != 0 {
+            return Err("duration_seconds must contain a whole number of buckets".to_string());
+        }
+        let correlation_pairs = spec_stability_pairs(&request)?;
+        if request.result_format == SpecStabilityResultFormat::Json && request.bucket_ms != 1000 {
+            return Err("100 ms buckets require result_format=binary".to_string());
+        }
+        if correlation_pairs.len() > 1 && request.result_format != SpecStabilityResultFormat::Binary
+        {
+            return Err("correlation_mode=all requires result_format=binary".to_string());
+        }
+        let targets = build_spec_stability_targets(&request)?;
+        let mut control = self.control.lock().map_err(|_| "monitor lock poisoned")?;
+        if self.active.load(Ordering::Acquire) {
+            return Err("a spectrum stability measurement is already active".to_string());
+        }
+        let generation = control.generation.wrapping_add(1).max(1);
+        let start = Instant::now();
+        for (block_index, block) in self.blocks.iter().enumerate() {
+            let mut block = block.lock().map_err(|_| "monitor block lock poisoned")?;
+            *block = SpecStabilityBlock {
+                generation,
+                duration_seconds: request.duration_seconds,
+                sample_rate: mode,
+                current_second: None,
+                bucket_ms: request.bucket_ms,
+                first_absolute_bucket: None,
+                correlation_pairs: correlation_pairs.clone(),
+                result_format: request.result_format,
+                lane_mask: request.lane_mask,
+                targets: targets
+                    .iter()
+                    .filter(|target| target.block_index as usize == block_index)
+                    .map(|target| {
+                        SpecStabilityTargetAccumulator::new(
+                            target.target_index,
+                            target.local_bin as usize,
+                            correlation_pairs.len(),
+                        )
+                    })
+                    .collect(),
+                power_seconds: Vec::new(),
+                cross_seconds: Vec::new(),
+                binary_records: Vec::new(),
+                previous_header: None,
+                packet_count: 0,
+            };
+        }
+        {
+            let mut time = self.time.lock().map_err(|_| "monitor time lock poisoned")?;
+            *time = TimeStabilityState {
+                generation,
+                duration_seconds: request.duration_seconds,
+                sample_rate: mode,
+                start,
+                current_second: None,
+                lane_mask: if request.include_time_statistics {
+                    request.lane_mask
+                } else {
+                    0
+                },
+                lanes: std::array::from_fn(|_| TimePowerAccumulator::default()),
+                seconds: Vec::new(),
+                previous_header: None,
+                packet_count: 0,
+            };
+        }
+        *control = SpecStabilityControl {
+            generation,
+            status: "running".to_string(),
+            request: Some(request.clone()),
+            targets,
+            started_unix_ms: Some(unix_time_ms()),
+            finished_unix_ms: None,
+            error: None,
+        };
+        self.generation.store(generation, Ordering::Relaxed);
+        self.active.store(true, Ordering::Release);
+        drop(control);
+
+        let monitor = self.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(request.duration_seconds as u64));
+            monitor.finish(generation);
+        });
+        Ok(self.status())
+    }
+
+    fn fail(&self, generation: u64, error: String) {
+        if self.generation.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        self.active.store(false, Ordering::Release);
+        if let Ok(mut control) = self.control.lock() {
+            if control.generation == generation && control.status == "running" {
+                control.status = "failed".to_string();
+                control.error = Some(error);
+                control.finished_unix_ms = Some(unix_time_ms());
+            }
+        }
+    }
+
+    fn finish(&self, generation: u64) {
+        if self.generation.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        self.active.store(false, Ordering::Release);
+        for block in &self.blocks {
+            if let Ok(mut block) = block.lock() {
+                if block.generation == generation {
+                    block.finalize_current();
+                }
+            }
+        }
+        if let Ok(mut time) = self.time.lock() {
+            if time.generation == generation {
+                time.finalize_current();
+            }
+        }
+        if let Ok(mut control) = self.control.lock() {
+            if control.generation == generation && control.status == "running" {
+                control.status = "completed".to_string();
+                control.finished_unix_ms = Some(unix_time_ms());
+            }
+        }
+    }
+
+    fn ingest(&self, header: &T510Header, udp_payload: &[u8]) {
+        if !self.active.load(Ordering::Acquire) {
+            return;
+        }
+        let generation = self.generation.load(Ordering::Relaxed);
+        let block_index = header.block_index as usize;
+        if block_index >= self.blocks.len() {
+            self.fail(generation, format!("invalid block_index {block_index}"));
+            return;
+        }
+        let Ok(mut block) = self.blocks[block_index].lock() else {
+            self.fail(generation, "monitor block lock poisoned".to_string());
+            return;
+        };
+        if block.generation != generation {
+            return;
+        }
+        if header.pfb_taps != 8
+            || header.nchan != 4096
+            || header.block_count != SPEC_BLOCK_COUNT
+            || header.chan0 != header.block_index as u32 * 256
+            || header.chan_count != 256
+            || header.spec_sample_rate_hz != block.sample_rate.sample_rate_hz() as u32
+        {
+            drop(block);
+            self.fail(
+                generation,
+                format!(
+                    "spectrum identity mismatch: taps={} nchan={} blocks={} block={} chan0={} count={} rate_hz={}",
+                    header.pfb_taps,
+                    header.nchan,
+                    header.block_count,
+                    header.block_index,
+                    header.chan0,
+                    header.chan_count,
+                    header.spec_sample_rate_hz
+                ),
+            );
+            return;
+        }
+        if let Some(previous) = block.previous_header {
+            let expected_packet_delta = SPEC_BLOCK_COUNT as u32;
+            let expected_sample_delta = 4096u64.saturating_mul(block.sample_rate.decimation());
+            let seq_delta = header.seq_no.wrapping_sub(previous.seq_no);
+            let frame_delta = header.frame_id.wrapping_sub(previous.frame_id);
+            let sample_delta = header.sample0.wrapping_sub(previous.sample0);
+            if seq_delta != expected_packet_delta
+                || frame_delta != expected_packet_delta as u64
+                || sample_delta != expected_sample_delta
+            {
+                drop(block);
+                self.fail(
+                    generation,
+                    format!(
+                        "gap on block {block_index}: seq_delta={seq_delta} frame_delta={frame_delta} sample0_delta={sample_delta}; expected {expected_packet_delta}/{expected_packet_delta}/{expected_sample_delta}"
+                    ),
+                );
+                return;
+            }
+        }
+        block.previous_header = Some(*header);
+        // Spectrum buckets are defined entirely in the FPGA sample0 domain.
+        // The RF sample counter advances by `decimation` for every selected
+        // sample, so this remains deterministic even when the host is delayed.
+        let raw_samples_per_bucket = (block.sample_rate.sample_rate_hz() as u64)
+            .saturating_mul(block.sample_rate.decimation())
+            .saturating_mul(block.bucket_ms as u64)
+            / 1000;
+        let origin_sample0 = *block.first_absolute_bucket.get_or_insert(header.sample0);
+        let Some(sample0_delta) = header.sample0.checked_sub(origin_sample0) else {
+            drop(block);
+            self.fail(
+                generation,
+                format!(
+                    "sample0 moved before monitor origin on block {block_index}: {} < {}",
+                    header.sample0, origin_sample0
+                ),
+            );
+            return;
+        };
+        let bucket = (sample0_delta / raw_samples_per_bucket.max(1)).min(u32::MAX as u64) as u32;
+        let bucket_count = block.duration_seconds.saturating_mul(1000) / block.bucket_ms;
+        if bucket >= bucket_count {
+            return;
+        }
+        if block.current_second != Some(bucket) {
+            block.finalize_current();
+            block.current_second = Some(bucket);
+        }
+        let correlation_pairs = block.correlation_pairs.clone();
+        let lane_mask = block.lane_mask;
+        for target in &mut block.targets {
+            let base = 128 + target.local_bin * TIME_NINPUT * 4;
+            if base + TIME_NINPUT * 4 > udp_payload.len() {
+                drop(block);
+                self.fail(
+                    generation,
+                    "selected spectrum bin exceeds payload".to_string(),
+                );
+                return;
+            }
+            let mut values = [(0.0f64, 0.0f64); TIME_NINPUT];
+            target.first_sample0.get_or_insert(header.sample0);
+            target.last_sample0 = header.sample0;
+            for (lane, accumulator) in target.lanes.iter_mut().enumerate() {
+                if lane_mask & (1 << lane) == 0 {
+                    continue;
+                }
+                let offset = base + lane * 4;
+                let i = i16::from_le_bytes([udp_payload[offset], udp_payload[offset + 1]]) as f64;
+                let q =
+                    i16::from_le_bytes([udp_payload[offset + 2], udp_payload[offset + 3]]) as f64;
+                let power = i * i + q * q;
+                values[lane] = (i, q);
+                accumulator.sample_count = accumulator.sample_count.saturating_add(1);
+                accumulator.sum_i += i;
+                accumulator.sum_q += q;
+                accumulator.sum_power += power;
+                accumulator.sum_power_squared += power * power;
+            }
+            for (pair, cross) in correlation_pairs
+                .iter()
+                .copied()
+                .zip(target.crosses.iter_mut())
+            {
+                let (ia, qa) = values[pair[0]];
+                let (ib, qb) = values[pair[1]];
+                cross.sample_count = cross.sample_count.saturating_add(1);
+                cross.sum_cross_re += ia * ib + qa * qb;
+                cross.sum_cross_im += qa * ib - ia * qb;
+                cross.sum_power_a += ia * ia + qa * qa;
+                cross.sum_power_b += ib * ib + qb * qb;
+            }
+        }
+        block.packet_count = block.packet_count.saturating_add(1);
+    }
+
+    fn ingest_time(
+        &self,
+        header: &T510Header,
+        udp_payload: &[u8],
+        dst_port: u16,
+        dst_port_base: u16,
+        time_flow_count: usize,
+    ) {
+        if !self.active.load(Ordering::Acquire) || dst_port != dst_port_base {
+            return;
+        }
+        let generation = self.generation.load(Ordering::Relaxed);
+        let Ok(mut state) = self.time.lock() else {
+            self.fail(generation, "monitor time lock poisoned".to_string());
+            return;
+        };
+        if state.generation != generation || state.lane_mask == 0 {
+            return;
+        }
+        if header.stream_type != STREAM_TIME
+            || header.ninput as usize != TIME_NINPUT
+            || header.spec_sample_rate_hz != 0
+        {
+            drop(state);
+            self.fail(
+                generation,
+                "TIME identity mismatch during stability monitor".to_string(),
+            );
+            return;
+        }
+        if let Some(previous) = state.previous_header {
+            let stride = time_flow_count.max(1) as u64;
+            let seq_delta = header.seq_no.wrapping_sub(previous.seq_no) as u64;
+            let frame_delta = header.frame_id.wrapping_sub(previous.frame_id);
+            let sample_delta = header.sample0.wrapping_sub(previous.sample0);
+            let expected_sample_delta =
+                expected_sample0_delta(header, state.sample_rate).saturating_mul(stride);
+            if seq_delta != stride || frame_delta != stride || sample_delta != expected_sample_delta
+            {
+                drop(state);
+                self.fail(
+                    generation,
+                    format!(
+                        "TIME gap: seq_delta={seq_delta} frame_delta={frame_delta} sample0_delta={sample_delta}; expected {stride}/{stride}/{expected_sample_delta}"
+                    ),
+                );
+                return;
+            }
+        }
+        state.previous_header = Some(*header);
+        let second = state.start.elapsed().as_secs().min(u32::MAX as u64) as u32;
+        if second >= state.duration_seconds {
+            return;
+        }
+        if state.current_second != Some(second) {
+            state.finalize_current();
+            state.current_second = Some(second);
+        }
+        let samples_per_lane = header.time_count as usize * TIME_SUBSAMPLES_PER_BEAT;
+        if samples_per_lane == 0 {
+            drop(state);
+            self.fail(generation, "TIME packet has no samples".to_string());
+            return;
+        }
+        let selected = header.seq_no as usize % samples_per_lane;
+        let beat = selected / TIME_SUBSAMPLES_PER_BEAT;
+        let sub_sample = selected % TIME_SUBSAMPLES_PER_BEAT;
+        let lane_mask = state.lane_mask;
+        for lane in 0..TIME_NINPUT {
+            if lane_mask & (1 << lane) == 0 {
+                continue;
+            }
+            let Ok(offset) = time_payload_complex_offset(beat, sub_sample, lane) else {
+                drop(state);
+                self.fail(generation, "TIME sample offset is invalid".to_string());
+                return;
+            };
+            if offset + 4 > udp_payload.len() {
+                drop(state);
+                self.fail(
+                    generation,
+                    "TIME selected sample exceeds payload".to_string(),
+                );
+                return;
+            }
+            let i = i16::from_le_bytes([udp_payload[offset], udp_payload[offset + 1]]);
+            let q = i16::from_le_bytes([udp_payload[offset + 2], udp_payload[offset + 3]]);
+            let accumulator = &mut state.lanes[lane];
+            accumulator.sample_count = accumulator.sample_count.saturating_add(1);
+            accumulator.sum_i += i as f64;
+            accumulator.sum_q += q as f64;
+            accumulator.sum_power += (i as f64) * (i as f64) + (q as f64) * (q as f64);
+            accumulator.max_abs = accumulator
+                .max_abs
+                .max(i.saturating_abs())
+                .max(q.saturating_abs());
+            accumulator.clipped |=
+                i == i16::MIN || q == i16::MIN || i.abs() >= 32760 || q.abs() >= 32760;
+        }
+        state.packet_count = state.packet_count.saturating_add(1);
+    }
+
+    fn status(&self) -> SpecStabilityStatus {
+        let control = self
+            .control
+            .lock()
+            .map(|control| control.clone())
+            .unwrap_or_default();
+        let mut packet_count_by_block = Vec::with_capacity(self.blocks.len());
+        let mut completed_seconds = 0usize;
+        for block in &self.blocks {
+            if let Ok(block) = block.lock() {
+                packet_count_by_block.push(block.packet_count);
+                let json_seconds = block
+                    .power_seconds
+                    .last()
+                    .map(|row| row.second as usize + 1)
+                    .unwrap_or(0);
+                let binary_seconds = block
+                    .binary_records
+                    .last()
+                    .map(|row| ((row.bucket as usize + 1) * block.bucket_ms as usize) / 1000)
+                    .unwrap_or(0);
+                completed_seconds = completed_seconds.max(json_seconds.max(binary_seconds));
+            } else {
+                packet_count_by_block.push(0);
+            }
+        }
+        let time_packet_count = self
+            .time
+            .lock()
+            .map(|state| state.packet_count)
+            .unwrap_or(0);
+        SpecStabilityStatus {
+            generation: control.generation,
+            status: control.status,
+            request: control.request,
+            targets: control.targets,
+            started_unix_ms: control.started_unix_ms,
+            finished_unix_ms: control.finished_unix_ms,
+            error: control.error,
+            packet_count_by_block,
+            completed_seconds,
+            time_packet_count,
+        }
+    }
+
+    fn result(&self) -> Result<SpecStabilityResult, String> {
+        let control = self
+            .control
+            .lock()
+            .map_err(|_| "monitor lock poisoned")?
+            .clone();
+        if control.status == "idle" {
+            return Err("no spectrum stability result is available".to_string());
+        }
+        if control.status == "running" {
+            return Err("spectrum stability measurement is still running".to_string());
+        }
+        let mut packet_count_by_block = Vec::with_capacity(self.blocks.len());
+        let mut power_seconds = Vec::new();
+        let mut cross_seconds = Vec::new();
+        for block in &self.blocks {
+            let block = block.lock().map_err(|_| "monitor block lock poisoned")?;
+            packet_count_by_block.push(block.packet_count);
+            power_seconds.extend(block.power_seconds.iter().cloned());
+            cross_seconds.extend(block.cross_seconds.iter().cloned());
+        }
+        let (time_seconds, time_packet_count) = self
+            .time
+            .lock()
+            .map(|state| (state.seconds.clone(), state.packet_count))
+            .map_err(|_| "monitor time lock poisoned")?;
+        power_seconds.sort_by_key(|row| (row.second, row.target_index, row.lane));
+        cross_seconds.sort_by_key(|row| (row.second, row.target_index));
+        let request = control
+            .request
+            .clone()
+            .ok_or_else(|| "missing monitor request".to_string())?;
+        let (binary_bytes, binary_sha256) =
+            if request.result_format == SpecStabilityResultFormat::Binary {
+                let data = self.binary_data()?;
+                let mut hasher = Sha256::new();
+                hasher.update(&data);
+                (
+                    Some(data.len() as u64),
+                    Some(format!("{:x}", hasher.finalize())),
+                )
+            } else {
+                (None, None)
+            };
+        Ok(SpecStabilityResult {
+            generation: control.generation,
+            status: control.status,
+            request,
+            targets: control.targets,
+            started_unix_ms: control.started_unix_ms.unwrap_or_default(),
+            finished_unix_ms: control.finished_unix_ms.unwrap_or_default(),
+            error: control.error,
+            packet_count_by_block,
+            power_seconds,
+            cross_seconds,
+            time_seconds,
+            time_packet_count,
+            binary_bytes,
+            binary_sha256,
+        })
+    }
+
+    fn binary_data(&self) -> Result<Vec<u8>, String> {
+        let control = self
+            .control
+            .lock()
+            .map_err(|_| "monitor lock poisoned")?
+            .clone();
+        if control.status != "completed" {
+            return Err(format!(
+                "binary spectrum stability data requires completed status, got {}",
+                control.status
+            ));
+        }
+        let request = control
+            .request
+            .ok_or_else(|| "missing monitor request".to_string())?;
+        if request.result_format != SpecStabilityResultFormat::Binary {
+            return Err("measurement did not request result_format=binary".to_string());
+        }
+        let pairs = spec_stability_pairs(&request)?;
+        let mut records = Vec::new();
+        for block in &self.blocks {
+            let block = block.lock().map_err(|_| "monitor block lock poisoned")?;
+            records.extend(block.binary_records.iter().cloned());
+        }
+        records.sort_by_key(|record| (record.bucket, record.target_index));
+        let metadata = serde_json::to_vec(&serde_json::json!({
+            "format": "TIS1",
+            "version": 1,
+            "endianness": "little",
+            "bucket_source": "sample0",
+            "request": request,
+            "targets": control.targets,
+            "pairs": pairs,
+            "record_layout": {
+                "prefix": ["bucket:u32", "target:u16", "reserved:u16", "first_sample0:u64", "last_sample0:u64", "sample_count:u64"],
+                "lane": ["sample_count:u64", "sum_i:f64", "sum_q:f64", "sum_power:f64", "sum_power_squared:f64"],
+                "pair": ["sample_count:u64", "sum_cross_re:f64", "sum_cross_im:f64"]
+            }
+        }))
+        .map_err(|error| format!("TIS1 metadata serialization failed: {error}"))?;
+        let record_bytes = 32usize
+            .saturating_add(TIME_NINPUT * 40)
+            .saturating_add(pairs.len() * 24);
+        let mut out = Vec::with_capacity(
+            64usize
+                .saturating_add(metadata.len())
+                .saturating_add(records.len().saturating_mul(record_bytes)),
+        );
+        out.extend_from_slice(b"TIS1");
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&64u16.to_le_bytes());
+        out.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        out.extend_from_slice(&request.bucket_ms.to_le_bytes());
+        out.extend_from_slice(&request.sample_rate_msps.to_le_bytes());
+        out.extend_from_slice(&request.duration_seconds.to_le_bytes());
+        out.extend_from_slice(&(control.targets.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(TIME_NINPUT as u16).to_le_bytes());
+        out.extend_from_slice(&(pairs.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&(records.len() as u64).to_le_bytes());
+        out.extend_from_slice(&control.started_unix_ms.unwrap_or_default().to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(&(record_bytes as u64).to_le_bytes());
+        debug_assert_eq!(out.len(), 64);
+        out.extend_from_slice(&metadata);
+        for record in records {
+            out.extend_from_slice(&record.bucket.to_le_bytes());
+            out.extend_from_slice(&(record.target_index as u16).to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&record.first_sample0.to_le_bytes());
+            out.extend_from_slice(&record.last_sample0.to_le_bytes());
+            out.extend_from_slice(&record.sample_count.to_le_bytes());
+            for lane in &record.lanes {
+                out.extend_from_slice(&lane.sample_count.to_le_bytes());
+                out.extend_from_slice(&lane.sum_i.to_le_bytes());
+                out.extend_from_slice(&lane.sum_q.to_le_bytes());
+                out.extend_from_slice(&lane.sum_power.to_le_bytes());
+                out.extend_from_slice(&lane.sum_power_squared.to_le_bytes());
+            }
+            for cross in &record.crosses {
+                out.extend_from_slice(&cross.sample_count.to_le_bytes());
+                out.extend_from_slice(&cross.sum_cross_re.to_le_bytes());
+                out.extend_from_slice(&cross.sum_cross_im.to_le_bytes());
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn encode_pcap(slots: &[Vec<CapturedEthernetFrame>]) -> Vec<u8> {
+    let frame_count: usize = slots.iter().map(Vec::len).sum();
+    let frame_bytes: usize = slots
+        .iter()
+        .flat_map(|slot| slot.iter())
+        .map(|frame| frame.bytes.len())
+        .sum();
+    let mut out = Vec::with_capacity(24 + frame_count * 16 + frame_bytes);
+    out.extend_from_slice(&0xa1b2c3d4u32.to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&4u16.to_le_bytes());
+    out.extend_from_slice(&0i32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&65_535u32.to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes());
+    for frame in slots.iter().flat_map(|slot| slot.iter()) {
+        let seconds = frame.timestamp.as_secs().min(u32::MAX as u64) as u32;
+        let micros = frame.timestamp.subsec_micros();
+        let len = frame.bytes.len().min(u32::MAX as usize) as u32;
+        out.extend_from_slice(&seconds.to_le_bytes());
+        out.extend_from_slice(&micros.to_le_bytes());
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&frame.bytes);
+    }
+    out
+}
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Backend {
@@ -122,7 +1420,7 @@ fn parse_u16_auto(value: &str) -> Result<u16, String> {
 #[command(
     author,
     version,
-    about = "T510 Stage 33 TIME/SPEC receiver and production F-engine preview"
+    about = "T510 Stage 34 TIME/SPEC receiver and fixed 8-tap F-engine preview"
 )]
 struct Args {
     #[arg(long, default_value = "ens2f0np0")]
@@ -1413,6 +2711,8 @@ struct SharedState {
     spectrum_binary: BinaryFrameCache,
     spectrum_updated: Option<Instant>,
     spectrum_preview: SpecPreviewCapture,
+    raw_spec_capture: Arc<RawSpecCapture>,
+    spec_stability_monitor: Arc<SpecStabilityMonitor>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1432,6 +2732,13 @@ struct DisplayConfigPatch {
     paused: Option<bool>,
     pause: Option<bool>,
     freeze: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSpecCaptureRequest {
+    packets_per_block: usize,
+    #[serde(default)]
+    include_time: bool,
 }
 
 impl DisplayConfigPatch {
@@ -1504,7 +2811,7 @@ fn validate_stage33_frequency_config(config: &DisplayConfig) -> Result<(), Strin
         return Err("output_mode must be time_only, spec_only, or time_spec".to_string());
     }
     if config.sample_rate_msps == 320 && config.output_mode == "time_spec" {
-        return Err("Stage 33 rejects time_spec at 320 MS/s".to_string());
+        return Err("Stage 34 rejects time_spec at 320 MS/s".to_string());
     }
     if !config.center_mhz.is_finite()
         || !(center_min_mhz..=center_max_mhz).contains(&config.center_mhz)
@@ -3859,6 +5166,8 @@ struct FanoutWorkerRuntime {
     report_slot: Arc<Mutex<FanoutWorkerReport>>,
     display_owner: Arc<AtomicUsize>,
     spectrum_gate: Arc<SpectrumPreviewGate>,
+    raw_spec_capture: Arc<RawSpecCapture>,
+    spec_stability_monitor: Arc<SpecStabilityMonitor>,
     stats: WorkerStats,
     per_flow: Vec<FlowStats>,
     flow_previous_headers: Vec<Option<T510Header>>,
@@ -3896,6 +5205,8 @@ impl FanoutWorkerRuntime {
             websocket_clients,
             waveform_websocket_clients,
             spectrum_websocket_clients,
+            raw_spec_capture,
+            spec_stability_monitor,
         ) = {
             let guard = config.shared.lock().unwrap();
             (
@@ -3904,6 +5215,8 @@ impl FanoutWorkerRuntime {
                 guard.stats.websocket_clients,
                 guard.stats.waveform_websocket_clients,
                 guard.stats.spectrum_websocket_clients,
+                guard.raw_spec_capture.clone(),
+                guard.spec_stability_monitor.clone(),
             )
         };
         Self {
@@ -3915,6 +5228,8 @@ impl FanoutWorkerRuntime {
             shared: config.shared.clone(),
             report_slot: config.report_slot.clone(),
             spectrum_gate: config.spectrum_gate.clone(),
+            raw_spec_capture,
+            spec_stability_monitor,
             stats: WorkerStats::new(config.worker_id),
             per_flow: (0..config.flow_count)
                 .map(|flow_id| {
@@ -3997,6 +5312,17 @@ impl FanoutWorkerRuntime {
                     self.publish_if_due();
                     return;
                 }
+                self.raw_spec_capture.ingest_time(
+                    view.dst_port.saturating_sub(self.dst_port_base) as usize,
+                    frame,
+                );
+                self.spec_stability_monitor.ingest_time(
+                    &header,
+                    view.payload,
+                    view.dst_port,
+                    self.dst_port_base,
+                    self.time_flow_count,
+                );
                 self.process_time_packet(header, view.payload, view.src_port, view.dst_port);
             }
             STREAM_SPEC => {
@@ -4010,6 +5336,8 @@ impl FanoutWorkerRuntime {
                     self.publish_if_due();
                     return;
                 }
+                self.raw_spec_capture.ingest_spec(header.block_index, frame);
+                self.spec_stability_monitor.ingest(&header, view.payload);
                 self.process_spec_packet(header, view.payload, view.src_port, view.dst_port);
             }
             other => {
@@ -5091,7 +6419,166 @@ fn handle_http(
                 )
             }
         }
-    } else if first.starts_with("OPTIONS /api/config ") || first.starts_with("OPTIONS /api/state ")
+    } else if first.starts_with("POST /api/capture/spec-pcap ") {
+        let body = request_body(&buf);
+        match serde_json::from_slice::<RawSpecCaptureRequest>(body) {
+            Ok(request) => {
+                let capture = {
+                    let guard = shared.lock().unwrap();
+                    guard.raw_spec_capture.clone()
+                };
+                match capture
+                    .begin(request.packets_per_block, request.include_time)
+                    .and_then(|generation| capture.wait_pcap(generation, RAW_SPEC_CAPTURE_TIMEOUT))
+                {
+                    Ok(pcap) => {
+                        write_response(&mut stream, "200 OK", "application/vnd.tcpdump.pcap", &pcap)
+                    }
+                    Err(err) => {
+                        let body = serde_json::json!({"ok": false, "error": err}).to_string();
+                        write_response(
+                            &mut stream,
+                            "409 Conflict",
+                            "application/json",
+                            body.as_bytes(),
+                        )
+                    }
+                }
+            }
+            Err(err) => {
+                let body = serde_json::json!({"ok": false, "error": err.to_string()}).to_string();
+                write_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    body.as_bytes(),
+                )
+            }
+        }
+    } else if first.starts_with("POST /api/measure/spec-stability ") {
+        let body = request_body(&buf);
+        match serde_json::from_slice::<SpecStabilityRequest>(body) {
+            Ok(request) => {
+                let (config, monitor) = {
+                    let guard = shared.lock().unwrap();
+                    (guard.config.clone(), guard.spec_stability_monitor.clone())
+                };
+                let allowed_mode = config.output_mode == "spec_only"
+                    || (request.include_time_statistics
+                        && request.sample_rate_msps == 160
+                        && config.output_mode == "time_spec");
+                let config_error = if !allowed_mode {
+                    Some(
+                        "receiver Web configuration must be SPEC_ONLY, or 160 MS/s TIME_SPEC when include_time_statistics=true"
+                            .to_string(),
+                    )
+                } else if config.sample_rate_msps != request.sample_rate_msps {
+                    Some(format!(
+                        "receiver sample rate is {} MS/s, request is {} MS/s",
+                        config.sample_rate_msps, request.sample_rate_msps
+                    ))
+                } else if (config.center_mhz - request.center_mhz).abs() > 1.0e-6 {
+                    Some(format!(
+                        "receiver center is {:.9} MHz, request is {:.9} MHz",
+                        config.center_mhz, request.center_mhz
+                    ))
+                } else {
+                    None
+                };
+                if let Some(error) = config_error {
+                    let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                    write_response(
+                        &mut stream,
+                        "409 Conflict",
+                        "application/json",
+                        response.as_bytes(),
+                    )
+                } else {
+                    match monitor.begin(request) {
+                        Ok(status) => {
+                            let response = serde_json::to_vec(&status).unwrap_or_default();
+                            write_response(
+                                &mut stream,
+                                "202 Accepted",
+                                "application/json",
+                                &response,
+                            )
+                        }
+                        Err(error) => {
+                            let response =
+                                serde_json::json!({"ok": false, "error": error}).to_string();
+                            write_response(
+                                &mut stream,
+                                "409 Conflict",
+                                "application/json",
+                                response.as_bytes(),
+                            )
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                let response =
+                    serde_json::json!({"ok": false, "error": error.to_string()}).to_string();
+                write_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    response.as_bytes(),
+                )
+            }
+        }
+    } else if first.starts_with("GET /api/measure/spec-stability/status ") {
+        let monitor = {
+            let guard = shared.lock().unwrap();
+            guard.spec_stability_monitor.clone()
+        };
+        let response = serde_json::to_vec(&monitor.status()).unwrap_or_default();
+        write_response(&mut stream, "200 OK", "application/json", &response)
+    } else if first.starts_with("GET /api/measure/spec-stability/result ") {
+        let monitor = {
+            let guard = shared.lock().unwrap();
+            guard.spec_stability_monitor.clone()
+        };
+        match monitor.result() {
+            Ok(result) => {
+                let response = serde_json::to_vec(&result).unwrap_or_default();
+                write_response(&mut stream, "200 OK", "application/json", &response)
+            }
+            Err(error) => {
+                let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                write_response(
+                    &mut stream,
+                    "409 Conflict",
+                    "application/json",
+                    response.as_bytes(),
+                )
+            }
+        }
+    } else if first.starts_with("GET /api/measure/spec-stability/data ") {
+        let monitor = {
+            let guard = shared.lock().unwrap();
+            guard.spec_stability_monitor.clone()
+        };
+        match monitor.binary_data() {
+            Ok(data) => write_response(&mut stream, "200 OK", "application/vnd.t510.tis1", &data),
+            Err(error) => {
+                let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                write_response(
+                    &mut stream,
+                    "409 Conflict",
+                    "application/json",
+                    response.as_bytes(),
+                )
+            }
+        }
+    } else if first.starts_with("OPTIONS /api/config ")
+        || first.starts_with("OPTIONS /api/state ")
+        || first.starts_with("OPTIONS /api/capture/spec-pcap ")
+        || first.starts_with("OPTIONS /api/measure/spec-stability ")
+        || first.starts_with("OPTIONS /api/measure/spec-stability/status ")
+        || first.starts_with("OPTIONS /api/measure/spec-stability/result ")
+        || first.starts_with("OPTIONS /api/measure/spec-stability/data ")
     {
         write_response(&mut stream, "204 No Content", "text/plain", b"")
     } else {
@@ -5775,6 +7262,295 @@ mod tests {
     }
 
     #[test]
+    fn raw_spec_capture_exports_balanced_classic_pcap() {
+        let capture = RawSpecCapture::default();
+        let generation = capture.begin(2, false).unwrap();
+        for packet in 0..2u8 {
+            for block in 0..SPEC_BLOCK_COUNT {
+                capture.ingest_spec(block, &[block as u8, packet]);
+            }
+        }
+        let pcap = capture
+            .wait_pcap(generation, Duration::from_millis(10))
+            .unwrap();
+        assert_eq!(&pcap[..4], &0xa1b2c3d4u32.to_le_bytes());
+        assert_eq!(pcap.len(), 24 + SPEC_BLOCK_COUNT as usize * 2 * (16 + 2));
+        assert!(!capture.active.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn raw_time_spec_capture_uses_all_twenty_four_existing_ring_flows() {
+        let capture = RawSpecCapture::default();
+        let generation = capture.begin(1, true).unwrap();
+        for flow in 0..DEFAULT_TIME_FLOW_COUNT {
+            capture.ingest_time(flow, &[flow as u8, 0xaa]);
+        }
+        for block in 0..SPEC_BLOCK_COUNT {
+            capture.ingest_spec(block, &[block as u8, 0x55]);
+        }
+        let pcap = capture
+            .wait_pcap(generation, Duration::from_millis(10))
+            .unwrap();
+        assert_eq!(pcap.len(), 24 + DEFAULT_FLOW_COUNT * (16 + 2));
+        assert!(!capture.active.load(Ordering::Acquire));
+    }
+
+    fn stability_request(duration_seconds: u32) -> SpecStabilityRequest {
+        SpecStabilityRequest {
+            duration_seconds,
+            formal: true,
+            sample_rate_msps: 320,
+            center_mhz: 1020.0,
+            rf_frequencies_mhz: vec![960.0, 1000.0, 1080.0],
+            signed_bins: Vec::new(),
+            correlation_pair: Some([0, 2]),
+            correlation_mode: None,
+            bucket_ms: 1000,
+            result_format: SpecStabilityResultFormat::Json,
+            lane_mask: 0x05,
+            include_time_statistics: false,
+        }
+    }
+
+    fn stability_header(block_index: u16, seq_no: u32, frame_id: u64, sample0: u64) -> T510Header {
+        let mut header = test_header(seq_no);
+        header.stream_type = STREAM_SPEC;
+        header.sample0 = sample0;
+        header.frame_id = frame_id;
+        header.chan0 = block_index as u32 * 256;
+        header.chan_count = 256;
+        header.time_count = 1;
+        header.ninput = TIME_NINPUT as u16;
+        header.product_id = 0xf101;
+        header.nchan = 4096;
+        header.block_index = block_index;
+        header.block_count = SPEC_BLOCK_COUNT;
+        header.pfb_taps = 8;
+        header.spec_sample_rate_hz = 320_000_000;
+        header
+    }
+
+    fn stability_payload(local_bin: usize, values: &[(i16, i16); TIME_NINPUT]) -> Vec<u8> {
+        let mut payload = vec![0u8; 128 + 8192];
+        let base = 128 + local_bin * TIME_NINPUT * 4;
+        for (lane, (i, q)) in values.iter().copied().enumerate() {
+            let offset = base + lane * 4;
+            payload[offset..offset + 2].copy_from_slice(&i.to_le_bytes());
+            payload[offset + 2..offset + 4].copy_from_slice(&q.to_le_bytes());
+        }
+        payload
+    }
+
+    #[test]
+    fn spec_stability_maps_rf_bins_and_accumulates_power_and_coherence_terms() {
+        let monitor = Arc::new(SpecStabilityMonitor::default());
+        let status = monitor.begin(stability_request(600)).unwrap();
+        assert_eq!(status.targets[0].signed_bin, -768);
+        assert_eq!(status.targets[0].block_index, 13);
+        assert_eq!(status.targets[1].signed_bin, -256);
+        assert_eq!(status.targets[2].signed_bin, 768);
+        assert!(monitor.begin(stability_request(600)).is_err());
+
+        let values = [
+            (3, 4),
+            (0, 0),
+            (6, 8),
+            (1, 0),
+            (2, 0),
+            (3, 0),
+            (4, 0),
+            (5, 0),
+        ];
+        let target = &status.targets[0];
+        let payload = stability_payload(target.local_bin as usize, &values);
+        monitor.ingest(&stability_header(target.block_index, 13, 13, 0), &payload);
+        monitor.ingest(
+            &stability_header(target.block_index, 29, 29, 4096),
+            &payload,
+        );
+        monitor.finish(status.generation);
+
+        let result = monitor.result().unwrap();
+        assert_eq!(result.status, "completed");
+        let lane0 = result
+            .power_seconds
+            .iter()
+            .find(|row| row.target_index == 0 && row.lane == 0)
+            .unwrap();
+        assert_eq!(lane0.accumulator.sample_count, 2);
+        assert_eq!(lane0.accumulator.sum_power, 50.0);
+        let cross = result
+            .cross_seconds
+            .iter()
+            .find(|row| row.target_index == 0)
+            .unwrap();
+        assert_eq!(cross.accumulator.sample_count, 2);
+        assert_eq!(cross.accumulator.sum_cross_re, 100.0);
+        assert_eq!(cross.accumulator.sum_cross_im, 0.0);
+    }
+
+    #[test]
+    fn spec_stability_all_pairs_use_sample0_buckets_and_tis1_round_trips() {
+        let monitor = Arc::new(SpecStabilityMonitor::default());
+        let mut request = stability_request(600);
+        request.rf_frequencies_mhz = vec![1000.0];
+        request.correlation_pair = None;
+        request.correlation_mode = Some(SpecCorrelationMode::All);
+        request.bucket_ms = 100;
+        request.result_format = SpecStabilityResultFormat::Binary;
+        request.lane_mask = 0xff;
+        let status = monitor.begin(request).unwrap();
+        let target = &status.targets[0];
+        let values = [
+            (1, 2),
+            (3, 5),
+            (7, 11),
+            (13, 17),
+            (19, 23),
+            (29, 31),
+            (37, 41),
+            (43, 47),
+        ];
+        let payload = stability_payload(target.local_bin as usize, &values);
+        // At 320 MS/s, 100 ms is exactly 32,000,000 sample0 ticks.  Feed
+        // consecutive spectra so the ordinary gap checker is exercised too.
+        for spectrum in 0..=7813u64 {
+            monitor.ingest(
+                &stability_header(
+                    target.block_index,
+                    (spectrum * 16) as u32,
+                    spectrum * 16,
+                    1_000 + spectrum * 4096,
+                ),
+                &payload,
+            );
+        }
+        monitor.finish(status.generation);
+
+        assert_eq!(all_adc_pairs().len(), 28);
+        assert_eq!(all_adc_pairs()[0], [0, 1]);
+        assert_eq!(all_adc_pairs()[27], [6, 7]);
+        let data = monitor.binary_data().unwrap();
+        assert_eq!(&data[..4], b"TIS1");
+        assert_eq!(u16::from_le_bytes(data[4..6].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(data[12..16].try_into().unwrap()), 100);
+        assert_eq!(u16::from_le_bytes(data[28..30].try_into().unwrap()), 28);
+        let record_count = u64::from_le_bytes(data[32..40].try_into().unwrap());
+        assert_eq!(record_count, 2);
+        let metadata_len = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
+        let record_bytes = u64::from_le_bytes(data[56..64].try_into().unwrap()) as usize;
+        assert_eq!(record_bytes, 1024);
+        assert_eq!(data.len(), 64 + metadata_len + 2 * record_bytes);
+
+        let first_record = 64 + metadata_len;
+        assert_eq!(
+            u32::from_le_bytes(data[first_record..first_record + 4].try_into().unwrap()),
+            0
+        );
+        let cross0 = first_record + 32 + TIME_NINPUT * 40;
+        let cross_count = u64::from_le_bytes(data[cross0..cross0 + 8].try_into().unwrap());
+        let cross_re = f64::from_le_bytes(data[cross0 + 8..cross0 + 16].try_into().unwrap());
+        let cross_im = f64::from_le_bytes(data[cross0 + 16..cross0 + 24].try_into().unwrap());
+        assert_eq!(cross_count, 7813);
+        // (1+2j) * conj(3+5j) = 13+1j.
+        assert_eq!(cross_re, 13.0 * 7813.0);
+        assert_eq!(cross_im, 7813.0);
+
+        let result = monitor.result().unwrap();
+        assert!(result.power_seconds.is_empty());
+        assert!(result.cross_seconds.is_empty());
+        assert_eq!(result.binary_bytes, Some(data.len() as u64));
+        assert_eq!(result.binary_sha256.as_deref().map(str::len), Some(64));
+    }
+
+    #[test]
+    fn spec_stability_rejects_off_grid_too_many_targets_and_aborts_on_gap() {
+        let mut off_grid = stability_request(600);
+        off_grid.rf_frequencies_mhz = vec![960.000_001];
+        assert!(build_spec_stability_targets(&off_grid).is_err());
+
+        let mut too_many = stability_request(600);
+        too_many.rf_frequencies_mhz.clear();
+        too_many.signed_bins = (-16..=16).collect();
+        assert!(build_spec_stability_targets(&too_many).is_err());
+
+        let monitor = Arc::new(SpecStabilityMonitor::default());
+        assert!(monitor.begin(stability_request(10)).is_err());
+        let status = monitor.begin(stability_request(600)).unwrap();
+        let target = &status.targets[0];
+        let payload = stability_payload(target.local_bin as usize, &[(1, 0); TIME_NINPUT]);
+        monitor.ingest(&stability_header(target.block_index, 13, 13, 0), &payload);
+        monitor.ingest(
+            &stability_header(target.block_index, 45, 45, 8192),
+            &payload,
+        );
+        let failed = monitor.status();
+        assert_eq!(failed.status, "failed");
+        assert!(failed.error.unwrap().contains("gap on block"));
+    }
+
+    #[test]
+    fn spec_stability_accepts_registered_sixty_minute_formal_duration() {
+        let monitor = Arc::new(SpecStabilityMonitor::default());
+        let status = monitor
+            .begin(stability_request(SPEC_STABILITY_LONG_DURATION_SECONDS))
+            .unwrap();
+        assert_eq!(
+            status.request.unwrap().duration_seconds,
+            SPEC_STABILITY_LONG_DURATION_SECONDS
+        );
+        monitor.finish(status.generation);
+        assert_eq!(monitor.result().unwrap().status, "completed");
+    }
+
+    #[test]
+    fn stability_lane_mask_and_rotating_time_sample_only_publish_adc0_adc2() {
+        let monitor = Arc::new(SpecStabilityMonitor::default());
+        let mut request = stability_request(600);
+        request.sample_rate_msps = 160;
+        request.include_time_statistics = true;
+        request.lane_mask = 0x05;
+        let status = monitor.begin(request).unwrap();
+
+        let values = [
+            (3, 4),
+            (100, 100),
+            (6, 8),
+            (100, 100),
+            (100, 100),
+            (100, 100),
+            (100, 100),
+            (100, 100),
+        ];
+        let mut first_header = test_header(0);
+        first_header.time_count = 1;
+        first_header.sample0 = 0;
+        first_header.frame_id = 0;
+        // TIME word 11 is reserved and therefore zero.  The selected TIME
+        // sample rate is proven by the seq/frame/sample0 delta below, not by
+        // the SPEC-only sample-rate header field.
+        first_header.spec_sample_rate_hz = 0;
+        let first = time_packet_by_channel(first_header, &values);
+        monitor.ingest_time(&first.header, &first.payload, 4300, 4300, 8);
+
+        let mut second_header = first.header;
+        second_header.seq_no = 8;
+        second_header.frame_id = 8;
+        second_header.sample0 = 64;
+        let second = time_packet_by_channel(second_header, &values);
+        monitor.ingest_time(&second.header, &second.payload, 4300, 4300, 8);
+        monitor.finish(status.generation);
+
+        let result = monitor.result().unwrap();
+        assert_eq!(result.time_packet_count, 2);
+        assert_eq!(result.time_seconds.len(), 2);
+        assert_eq!(result.time_seconds[0].lane, 0);
+        assert_eq!(result.time_seconds[0].accumulator.sum_power, 50.0);
+        assert_eq!(result.time_seconds[1].lane, 2);
+        assert_eq!(result.time_seconds[1].accumulator.sum_power, 200.0);
+    }
+
+    #[test]
     fn config_patch_increments_generation_and_resets_previews() {
         let args = test_args();
         let mut state = SharedState {
@@ -5786,6 +7562,8 @@ mod tests {
             spectrum_binary: vec![4, 5, 6].into(),
             spectrum_updated: Some(Instant::now()),
             spectrum_preview: SpecPreviewCapture::default(),
+            raw_spec_capture: Arc::new(RawSpecCapture::default()),
+            spec_stability_monitor: Arc::new(SpecStabilityMonitor::default()),
         };
         state.spectrum_preview.status.complete = true;
         state.stats.detected_sample_rate_msps = Some(160);
@@ -5840,6 +7618,8 @@ mod tests {
             spectrum_binary: vec![4, 5, 6].into(),
             spectrum_updated: Some(Instant::now()),
             spectrum_preview: SpecPreviewCapture::default(),
+            raw_spec_capture: Arc::new(RawSpecCapture::default()),
+            spec_stability_monitor: Arc::new(SpecStabilityMonitor::default()),
         };
 
         clear_stale_previews(&mut state);
@@ -5866,6 +7646,8 @@ mod tests {
             spectrum_binary: vec![4, 5, 6].into(),
             spectrum_updated: Some(Instant::now()),
             spectrum_preview: SpecPreviewCapture::default(),
+            raw_spec_capture: Arc::new(RawSpecCapture::default()),
+            spec_stability_monitor: Arc::new(SpecStabilityMonitor::default()),
         };
 
         clear_stale_previews(&mut state);
@@ -6481,7 +8263,7 @@ mod tests {
             nchan: block_count,
             block_index,
             block_count,
-            pfb_taps: 4,
+            pfb_taps: 8,
             fft_shift: 0,
             spec_status_flags: 1 << 10,
             spec_sample_rate_hz: 100_000_000,
@@ -6631,7 +8413,7 @@ mod tests {
             nchan: 4096,
             block_index: 2,
             block_count: 64,
-            pfb_taps: 4,
+            pfb_taps: 8,
             fft_shift: 3,
             spec_status_flags: 0x21,
             spec_sample_rate_hz: 100_000_000,
@@ -6677,7 +8459,7 @@ mod tests {
         assert_eq!(le_u32(&bytes, 68), 4096);
         assert_eq!(le_u32(&bytes, 72), 2);
         assert_eq!(le_u32(&bytes, 76), 64);
-        assert_eq!(le_u32(&bytes, 80), 4);
+        assert_eq!(le_u32(&bytes, 80), 8);
         assert_eq!(le_u32(&bytes, 84), 3);
         assert_eq!(le_u32(&bytes, 88), 0x21);
         assert_eq!(le_u32(&bytes, 92), 100_000_000);
@@ -6715,6 +8497,8 @@ fn main() -> std::io::Result<()> {
         spectrum_binary: BinaryFrameCache::default(),
         spectrum_updated: None,
         spectrum_preview: SpecPreviewCapture::default(),
+        raw_spec_capture: Arc::new(RawSpecCapture::default()),
+        spec_stability_monitor: Arc::new(SpecStabilityMonitor::default()),
     }));
 
     let receiver_shared = shared.clone();

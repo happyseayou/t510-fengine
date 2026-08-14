@@ -80,9 +80,41 @@ def main() -> int:
         action="store_true",
         help="do not change receiver mode; use when it was prepared before scheduled start",
     )
+    parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="apply and verify receiver mode without running a traffic gate",
+    )
     args = parser.parse_args()
     if args.sample_rate_msps == 320 and args.mode == "time_spec":
         parser.error("current T510 release rejects 320 MS/s TIME_SPEC")
+    if args.prepare_only and args.skip_config:
+        parser.error("--prepare-only and --skip-config are mutually exclusive")
+
+    if args.prepare_only:
+        _post_config(args.base_url, args.sample_rate_msps, args.mode, args.center_mhz)
+        deadline = time.monotonic() + 5.0
+        state: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            state = _fetch(args.base_url.rstrip("/") + "/api/state")
+            config = state.get("config", {})
+            if (
+                int(config.get("sample_rate_msps", 0)) == args.sample_rate_msps
+                and str(config.get("output_mode", "")) == args.mode
+                and abs(float(config.get("center_mhz", 0.0)) - args.center_mhz) <= 1.0e-6
+            ):
+                result = {
+                    "classification": "HOST_T510_RECEIVER_PREPARE_PASS",
+                    "ok": True,
+                    "sample_rate_msps": args.sample_rate_msps,
+                    "mode": args.mode,
+                    "center_mhz": args.center_mhz,
+                    "config_generation": state.get("config_generation"),
+                }
+                print(json.dumps(result, indent=2, sort_keys=True))
+                return 0
+            time.sleep(0.05)
+        raise RuntimeError(f"receiver did not apply requested configuration: {state}")
 
     needs_time = args.mode in ("time_only", "time_spec")
     needs_spec = args.mode in ("spec_only", "time_spec")

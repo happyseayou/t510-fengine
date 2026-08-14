@@ -6,6 +6,10 @@ module t510_fengine_top (
     input  wire         pps_in,
     input  wire         ref_lock_in,
     input  wire         rfdc_ready_in,
+    input  wire [31:0]  sysref_pl_edge_count_gray,
+    input  wire [31:0]  sysref_adc_edge_count_gray,
+    input  wire [31:0]  sysref_dac_edge_count_gray,
+    input  wire [2:0]   sysref_capture_levels,
     input  wire [31:0]  s_axi_awaddr,
     input  wire         s_axi_awvalid,
     output wire         s_axi_awready,
@@ -120,6 +124,15 @@ module t510_fengine_top (
     localparam [15:0] FFT_ONLY_DEFAULT_SHIFT = 16'h0556;
     integer tx_reset_idx;
 
+    function automatic [31:0] gray32_to_binary(input [31:0] gray);
+        integer gray_idx;
+        begin
+            gray32_to_binary[31] = gray[31];
+            for (gray_idx = 30; gray_idx >= 0; gray_idx = gray_idx - 1)
+                gray32_to_binary[gray_idx] = gray32_to_binary[gray_idx + 1] ^ gray[gray_idx];
+        end
+    endfunction
+
     wire [15:0] ctrl_board_id;
     wire [1:0]  ctrl_mode;
     wire        ctrl_arm_latched;
@@ -159,7 +172,7 @@ module t510_fengine_top (
     wire        ctrl_pfb_coeff_abort_pulse;
     wire        ctrl_pfb_coeff_write_pulse;
     wire [3:0]  ctrl_pfb_coeff_requested_taps;
-    wire [13:0] ctrl_pfb_coeff_index;
+    wire [14:0] ctrl_pfb_coeff_index;
     wire signed [17:0] ctrl_pfb_coeff_data;
     wire [31:0] ctrl_pfb_coeff_id;
     wire [31:0] ctrl_chan_split;
@@ -408,6 +421,17 @@ module t510_fengine_top (
     logic       pps_seen_latched;
     (* ASYNC_REG = "TRUE" *) logic       pps_seen_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic       pps_seen_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] sysref_pl_gray_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] sysref_pl_gray_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] sysref_adc_gray_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] sysref_adc_gray_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] sysref_dac_gray_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [31:0] sysref_dac_gray_ctrl;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  sysref_levels_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  sysref_levels_ctrl;
+    wire [31:0] sysref_pl_edge_count_ctrl = gray32_to_binary(sysref_pl_gray_ctrl);
+    wire [31:0] sysref_adc_edge_count_ctrl = gray32_to_binary(sysref_adc_gray_ctrl);
+    wire [31:0] sysref_dac_edge_count_ctrl = gray32_to_binary(sysref_dac_gray_ctrl);
     (* ASYNC_REG = "TRUE" *) logic       ref_lock_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic       ref_lock_ctrl;
 
@@ -764,8 +788,8 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [15:0] pfb_fft_shift_cmac;
     (* ASYNC_REG = "TRUE" *) logic [3:0]  pfb_coeff_requested_taps_cmac_meta;
     (* ASYNC_REG = "TRUE" *) logic [3:0]  pfb_coeff_requested_taps_cmac;
-    (* ASYNC_REG = "TRUE" *) logic [13:0] pfb_coeff_index_cmac_meta;
-    (* ASYNC_REG = "TRUE" *) logic [13:0] pfb_coeff_index_cmac;
+    (* ASYNC_REG = "TRUE" *) logic [14:0] pfb_coeff_index_cmac_meta;
+    (* ASYNC_REG = "TRUE" *) logic [14:0] pfb_coeff_index_cmac;
     (* ASYNC_REG = "TRUE" *) logic signed [17:0] pfb_coeff_data_cmac_meta;
     (* ASYNC_REG = "TRUE" *) logic signed [17:0] pfb_coeff_data_cmac;
     (* ASYNC_REG = "TRUE" *) logic [31:0] pfb_coeff_id_cmac_meta;
@@ -1417,8 +1441,8 @@ module t510_fengine_top (
             spec_chan_count_meta   <= 16'd0;
             spec_chan_count        <= 16'd0;
             pfb_enable_sync        <= 2'b00;
-            pfb_taps_meta          <= 16'd4;
-            pfb_taps               <= 16'd4;
+            pfb_taps_meta          <= 16'd8;
+            pfb_taps               <= 16'd8;
             pfb_fft_shift_meta     <= FFT_ONLY_DEFAULT_SHIFT;
             pfb_fft_shift          <= FFT_ONLY_DEFAULT_SHIFT;
             pfb_chan0_meta         <= 32'd0;
@@ -1716,18 +1740,18 @@ module t510_fengine_top (
             spec_enable_cmac <= 1'b0;
             pfb_enable_cmac_meta <= 1'b0;
             pfb_enable_cmac <= 1'b0;
-            pfb_taps_cmac_meta <= 16'd4;
-            pfb_taps_cmac <= 16'd4;
+            pfb_taps_cmac_meta <= 16'd8;
+            pfb_taps_cmac <= 16'd8;
             pfb_fft_shift_cmac_meta <= FFT_ONLY_DEFAULT_SHIFT;
             pfb_fft_shift_cmac <= FFT_ONLY_DEFAULT_SHIFT;
-            pfb_coeff_requested_taps_cmac_meta <= 4'd4;
-            pfb_coeff_requested_taps_cmac <= 4'd4;
-            pfb_coeff_index_cmac_meta <= 14'd0;
-            pfb_coeff_index_cmac <= 14'd0;
+            pfb_coeff_requested_taps_cmac_meta <= 4'd8;
+            pfb_coeff_requested_taps_cmac <= 4'd8;
+            pfb_coeff_index_cmac_meta <= 15'd0;
+            pfb_coeff_index_cmac <= 15'd0;
             pfb_coeff_data_cmac_meta <= 18'sd0;
             pfb_coeff_data_cmac <= 18'sd0;
-            pfb_coeff_id_cmac_meta <= 32'h27a4_0001;
-            pfb_coeff_id_cmac <= 32'h27a4_0001;
+            pfb_coeff_id_cmac_meta <= 32'h34a8_0001;
+            pfb_coeff_id_cmac <= 32'h34a8_0001;
             rfdc_sample_count_cmac_meta <= 64'd0;
             rfdc_sample_count_cmac <= 64'd0;
             ctrl_board_id_cmac_meta <= 16'd0;
@@ -1850,6 +1874,14 @@ module t510_fengine_top (
             scheduled_sync_actual_first_spec_sample0_ctrl <= 64'd0;
             pps_seen_ctrl_meta              <= 1'b0;
             pps_seen_ctrl                   <= 1'b0;
+            sysref_pl_gray_ctrl_meta        <= 32'd0;
+            sysref_pl_gray_ctrl             <= 32'd0;
+            sysref_adc_gray_ctrl_meta       <= 32'd0;
+            sysref_adc_gray_ctrl            <= 32'd0;
+            sysref_dac_gray_ctrl_meta       <= 32'd0;
+            sysref_dac_gray_ctrl            <= 32'd0;
+            sysref_levels_ctrl_meta         <= 3'd0;
+            sysref_levels_ctrl              <= 3'd0;
             ref_lock_ctrl_meta              <= 1'b0;
             ref_lock_ctrl                   <= 1'b0;
             monitor_sample_count_ctrl_meta  <= 32'd0;
@@ -1999,6 +2031,14 @@ module t510_fengine_top (
             scheduled_sync_actual_first_spec_sample0_ctrl <= scheduled_sync_actual_first_spec_sample0_ctrl_meta;
             pps_seen_ctrl_meta              <= pps_seen;
             pps_seen_ctrl                   <= pps_seen_ctrl_meta;
+            sysref_pl_gray_ctrl_meta        <= sysref_pl_edge_count_gray;
+            sysref_pl_gray_ctrl             <= sysref_pl_gray_ctrl_meta;
+            sysref_adc_gray_ctrl_meta       <= sysref_adc_edge_count_gray;
+            sysref_adc_gray_ctrl            <= sysref_adc_gray_ctrl_meta;
+            sysref_dac_gray_ctrl_meta       <= sysref_dac_edge_count_gray;
+            sysref_dac_gray_ctrl            <= sysref_dac_gray_ctrl_meta;
+            sysref_levels_ctrl_meta         <= sysref_capture_levels;
+            sysref_levels_ctrl              <= sysref_levels_ctrl_meta;
             ref_lock_ctrl_meta              <= ref_lock_in;
             ref_lock_ctrl                   <= ref_lock_ctrl_meta;
             monitor_sample_count_ctrl_meta  <= monitor_sample_count;
@@ -2353,7 +2393,7 @@ module t510_fengine_top (
     assign pfb_spec_cmac_sideband = {
         pfb_status,
         pfb_fft_shift_cmac,
-        16'd4,
+        16'd8,
         pfb_packet_time_count,
         pfb_packet_chan_count,
         pfb_packet_chan0,
@@ -2424,7 +2464,7 @@ module t510_fengine_top (
         .rst_n(cmac_tx_rst_n),
         .enable(spec_enable_cmac && pfb_enable_cmac),
         .clear(tx_clear_pulse_cmac || packet_stream_reset_pulse_cmac),
-        .cfg_taps(16'd4),
+        .cfg_taps(16'd8),
         .cfg_fft_shift(pfb_fft_shift_cmac),
         .cfg_chan0(32'd0),
         .cfg_chan_count(16'd256),
@@ -2500,7 +2540,7 @@ module t510_fengine_top (
 
     assign spec_product_status_flags = {
         21'd0,
-        (pfb_taps_data >= 16'd4) && pfb_status_data[5] && !pfb_status_data[8],
+        (pfb_taps_data == 16'd8) && pfb_status_data[5] && !pfb_status_data[8],
         science_aa100_active && (science_sample_rate_mode == 2'd1),
         pfb_status_data[8],
         pfb_status_data[7:0]
@@ -2837,6 +2877,10 @@ module t510_fengine_top (
         .waiting_for_epoch(status_bits_ctrl[4]),
         .pps_seen(pps_seen_ctrl),
         .pps_count(pps_count),
+        .sysref_capture_levels(sysref_levels_ctrl),
+        .sysref_pl_edge_count(sysref_pl_edge_count_ctrl),
+        .sysref_adc_edge_count(sysref_adc_edge_count_ctrl),
+        .sysref_dac_edge_count(sysref_dac_edge_count_ctrl),
         .ref_locked(ref_lock_ctrl),
         .error_flags(error_flags),
         .scheduled_sync_status(scheduled_sync_status_ctrl),

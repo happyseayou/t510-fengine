@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+from python.t510_fengine import T510FEngine
+from scripts.t510_pfb8_loopback_gate import dac_request, pfb_response_db
 from scripts.t510_rf_spectral_metrics import (
     bin_for_rf,
     circular_bin_error,
@@ -52,6 +54,29 @@ class RfSpectralMetricsTest(unittest.TestCase):
         phase_deg, coherence = cross_lane_phase_statistics(frames, 0, 1, 0)
         self.assertAlmostEqual(phase_deg, 28.6478898, places=6)
         self.assertAlmostEqual(coherence, 1.0, places=6)
+
+    def test_pfb8_gate_uses_frozen_fractional_bin_response(self) -> None:
+        coefficients = T510FEngine.generate_default_pfb_coefficients()
+        self.assertAlmostEqual(pfb_response_db(coefficients, 0.5), -6.0198581776, places=3)
+        self.assertLessEqual(pfb_response_db(coefficients, 0.75), -49.0)
+        self.assertLessEqual(pfb_response_db(coefficients, 1.125), -57.5)
+
+    def test_pfb8_gate_programs_and_mutes_all_eight_dacs(self) -> None:
+        active = dac_request(
+            board_id=7,
+            center_mhz=200.0,
+            rf_mhz=220.0,
+            amplitude_percent=25.0,
+        )
+        muted = dac_request(
+            board_id=7,
+            center_mhz=200.0,
+            rf_mhz=200.0,
+            amplitude_percent=0.0,
+        )
+        self.assertEqual([row["channel"] for row in active["channels"]], list(range(8)))
+        self.assertTrue(all(row["enabled"] for row in active["channels"]))
+        self.assertTrue(all(not row["enabled"] for row in muted["channels"]))
 
 
 if __name__ == "__main__":

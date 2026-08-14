@@ -2,7 +2,7 @@
 
 本文是当前 T510 F-engine 的 TIME 与 SPEC UDP 线格式合同。RTL 发送端、Python
 诊断代码、Rust 接收机和下游程序都应按本文解释 UDP payload；`sample0` 始终属于
-RFDC 的 `320 MS/s` 复基带时基，不能按 Stage 33 的 `3.84 GS/s` 模拟采样时钟解释。
+RFDC 的 `320 MS/s` 复基带时基，不能按 `3.84 GS/s` 模拟采样时钟解释。
 
 ## 帧与报文长度
 
@@ -111,7 +111,7 @@ TIME 接收机应同时检查 `seq_no`、`frame_id` 和上述 `sample0` 增量�
 - `time_count=1`
 - `ninput=8`
 - `payload_format=0`（IQ16）
-- `pfb_taps>=4`
+- `pfb_taps=8`
 - `spec_status_flags[10]`（PFB active）必须为1
 - `spec_status_flags[8]`（旧 FFT-only 标志）必须为0
 
@@ -153,7 +153,7 @@ rf_hz       = center_hz + baseband_hz
 时间位置，不能换算为3.84 GHz ADC索引。
 
 `spec_status_flags[9]`表示160 MS/s路径的 anti-alias 滤波活动，bit 10表示当前
-4-tap PFB产品有效；bits 7..0保留PFB运行状态。`spec_half_band`是按
+固定8-tap PFB产品有效；bits 7..0保留PFB运行状态。`spec_half_band`是按
 `chan_split`生成的路由元数据，不改变 `global_bin` 或上述频率公式。
 
 ## 接收端最低校验
@@ -165,9 +165,23 @@ rf_hz       = center_hz + baseband_hz
 3. 要求 `ninput=8`、`payload_format=0`、`payload_bytes=8192`，并检查实际 UDP
    payload 至少为8320 byte。
 4. TIME 校验固定64 beat及 `sample0` 步长；SPEC校验当前
-   `16 x 256 x 1`、`product_id=0xf101`、4-tap PFB和完整块覆盖。
+   `16 x 256 x 1`、`product_id=0xf101`、8-tap PFB和完整块覆盖。
 5. 对 `seq_no/frame_id/sample0` 或 SPEC coverage 的异常显式报告 gap/drop。
 
 当前实现对应的权威代码是 `rtl/time_udp_cmac512.sv`、
 `rtl/spec_udp_cmac512.sv`、`python/packet.py` 和
 `rust/t510_time_rx/src/lib.rs`。
+
+## 接收机内嵌科学监视器
+
+`/api/measure/spec-stability`只是在 receiver 已接收并验证的 SPEC 包内抽取少量 bin；
+它不增加包字段、端口、socket 或旁路数据流。每个被选 bin 的八路 IQ16 以一秒为桶，
+保存样本数、I/Q和、功率和及功率平方和；可选通道对另存
+`sum(x_a*conj(x_b))`与两路功率和。这些充分统计量用于计算 dBFS/bin、积分斜率、
+Allan deviation、相位和相干度。正式任务仍必须同时核对 receiver/FPGA 的全局
+drop、gap、FIR saturation、XFFT overflow与backpressure计数；监视器结果不能替代
+这些硬门禁。
+
+Stage 34d的正式任务使用100 ms或1 s的`sample0`分桶，一次累计八路自相关和28对
+复互相关，并通过`/api/measure/spec-stability/data`导出TIS1。该功能只增加receiver
+旁路统计和证据格式；FPGA header、payload、端口映射与包长完全不变。

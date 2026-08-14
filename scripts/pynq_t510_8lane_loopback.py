@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 
-EXPECTED_CORE_VERSION = 0x0001_0033
+EXPECTED_CORE_VERSION = 0x0001_0034
 
 
 def _root() -> Path:

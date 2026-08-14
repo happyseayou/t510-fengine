@@ -28,8 +28,11 @@ case "${STAGE}" in
   "${ROOT}/build/receiver/latest") ;;
   *) echo "refusing unsafe local stage path: ${STAGE}" >&2; exit 1 ;;
 esac
-rm -rf -- "${STAGE}"
 install -d "${STAGE}"
+# Campaign PCAPs and reports live below latest/evidence and must survive a
+# receiver binary refresh.  Replace only release artifacts in the fixed latest
+# tree; never erase long-task evidence while deploying a capture-side fix.
+find "${STAGE}" -mindepth 1 -maxdepth 1 ! -name evidence -exec rm -rf -- {} +
 install -m 0755 "${ROOT}/rust/t510_time_rx/target/aarch64-unknown-linux-musl/release/t510_time_rx" "${STAGE}/t510_time_rx"
 install -m 0755 "${ROOT}/scripts/host_t510_rx_tune.sh" "${STAGE}/host_t510_rx_tune.sh"
 install -m 0755 "${ROOT}/scripts/t510_host_validate.py" "${STAGE}/t510_host_validate.py"

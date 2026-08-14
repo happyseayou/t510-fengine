@@ -32,6 +32,10 @@ module feng_ctrl_axi #(
     input  wire                         waiting_for_epoch,
     input  wire                         pps_seen,
     input  wire [63:0]                  pps_count,
+    input  wire [2:0]                   sysref_capture_levels,
+    input  wire [31:0]                  sysref_pl_edge_count,
+    input  wire [31:0]                  sysref_adc_edge_count,
+    input  wire [31:0]                  sysref_dac_edge_count,
     input  wire                         ref_locked,
     input  wire [31:0]                  error_flags,
     input  wire [31:0]                  scheduled_sync_status,
@@ -156,7 +160,7 @@ module feng_ctrl_axi #(
     output logic                        pfb_coeff_abort_pulse,
     output logic                        pfb_coeff_write_pulse,
     output logic [3:0]                  pfb_coeff_requested_taps,
-    output logic [13:0]                 pfb_coeff_index,
+    output logic [14:0]                 pfb_coeff_index,
     output logic signed [17:0]          pfb_coeff_data,
     output logic [31:0]                 pfb_coeff_id,
     output logic [31:0]                 chan_split,
@@ -215,7 +219,7 @@ module feng_ctrl_axi #(
     output wire [2:0]                   science_output_mode_cfg
 );
 
-    localparam [31:0] CORE_VERSION = 32'h0001_0033;
+    localparam [31:0] CORE_VERSION = 32'h0001_0035;
     localparam [31:0] PREVIEW_SAMPLE_RATE_HZ = 32'd320_000_000;
     localparam [31:0] PREVIEW_AXIS_BEAT_RATE_HZ = 32'd80_000_000;
     localparam [31:0] PREVIEW_MODE_FULLRATE_IQ = 32'd1;
@@ -293,7 +297,7 @@ module feng_ctrl_axi #(
     integer write_idx;
     integer reset_idx;
     logic pfb_coeff_auto_increment;
-    logic [13:0] pfb_coeff_next_index;
+    logic [14:0] pfb_coeff_next_index;
     logic [31:0] read_data_next;
     wire         aw_accept;
     wire         w_accept;
@@ -711,16 +715,16 @@ module feng_ctrl_axi #(
             spec_time_count    <= 16'd1;
             spec_chan_count    <= 16'd256;
             pfb_enable         <= 1'b1;
-            pfb_taps           <= 16'd4;
+            pfb_taps           <= 16'd8;
             pfb_fft_shift      <= FFT_ONLY_DEFAULT_SHIFT;
             pfb_chan0          <= 32'd0;
             pfb_chan_count     <= 16'd256;
             pfb_time_count     <= 16'd1;
-            pfb_coeff_requested_taps <= 4'd4;
-            pfb_coeff_index    <= 14'd0;
-            pfb_coeff_next_index <= 14'd0;
+            pfb_coeff_requested_taps <= 4'd8;
+            pfb_coeff_index    <= 15'd0;
+            pfb_coeff_next_index <= 15'd0;
             pfb_coeff_data     <= 18'sd0;
-            pfb_coeff_id       <= 32'h27a4_0001;
+            pfb_coeff_id       <= 32'h34a8_0001;
             pfb_coeff_auto_increment <= 1'b0;
             science_control    <= 32'h0000_0001;
             science_sample_rate_mode <= 2'd1;
@@ -1135,7 +1139,7 @@ module feng_ctrl_axi #(
                             end
                         end
                     end
-                    16'h090c: pfb_taps <= 16'd4;
+                    16'h090c: pfb_taps <= 16'd8;
                     16'h0910: pfb_fft_shift <= {4'd0, write_exec_data[11:0]};
                     16'h0914: pfb_chan0 <= 32'd0;
                     16'h0918: begin
@@ -1160,15 +1164,15 @@ module feng_ctrl_axi #(
                         end
                     end
                     16'h0968: begin
-                        pfb_coeff_index <= write_exec_data[13:0];
-                        pfb_coeff_next_index <= write_exec_data[13:0];
+                        pfb_coeff_index <= write_exec_data[14:0];
+                        pfb_coeff_next_index <= write_exec_data[14:0];
                     end
                     16'h096c: begin
                         pfb_coeff_index <= pfb_coeff_next_index;
                         pfb_coeff_data <= write_exec_data[17:0];
                         pfb_coeff_write_pulse <= 1'b1;
                         if (pfb_coeff_auto_increment) begin
-                            pfb_coeff_next_index <= pfb_coeff_next_index + 14'd1;
+                            pfb_coeff_next_index <= pfb_coeff_next_index + 15'd1;
                         end
                     end
                     16'h0974: pfb_coeff_id <= write_exec_data;
@@ -1322,6 +1326,10 @@ module feng_ctrl_axi #(
                         16'h0020: read_data_next = {14'd0, clock_ref, 14'd0, sync_mode};
                         16'h0024: read_data_next = pps_count[31:0];
                         16'h0028: read_data_next = pps_count[63:32];
+                        16'h002c: read_data_next = {29'd0, sysref_capture_levels};
+                        16'h0030: read_data_next = sysref_pl_edge_count;
+                        16'h0034: read_data_next = sysref_adc_edge_count;
+                        16'h0038: read_data_next = sysref_dac_edge_count;
                         16'h00f0: read_data_next = araddr_latched[31:0];
                         16'h00f4: read_data_next = awaddr_latched[31:0];
                         16'h0100: read_data_next = 32'd8;
@@ -1528,7 +1536,7 @@ module feng_ctrl_axi #(
                         16'h0958: read_data_next = pfb_frame_sample0_overflow_count;
                         16'h0960: read_data_next = {24'd0, pfb_coeff_requested_taps, pfb_coeff_auto_increment, 3'd0};
                         16'h0964: read_data_next = pfb_coeff_status;
-                        16'h0968: read_data_next = {18'd0, pfb_coeff_next_index};
+                        16'h0968: read_data_next = {17'd0, pfb_coeff_next_index};
                         16'h096c: read_data_next = {{14{pfb_coeff_data[17]}}, pfb_coeff_data};
                         16'h0970: read_data_next = pfb_coeff_loaded_count;
                         16'h0974: read_data_next = pfb_coeff_active_id;

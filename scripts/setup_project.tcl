@@ -14,6 +14,7 @@ if {[current_project -quiet] eq ""} {
 
 set rtl_files [list \
     [file join $repo_root rtl pl_mts_sync_clk.v] \
+    [file join $repo_root rtl pl_mts_axis_recapture.v] \
     [file join $repo_root rtl sync_fsm.sv] \
     [file join $repo_root rtl station_sync_scheduler.sv] \
     [file join $repo_root rtl axis_stream_duplicator.sv] \
@@ -47,6 +48,7 @@ set xdc_files [list \
 
 set sim_files [list \
     [file join $repo_root sim tb_common.svh] \
+    [file join $repo_root sim tb_pl_mts_sync_clk.sv] \
     [file join $repo_root sim tb_feng_ctrl_axi.sv] \
     [file join $repo_root sim tb_axi4_to_axil_bridge.sv] \
     [file join $repo_root sim tb_sync_fsm.sv] \

@@ -33,6 +33,7 @@ test -d "${SOURCE}"
 test -x "${SOURCE}/bin/t510-board-agent"
 test -f "${SOURCE}/python/t510_hw.py"
 test -f "${SOURCE}/python/t510_ref_watchdog.py"
+test -f "${SOURCE}/python/t510_ams.py"
 test -f "${CATALOG}"
 test -f "${SOURCE}/deploy/t510-ref-watchdog.service"
 test -f "${SOURCE}/deploy/t510-agent.service.d/center-hub.conf"
@@ -41,8 +42,8 @@ import json
 import sys
 
 catalog = json.load(open(sys.argv[1], "r", encoding="utf-8"))
-entry = next(item for item in catalog["bitstreams"] if item["id"] == "fengine-0x00010033")
-if entry["core_version"] != "0x00010033":
+entry = next(item for item in catalog["bitstreams"] if item["id"] == "fengine-0x00010034")
+if entry["core_version"] != "0x00010034":
     raise SystemExit("catalog has the wrong core version")
 if entry["sha256"] == "0" * 64 or len(entry["sha256"]) != 64:
     raise SystemExit("catalog has not been finalized")

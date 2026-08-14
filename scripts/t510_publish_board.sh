@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${PYNQ_TARGET:-xilinx@192.168.100.117}"
 SSH_OPTS="${PYNQ_SSH_OPTS:-}"
 MODE="${1:---build-only}"
-STAGE="${ROOT}/build/board/latest"
+STAGE="${ROOT}/build/board/latest/package"
 REMOTE_STAGE="/home/xilinx/.cache/t510/latest"
 CATALOG="${ROOT}/config/t510/config.example.json"
 OVERLAY_DIR="${T510_OVERLAY_DIR:-${ROOT}/overlay}"
@@ -20,8 +20,8 @@ import json
 import sys
 
 catalog = json.load(open(sys.argv[1], "r", encoding="utf-8"))
-entry = next(item for item in catalog["bitstreams"] if item["id"] == "fengine-0x00010033")
-if entry.get("core_version") != "0x00010033":
+entry = next(item for item in catalog["bitstreams"] if item["id"] == "fengine-0x00010034")
+if entry.get("core_version") != "0x00010034":
     raise SystemExit("catalog core version is not current T510 release")
 if entry.get("sha256") == "0" * 64:
     raise SystemExit("catalog is not finalized; run both MTS campaigns and t510_finalize_catalog.py")
@@ -58,7 +58,7 @@ cargo zigbuild \
   --release
 
 case "${STAGE}" in
-  "${ROOT}/build/board/latest") ;;
+  "${ROOT}/build/board/latest/package") ;;
   *) echo "refusing unsafe local stage path: ${STAGE}" >&2; exit 1 ;;
 esac
 rm -rf -- "${STAGE}"
@@ -72,6 +72,7 @@ install -m 0644 "${ROOT}/python/packet.py" "${STAGE}/python/packet.py"
 install -m 0644 "${ROOT}/python/t510_control.py" "${STAGE}/python/t510_control.py"
 install -m 0644 "${ROOT}/python/t510_fengine.py" "${STAGE}/python/t510_fengine.py"
 install -m 0644 "${ROOT}/python/t510_clock.py" "${STAGE}/python/t510_clock.py"
+install -m 0644 "${ROOT}/python/t510_ams.py" "${STAGE}/python/t510_ams.py"
 install -m 0644 "${OVERLAY_DIR}/t510_fengine.bit" "${STAGE}/overlay/t510_fengine.bit"
 install -m 0644 "${OVERLAY_DIR}/t510_fengine.hwh" "${STAGE}/overlay/t510_fengine.hwh"
 install -m 0644 "${OVERLAY_DIR}/t510_fengine.tcl" "${STAGE}/overlay/t510_fengine.tcl"

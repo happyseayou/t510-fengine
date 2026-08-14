@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import cmath
 import inspect
 import json
+import math
 from pathlib import Path
 import unittest
 
 from python.t510_control import (
+    DAC_AMPLITUDE_FULL_SCALE,
     DacChannelConfig,
     DEFAULT_SOURCE_IP,
     DEFAULT_SOURCE_MAC,
@@ -372,6 +375,11 @@ class FEngineConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "upper bound exclusive"):
             DacChannelConfig(rf_frequency_mhz=1920.0)
 
+    def test_dac_percent_uses_calibrated_zero_overflow_product_scale(self) -> None:
+        self.assertEqual(DAC_AMPLITUDE_FULL_SCALE, 6144)
+        self.assertEqual(DacChannelConfig(amplitude=25.0).amplitude_code, 1536)
+        self.assertEqual(DacChannelConfig(amplitude=100.0).amplitude_code, 6144)
+
     def test_stage33_center_boundaries_and_complete_band_rule(self) -> None:
         for bandwidth, lower, upper in ((160, 80.0, 1840.0), (320, 160.0, 1760.0)):
             mode = "time_only"
@@ -393,13 +401,49 @@ class FEngineConfigTests(unittest.TestCase):
     def test_frozen_contract_and_frequency_geometry(self) -> None:
         self.assertEqual((TIME_DST_PORT_BASE, SPEC_DST_PORT_BASE), (4300, 4308))
         self.assertEqual((TIME_SRC_PORT_BASE, SPEC_SRC_PORT_BASE), (4000, 4008))
-        self.assertEqual((PFB_NCHAN, PFB_TAPS), (4096, 4))
+        self.assertEqual((PFB_NCHAN, PFB_TAPS), (4096, 8))
         self.assertEqual((PFB_BLOCK_COUNT, PFB_CHAN_COUNT, PFB_TIME_COUNT), (16, 256, 1))
         for bandwidth, half_span, bin_width in ((160, 80.0, 39_062.5), (320, 160.0, 78_125.0)):
             config = FEngineConfig(sample_rate_msps=bandwidth, mode="spec_only", center_mhz=200.0)
             info = config.nearest_fft_bin()
             self.assertEqual(info["bin_width_hz"], bin_width)
             self.assertAlmostEqual(config.center_mhz - config.sample_rate_hz / 2.0 / 1.0e6, 200.0 - half_span)
+
+    def test_fixed_pfb8_hamming_profile_and_crc(self) -> None:
+        coefficients = T510FEngine.generate_default_pfb_coefficients()
+        self.assertEqual(len(coefficients), 32_768)
+        self.assertEqual(coefficients, list(reversed(coefficients)))
+        self.assertEqual(min(coefficients), -21_311)
+        self.assertEqual(max(coefficients), 131_071)
+        phase_sums = [
+            sum(coefficients[tap * 4096 + phase] for tap in range(8))
+            for phase in range(4096)
+        ]
+        self.assertEqual(set(phase_sums), {131_072})
+        max_l1 = max(
+            sum(abs(coefficients[tap * 4096 + phase]) for tap in range(8)) / 131_072.0
+            for phase in range(4096)
+        )
+        self.assertAlmostEqual(max_l1, 1.6518707275390625)
+        self.assertEqual(T510FEngine.pfb_coefficients_crc32(coefficients), 0xB9BA_227C)
+        enbw_bins = 4096 * sum(value * value for value in coefficients) / sum(coefficients) ** 2
+        self.assertGreaterEqual(enbw_bins, 0.9072)
+        self.assertLessEqual(enbw_bins, 0.9074)
+
+        def response_db(offset_bins: float) -> float:
+            rotation = cmath.exp(-2j * math.pi * offset_bins / 4096.0)
+            phasor = 1.0 + 0.0j
+            response = 0.0 + 0.0j
+            for coefficient in coefficients:
+                response += coefficient * phasor
+                phasor *= rotation
+            return 20.0 * math.log10(abs(response) / sum(coefficients))
+
+        self.assertAlmostEqual(response_db(0.5), -6.0198581776, places=3)
+        self.assertLessEqual(response_db(0.75), -49.0)
+        self.assertLessEqual(response_db(1.125), -57.5)
+        with self.assertRaisesRegex(ValueError, "exactly 8"):
+            T510FEngine.generate_default_pfb_coefficients(taps=4)
 
     def test_controller_programs_endpoint_table_and_common_nco(self) -> None:
         core = FakeCore()

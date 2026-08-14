@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>T510 Stage 33 F-engine Production Preview</title>
+<title>T510 Stage 34 8-tap F-engine Production Preview</title>
 <link rel="stylesheet" href="/static/gridstack.min.css">
 <style>
 :root{color-scheme:dark;--bg:#080a0b;--panel:#151817;--panel2:#1c201e;--line:#343b38;--text:#edf2ef;--muted:#a7b0aa;--ok:#6ee7a8;--warn:#f4c76b;--bad:#ff7b7b}
@@ -15,7 +15,7 @@
 </style>
 </head>
 <body><div class="app">
-<div class="top"><header class="topbar"><div class="brand">T510 Stage 33 F-engine</div><div id="backendStatus" class="pill">backend --</div><div id="timeWsStatus" class="pill warn">TIME connecting</div><div id="specWsStatus" class="pill warn">SPEC connecting</div><div id="bwStatus" class="pill">sample rate --</div><div id="lossStatus" class="pill">gaps --</div><div id="rateStatus" class="pill">rate --</div><div id="flowStatus" class="pill">flows --</div><div id="dropStatus" class="pill">drops --</div><div id="previewStatus" class="pill">preview --</div></header>
+<div class="top"><header class="topbar"><div class="brand">T510 Stage 34 8-tap F-engine</div><div id="backendStatus" class="pill">backend --</div><div id="timeWsStatus" class="pill warn">TIME connecting</div><div id="specWsStatus" class="pill warn">SPEC connecting</div><div id="bwStatus" class="pill">sample rate --</div><div id="lossStatus" class="pill">gaps --</div><div id="rateStatus" class="pill">rate --</div><div id="flowStatus" class="pill">flows --</div><div id="dropStatus" class="pill">drops --</div><div id="previewStatus" class="pill">preview --</div></header>
 <section class="health"><details><summary>Stream Health</summary><div class="health-body"><div id="summary" class="summary"></div></div></details><details><summary>Flow Status</summary><div class="health-body"><div id="flows" class="flows"></div></div></details><details><summary>Channel / SPEC Metrics</summary><div class="health-body"><div id="channelStats" class="summary"></div></div></details><details><summary>Detailed Diagnostics</summary><div class="health-body"><pre id="stats"></pre></div></details></section></div>
 <main class="workspace"><div class="grid-stack">
 <section class="grid-stack-item" gs-id="time" gs-x="0" gs-y="0" gs-w="4" gs-h="5" gs-min-w="2" gs-min-h="3"><div class="grid-stack-item-content"><div class="widget-head"><strong>TIME waveform</strong><span id="timePlotStatus">--</span></div><div class="widget-body"><div id="timeChart" class="chart"></div></div></div></section>

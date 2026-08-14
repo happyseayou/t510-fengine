@@ -50,7 +50,7 @@ def _cycles(*, phase: str) -> list[dict[str, object]]:
 def _report(*, phase: str, bitstream_sha256: str) -> dict[str, object]:
     value: dict[str, object] = {
         "phase": phase,
-        "core_version": "0x00010033",
+        "core_version": "0x00010034",
         "bitstream_sha256": bitstream_sha256,
         "ok": True,
         "required_cycles": EXPECTED_ACTIONS,
@@ -73,13 +73,13 @@ def _catalog() -> dict[str, object]:
         "python_executable": "/python3",
         "helper_path": "/t510_hw.py",
         "helper_pythonpath": "/python",
-        "default_bitstream_id": "fengine-0x00010033",
+        "default_bitstream_id": "fengine-0x00010034",
         "bitstreams": [
             {
-                "id": "fengine-0x00010033",
+                "id": "fengine-0x00010034",
                 "path": "/overlay/t510_fengine.bit",
                 "sha256": "0" * 64,
-                "core_version": "0x00010033",
+                "core_version": "0x00010034",
                 "mts_adc_target_latency": -1,
                 "mts_dac_target_latency": -1,
                 "mts_campaign": None,

@@ -4,7 +4,10 @@
 # RFDC AXIS domain.
 
 set_false_path -from [get_ports pps_in]
-set_false_path -from [get_ports -quiet pl_sys_ref_p]
+# QSFP MODPRSL is an asynchronous presence/status input, not a source-
+# synchronous data signal.  Excluding it explicitly removes the unrelated
+# TIMING-18 without inventing an input delay against clk_pl_0.
+set_false_path -from [get_ports qsfp0_modprsl]
 set_false_path -to [get_ports -quiet {pl_led0 pl_led1 pl_led2 pl_led3}]
 
 set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME == D} -of_objects [get_cells -hier -quiet -filter {NAME =~ u_core/*_meta_reg*}]]

@@ -397,7 +397,7 @@ def normalize_time_sample_rate_msps(sample_rate_msps: int | float | str) -> int:
     except Exception as exc:
         raise ValueError(f"unsupported TIME sample rate: {sample_rate_msps!r}") from exc
     if value not in TIME_SAMPLE_RATE_DECIMATION:
-        raise ValueError("Stage 33 TIME complex sample rate must be 160 or 320 MS/s")
+        raise ValueError("Stage 34 TIME complex sample rate must be 160 or 320 MS/s")
     return value
 
 

@@ -18,12 +18,12 @@
 </head>
 <body><main>
   <h1>T510 Board Agent API</h1>
-  <p class="muted">Stage 33 · API v2 scheduled-sync Rust service · OpenAPI 3.1 · Agent version 0.3.2</p>
+  <p class="muted">Stage 34b-2 · API v2 scheduled-sync Rust service · OpenAPI 3.1 · Agent version 0.3.4</p>
   <p class="warning"><strong>开发网络安全模式：</strong><code>security_mode=none</code>。服务不校验 token、allowlist 或 mTLS，不启用 CORS。请仅放在受控实验室局域网中。</p>
 
   <section>
     <h2>职责边界</h2>
-    <p>Agent 只做配置和控制，并在请求时读取一次累计寄存器快照。它不抓取波形/频谱，不做 FFT、WebSocket 或 packet capture，也不计算 packet rate/drop rate（does not calculate packet rates）。独立的 Stage 33 reference watchdog 只轮询 LMK PLL1/PLL2 锁定状态并在物理参考失锁时执行安全 STOP；它不计算数据率或保存波形。Center Hub 应保存相邻 <code>GET /api/v2/status</code> 快照并计算速率。</p>
+    <p>Agent 只做配置和控制，并在请求时读取一次累计寄存器快照。它不抓取波形/频谱，不做 FFT、WebSocket 或 packet capture，也不计算 packet rate/drop rate（does not calculate packet rates）。独立的 Stage 34 reference watchdog 只轮询 LMK PLL1/PLL2 锁定状态并在物理参考失锁时执行安全 STOP；它不计算数据率或保存波形。Center Hub 应保存相邻 <code>GET /api/v2/status</code> 快照并计算速率。</p>
     <p>每个硬件请求同步启动一次固定 Python helper。Agent 同一时刻只接受一个自身发起的硬件请求；冲突返回 <code>409 HARDWARE_BUSY</code>。Agent 不管理 Jupyter，也不能阻止 notebook 同时写硬件。</p>
   </section>
 
@@ -45,6 +45,24 @@
     <h2>硬件接口</h2>
     <table><thead><tr><th>方法</th><th>路径</th><th>行为</th></tr></thead><tbody>
       <tr><td><span class="method get">GET</span></td><td><code>/api/v2/status</code></td><td>一次性读取 core、board ID、streaming、LMK profile/SYSREF、reference watchdog、ADC/DAC MTS target 与实测 latency、half-band coefficient ID、PPS/QSFP、数据通路健康和累计 counters。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/rfdc/calibration</code></td><td>读取八路 ADC 的 CalFreeze、OCB1/OCB2/GCB/TSCB 系数及固定顺序 SHA256。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/rfdc/calibration/monitor</code></td><td>从常驻reference watchdog读取每秒更新的freeze mask、四类系数、SHA256和温度，不启动一次性硬件helper。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/telemetry/power-thermal?since_seq=N</code></td><td>读取常驻watchdog有界JSONL环中的1秒AMS、stream、RFDC tile、校准哈希和OCB1 DFT记录；epoch变化或sequence缺口用于立即否决正式run。</td></tr>
+      <tr><td><span class="method get">GET</span>/<span class="method post">POST</span></td><td><code>/api/v2/diagnostics/output-load</code></td><td>读取或在停流时切换160 MS/s SPEC_ONLY/TIME_SPEC负载；不执行MTS、NCO、时钟或PFB配置，START要求匹配事务ID。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/diagnostics/output-load/restore</code></td><td>恢复负载事务之前的输出模式，并验证受保护配置指纹不变。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/rfdc/power</code></td><td>读取XRFdc_GetIPStatus规范化后的四个ADC/DAC tile状态及诊断事务。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/power/dac-shutdown</code></td><td>停流时通过官方驱动关闭全部四个DAC tile并保持ADC tile运行；START要求匹配事务ID。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/power/restore</code></td><td>执行完整production CONFIGURE/MTS恢复全部RFDC tile，不把简单StartUp作为正式恢复。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/rfdc/calibration/ocb1</code></td><td>读取OCB1动态/override状态、八路原始与signed16系数、DFT k=1..4、事务ID和SHA256。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/ocb1/snapshot-override</code></td><td>停流且DAC静音时，将八路当前OCB1原值各自写回形成一次性override事务；要求<code>receiver_stream_accepting=false</code>。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/ocb1/release</code></td><td>使用匹配事务ID解除八路OCB1 override；之后必须完整CONFIGURE/MTS。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/freeze</code></td><td>停流且未 arm 时原子冻结八路；普通诊断要求 DAC 静音，受控训练事务校验声明的 center+60 MHz 八路单音，冻结后由同一 helper 静音。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/unfreeze</code></td><td>停流、未 arm、DAC 静音时原子解除八路冻结。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/preview</code></td><td>science UDP 停止时抓取八路 RFDC preview，返回 RMS/peak dBFS 和 clip；用于训练电平门禁。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/train-freeze</code></td><td>校验声明的八路 center+60 MHz训练单音；依据AMD PG269的−40 dBFS最低输入要求，使用带4 dB余量的−36..−8 dBFS工程窗口，以5 Hz等待GCB/TSCB连续2秒稳定，原子freeze后静音DAC。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/clock/diagnostic</code></td><td>读取Stage 34c-2时钟事务、完整LMK profile SHA、SYSREF request GPIO、预期物理输出、PLL锁定和MTS实测值。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/clock/diagnostic/prepare</code></td><td>仅在停流、receiver不接收、DAC静音、freeze=0且OCB1动态时，写入冻结profile、reset RFDC、执行MTS并返回一次性<code>clock_transaction_id</code>。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/clock/diagnostic/restore</code></td><td>恢复生产external-GPSDO continuous-SYSREF profile，并重新reset RFDC和执行生产MTS。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/configure</code></td><td>加载 catalog bitstream，配置 profile/source/24 endpoints/board ID；完成后保持停流。重复调用会真实重配。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/start</code></td><td>校验 <code>expected_board_id</code> 后立即启动。</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/v2/sync/status</code></td><td>读取 scheduled-sync prepare/arm/commit、generation、sample0 和错误状态。</td></tr>
@@ -64,6 +82,23 @@ curl -s http://192.168.100.117:8010/health/ready | jq
 curl -s http://192.168.100.117:8010/api/v2/info | jq
 curl -s http://192.168.100.117:8010/api/v2/bitstreams | jq
 curl -s http://192.168.100.117:8010/api/v2/status | jq</pre>
+    <p>校准观测与安全冻结：</p>
+<pre>curl -s http://192.168.100.117:8010/api/v2/rfdc/calibration | jq
+curl -s http://192.168.100.117:8010/api/v2/rfdc/calibration/monitor | jq
+curl -sS -X POST http://192.168.100.117:8010/api/v2/rfdc/calibration/preview \
+  -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq
+curl -sS -X POST http://192.168.100.117:8010/api/v2/rfdc/calibration/freeze \
+  -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq
+curl -sS -X POST http://192.168.100.117:8010/api/v2/rfdc/calibration/unfreeze \
+  -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq</pre>
+    <p>Stage 34c-2时钟诊断（诊断START还必须携带prepare返回的事务ID）：</p>
+<pre>curl -s http://192.168.100.117:8010/api/v2/clock/diagnostic | jq
+curl -sS -X POST http://192.168.100.117:8010/api/v2/clock/diagnostic/prepare \
+  -H 'Content-Type: application/json' \
+  -d '{"expected_board_id":1,"profile_id":"160m_10m_request_manual_clkin2","sample_rate_msps":320,"center_mhz":1020,"receiver_stream_accepting":false}' | jq
+curl -sS -X POST http://192.168.100.117:8010/api/v2/clock/diagnostic/restore \
+  -H 'Content-Type: application/json' \
+  -d '{"expected_board_id":1,"receiver_stream_accepting":false}' | jq</pre>
   </section>
 
   <section>

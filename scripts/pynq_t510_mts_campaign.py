@@ -9,8 +9,11 @@ into an apparent pass.
 from __future__ import annotations
 
 import argparse
+import atexit
+import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -18,6 +21,7 @@ from typing import Any
 
 
 LATENCY_QUANTA = {"adc": 12, "dac": 12}
+DEFAULT_CONFIGURE_LOCK = Path("/run/t510-configure.lock")
 
 
 def _root() -> Path:
@@ -56,6 +60,29 @@ def _write_checkpoint(path: Path, result: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _release_configure_lock(descriptor: int) -> None:
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
+def _acquire_configure_lock(path: Path) -> int:
+    """Exclude the resident watchdog/Agent from PL and LMK access."""
+
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+    except FileNotFoundError:
+        descriptor = os.open(
+            path,
+            os.O_CREAT | os.O_RDWR | os.O_CLOEXEC,
+            0o644,
+        )
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+    atexit.register(_release_configure_lock, descriptor)
+    return descriptor
 
 
 def _active_values(config: dict[str, Any], field: str) -> list[int]:
@@ -359,6 +386,7 @@ def main() -> int:
             "tiles and attempting MTS"
         ),
     )
+    parser.add_argument("--configure-lock", default=str(DEFAULT_CONFIGURE_LOCK))
     parser.add_argument("--output")
     args = parser.parse_args()
 
@@ -390,9 +418,14 @@ def main() -> int:
             "lmk_reload": int(args.lmk_reloads),
         },
         "completed_cycles": 0,
+        "configure_lock": str(Path(args.configure_lock)),
         "cycles": [],
         "errors": [],
     }
+    _write_checkpoint(output, result)
+
+    _configure_lock_descriptor = _acquire_configure_lock(Path(args.configure_lock))
+    result["configure_lock_acquired"] = True
     _write_checkpoint(output, result)
 
     controller = FEngineController(args.bitfile)

@@ -54,7 +54,7 @@ class T510HostReleaseTests(unittest.TestCase):
         installer = (ROOT / "deploy/t510/install-on-board.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn('STAGE="${ROOT}/build/board/latest"', publisher)
+        self.assertIn('STAGE="${ROOT}/build/board/latest/package"', publisher)
         self.assertIn('OVERLAY_DIR="${T510_OVERLAY_DIR:-${ROOT}/overlay}"', publisher)
         self.assertNotIn("RELEASE_ID", publisher)
         self.assertNotIn("/releases/${RELEASE_ID}", installer)

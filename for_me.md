@@ -39,7 +39,10 @@ PYNQ上使用API模式
 杂散相关的调研
 
 # stage 34
-把pfb提高到8-tap
+把pfb提高到8-tap，性能评估（杂散，rfi抑制，灵敏度）
+
+stage 34d，Allan 负责判断系统稳定时间尺度，互相关负责判断科学上是否可用。
+	​
 
 # stage 35
 多板同步，把stage 32i搞过来

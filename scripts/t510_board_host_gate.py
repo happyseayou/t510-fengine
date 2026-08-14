@@ -213,13 +213,46 @@ def main() -> int:
             raise RuntimeError(f"board mode mismatch before START: {profile}")
         if abs(float(profile.get("center_mhz", 0.0)) - args.center_mhz) > 1.0e-6:
             raise RuntimeError(f"board center-frequency mismatch before START: {profile}")
-        if str(idle.get("core_version", "")).lower() != "0x00010033":
+        if str(idle.get("core_version", "")).lower() != "0x00010034":
             raise RuntimeError(f"current T510 release core mismatch before START: {idle.get('core_version')}")
         idle_rfdc_health = _t510_rfdc_health(idle, require_valid=False)
         evidence["rfdc_health_idle"] = idle_rfdc_health
         if not idle_rfdc_health["ok"]:
             raise RuntimeError(f"current T510 release RFDC contract failed before START: {idle_rfdc_health['errors']}")
         evidence["board_idle"] = _compact_board(idle)
+
+        prepare_command = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            args.receiver_ssh,
+            "python3",
+            args.remote_validator,
+            "--sample-rate-msps",
+            str(args.sample_rate_msps),
+            "--mode",
+            args.mode,
+            "--center-mhz",
+            str(args.center_mhz),
+            "--base-url",
+            args.receiver_base_url,
+            "--interface",
+            args.receiver_interface,
+            "--prepare-only",
+        ]
+        receiver_prepare = subprocess.run(
+            prepare_command, text=True, capture_output=True, check=False
+        )
+        evidence["receiver_prepare"] = {
+            "returncode": receiver_prepare.returncode,
+            "stdout": receiver_prepare.stdout,
+            "stderr": receiver_prepare.stderr,
+        }
+        if receiver_prepare.returncode != 0:
+            raise RuntimeError(
+                "receiver preparation failed before START: "
+                f"{receiver_prepare.stderr or receiver_prepare.stdout}"
+            )
 
         _result(
             _http_json(
@@ -257,6 +290,7 @@ def main() -> int:
             str(max(float(args.seconds), 0.1)),
             "--output",
             args.remote_output,
+            "--skip-config",
         ]
         host_process = subprocess.run(command, text=True, capture_output=True, check=False)
         evidence["host_validator"] = {
@@ -337,7 +371,7 @@ def main() -> int:
                 "overflow_count",
                 "data_halt_count",
                 "xfft_event_count",
-                "tile_overflow_count",
+                "fir_saturation_count",
                 "xfft_tlast_unexpected_count",
                 "xfft_tlast_missing_count",
                 "xfft_fft_overflow_count",
@@ -357,7 +391,7 @@ def main() -> int:
         if not bool(board_after.get("pipeline", {}).get("stream_accepting")):
             errors.append("BOARD_PIPELINE_NOT_ACCEPTING")
         for label, snapshot in (("before", board_before), ("after", board_after)):
-            if str(snapshot.get("core_version", "")).lower() != "0x00010033":
+            if str(snapshot.get("core_version", "")).lower() != "0x00010034":
                 errors.append(f"BOARD_CORE_VERSION_MISMATCH_{label.upper()}")
             health = evidence[f"rfdc_health_{label}"]
             errors.extend(f"{error}_{label.upper()}" for error in health["errors"])
@@ -392,8 +426,8 @@ def main() -> int:
         if needs_spec:
             if int(after_channelizer.get("nchan", 0) or 0) != 4096:
                 errors.append("BOARD_PFB_NCHAN_NOT_4096")
-            if int(after_channelizer.get("taps", 0) or 0) != 4:
-                errors.append("BOARD_PFB_TAPS_NOT_4")
+            if int(after_channelizer.get("taps", 0) or 0) != 8:
+                errors.append("BOARD_PFB_TAPS_NOT_8")
             if int(after_channelizer.get("packet_chan_count", 0) or 0) != 256:
                 errors.append("BOARD_SPEC_PACKET_CHAN_COUNT_NOT_256")
             if int(after_channelizer.get("packet_time_count", 0) or 0) != 1:
@@ -404,7 +438,7 @@ def main() -> int:
                 "overflow_count",
                 "data_halt_count",
                 "xfft_event_count",
-                "tile_overflow_count",
+                "fir_saturation_count",
                 "xfft_tlast_unexpected_count",
                 "xfft_tlast_missing_count",
                 "xfft_fft_overflow_count",

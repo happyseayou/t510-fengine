@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
-from python.t510_fengine import T510FEngine
+from python.t510_fengine import (
+    T510FEngine,
+    _calibration_circular_delta,
+    _nearest_rank_percentile,
+)
 
 
 class _Block:
@@ -13,6 +19,7 @@ class _Block:
         setattr(self, factor_name, 12)
         self.update_count = 0
         self.reset_count = 0
+        self.active = True
 
     def UpdateEvent(self, _event: int) -> None:
         self.update_count += 1
@@ -32,6 +39,79 @@ class _Rfdc:
     def __init__(self) -> None:
         self.adc_tiles = [_Tile(factor_name="DecimationFactor") for _ in range(4)]
         self.dac_tiles = [_Tile(factor_name="InterpolationFactor") for _ in range(4)]
+        self._instance = object()
+
+
+class _CalibrationFfi:
+    NULL = None
+
+    @staticmethod
+    def typeof(_name):
+        return object()
+
+    @staticmethod
+    def new(name):
+        if name == "XRFdc_Cal_Freeze_Settings*":
+            return SimpleNamespace(CalFrozen=0, DisableFreezePin=0, FreezeCalibration=0)
+        if name == "XRFdc_Calibration_Coefficients*":
+            return SimpleNamespace(**{f"Coeff{index}": 0 for index in range(8)})
+        raise AssertionError(name)
+
+
+class _CalibrationLib:
+    def __init__(self) -> None:
+        self.frozen = {(tile, block): False for tile in range(4) for block in range(2)}
+        self.fail_set = None
+        self.fail_ocb1_set = None
+        self.override = {(tile, block): False for tile in range(4) for block in range(2)}
+        self.ocb1 = {
+            (tile, block): [tile * 1000 + block * 100 + index for index in range(8)]
+            for tile in range(4)
+            for block in range(2)
+        }
+
+    def XRFdc_GetCalFreeze(self, _instance, tile, block, settings):
+        settings.CalFrozen = int(self.frozen[(tile, block)])
+        settings.DisableFreezePin = 1
+        settings.FreezeCalibration = int(self.frozen[(tile, block)])
+        return 0
+
+    def XRFdc_SetCalFreeze(self, _instance, tile, block, settings):
+        if self.fail_set == (tile, block) and int(settings.FreezeCalibration):
+            return 17
+        self.frozen[(tile, block)] = bool(int(settings.FreezeCalibration))
+        return 0
+
+    def XRFdc_GetCalCoefficients(self, _instance, tile, block, calibration_block, coeff):
+        for index in range(8):
+            setattr(
+                coeff,
+                f"Coeff{index}",
+                (
+                    self.ocb1[(tile, block)][index]
+                    if calibration_block == 0
+                    else tile * 1000 + block * 100 + calibration_block * 10 + index
+                ),
+            )
+        return 0
+
+    def XRFdc_SetCalCoefficients(self, _instance, tile, block, calibration_block, coeff):
+        if self.fail_ocb1_set == (tile, block):
+            return 23
+        assert calibration_block == 0
+        self.ocb1[(tile, block)] = [
+            int(getattr(coeff, f"Coeff{index}")) & 0xFFFF_FFFF
+            for index in range(8)
+        ]
+        self.override[(tile, block)] = True
+        return 0
+
+    def XRFdc_DisableCoefficientsOverride(
+        self, _instance, tile, block, calibration_block
+    ):
+        assert calibration_block == 0
+        self.override[(tile, block)] = False
+        return 0
 
 
 def _core() -> T510FEngine:
@@ -42,6 +122,113 @@ def _core() -> T510FEngine:
 
 
 class T510RfdcContractTests(unittest.TestCase):
+    def test_calibration_delta_uses_fixed_width_ring_and_tail_percentile(self) -> None:
+        self.assertEqual(_calibration_circular_delta(255, -256, 9), 1)
+        self.assertEqual(_calibration_circular_delta(2047, -2048, 12), 1)
+        self.assertEqual(_calibration_circular_delta(-10, -4, 9), 6)
+        self.assertEqual(_nearest_rank_percentile([0] * 95 + [4] * 4 + [32], 0.50), 0)
+        self.assertEqual(_nearest_rank_percentile([0] * 95 + [4] * 4 + [32], 0.95), 0)
+        self.assertEqual(_nearest_rank_percentile([0] * 94 + [4] * 5 + [32], 0.95), 4)
+
+    def test_convergence_compares_signed_low_and_high_half_coefficients(self) -> None:
+        core = _core()
+
+        def snapshot(gcb_packed: int, tscb_packed: int):
+            return {
+                "channels": [
+                    {
+                        "coefficients": {
+                            "gcb": [gcb_packed] * 8,
+                            "tscb": [tscb_packed] * 8,
+                        }
+                    }
+                    for _ in range(8)
+                ],
+                "coefficient_sha256": {"gcb": "g", "tscb": "t"},
+            }
+
+        # High-half -1 -> 0 is one signed LSB, not a false 65536-LSB jump.
+        values = [
+            snapshot(0x0FFF0000, 0x01FF0000),
+            snapshot(0x00000000, 0x00000000),
+            snapshot(0x00000000, 0x00000000),
+        ]
+        with mock.patch.object(
+            core,
+            "_adc_calibration_blocks",
+            return_value=[(tile, block) for tile in range(4) for block in range(2)],
+        ), mock.patch.object(
+            core,
+            "read_adc_calibration_status",
+            side_effect=values,
+        ):
+            result = core.wait_adc_calibration_convergence(
+                poll_hz=1000.0,
+                stable_seconds=0.002,
+                timeout_seconds=0.1,
+                max_delta_lsb=1,
+            )
+        self.assertTrue(result["converged"])
+        self.assertEqual(result["trace"][1]["max_delta_lsb"], 1)
+
+    def test_calibration_read_freeze_unfreeze_and_partial_failure_rollback(self) -> None:
+        core = _core()
+        ffi = _CalibrationFfi()
+        lib = _CalibrationLib()
+        contract = {
+            "blocks": [
+                {"kind": "adc", "tile": tile, "block": block}
+                for tile in range(4)
+                for block in range(2)
+            ]
+        }
+        with mock.patch.object(core, "_ensure_rfdc_calibration_cffi", return_value=(ffi, lib)), mock.patch.object(
+            core, "read_rfdc_contract", return_value=contract
+        ):
+            initial = core.read_adc_calibration_status(require=True)
+            self.assertTrue(initial["supported"])
+            self.assertEqual(initial["frozen_adc_mask"], 0)
+            self.assertEqual(len(initial["channels"]), 8)
+            self.assertEqual(len(initial["coefficient_sha256"]["all"]), 64)
+            frozen = core.set_adc_calibration_freeze(True)
+            self.assertEqual(frozen["frozen_adc_mask"], 0xFF)
+            self.assertEqual(frozen["software_owned_mask"], 0xFF)
+            unfrozen = core.set_adc_calibration_freeze(False)
+            self.assertEqual(unfrozen["frozen_adc_mask"], 0)
+            lib.fail_set = (1, 1)
+            with self.assertRaisesRegex(RuntimeError, "ATOMIC_UPDATE_FAILED"):
+                core.set_adc_calibration_freeze(True)
+            self.assertFalse(any(lib.frozen.values()))
+
+    def test_ocb1_snapshot_override_readback_dft_release_and_rollback(self) -> None:
+        core = _core()
+        ffi = _CalibrationFfi()
+        lib = _CalibrationLib()
+        contract = {
+            "blocks": [
+                {"kind": "adc", "tile": tile, "block": block}
+                for tile in range(4)
+                for block in range(2)
+            ]
+        }
+        with mock.patch.object(
+            core, "_ensure_rfdc_calibration_cffi", return_value=(ffi, lib)
+        ), mock.patch.object(core, "read_rfdc_contract", return_value=contract):
+            result = core.set_adc_ocb1_snapshot_override()
+            self.assertEqual(result["override_adc_mask"], 0xFF)
+            self.assertTrue(all(lib.override.values()))
+            self.assertEqual(len(result["channels"]), 8)
+            self.assertEqual(len(result["channels"][0]["signed16"]), 8)
+            self.assertEqual([row["k"] for row in result["channels"][0]["dft"]], [1, 2, 3, 4])
+            released = core.release_adc_ocb1_override()
+            self.assertEqual(released["override_adc_mask"], 0)
+            self.assertFalse(any(lib.override.values()))
+
+            lib.fail_ocb1_set = (1, 1)
+            with self.assertRaisesRegex(RuntimeError, "ATOMIC_OVERRIDE_FAILED"):
+                core.set_adc_ocb1_snapshot_override()
+            self.assertFalse(any(lib.override.values()))
+
     def test_constants_preserve_320m_complex_and_80m_axis_rates(self) -> None:
         self.assertEqual(T510FEngine.RFDC_ADC_ANALOG_SAMPLE_RATE_HZ, 3_840_000_000)
         self.assertEqual(T510FEngine.RFDC_DAC_ANALOG_SAMPLE_RATE_HZ, 3_840_000_000)

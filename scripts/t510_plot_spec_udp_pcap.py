@@ -134,8 +134,11 @@ def parse_spec_header(payload: bytes) -> dict[str, int]:
             raise ValueError(f"unexpected SPEC {key}={header[key]}; expected {value}")
     if header["chan0"] != header["block_index"] * header["chan_count"]:
         raise ValueError("SPEC chan0 does not match block_index")
-    if len(payload) < HEADER_BYTES + SPEC_PAYLOAD_BYTES:
-        raise ValueError("truncated SPEC IQ payload")
+    if len(payload) != HEADER_BYTES + SPEC_PAYLOAD_BYTES:
+        raise ValueError(
+            f"unexpected SPEC UDP payload length {len(payload)}; "
+            f"expected {HEADER_BYTES + SPEC_PAYLOAD_BYTES}"
+        )
     return header
 
 
@@ -150,6 +153,8 @@ def collect_spectra(paths: list[Path]) -> dict[str, object]:
     sha256 = {}
     first_sample0 = None
     last_sample0 = None
+    previous_by_block: list[dict[str, int] | None] = [None] * SPEC_BLOCK_COUNT
+    continuity_checks = 0
 
     for path in paths:
         sha256[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -166,6 +171,25 @@ def collect_spectra(paths: list[Path]) -> dict[str, object]:
                 raise ValueError(
                     f"SPEC dst_port {dst_port} does not match block_index {block}"
                 )
+            previous = previous_by_block[block]
+            if previous is not None:
+                expected_sample_delta = 4096 * (320_000_000 // header["spec_sample_rate_hz"])
+                deltas = {
+                    "seq_no": (header["seq_no"] - previous["seq_no"]) & 0xFFFF_FFFF,
+                    "frame_id": (header["frame_id"] - previous["frame_id"]) & 0xFFFF_FFFF_FFFF_FFFF,
+                    "sample0": (header["sample0"] - previous["sample0"]) & 0xFFFF_FFFF_FFFF_FFFF,
+                }
+                expected = {
+                    "seq_no": SPEC_BLOCK_COUNT,
+                    "frame_id": SPEC_BLOCK_COUNT,
+                    "sample0": expected_sample_delta,
+                }
+                if deltas != expected:
+                    raise ValueError(
+                        f"SPEC block {block} continuity mismatch: deltas={deltas} expected={expected}"
+                    )
+                continuity_checks += 1
+            previous_by_block[block] = header
             body = payload[HEADER_BYTES : HEADER_BYTES + SPEC_PAYLOAD_BYTES]
             chan0 = header["chan0"]
             for pair_index, (i_sample, q_sample) in enumerate(
@@ -216,6 +240,7 @@ def collect_spectra(paths: list[Path]) -> dict[str, object]:
         "first_sample0": first_sample0,
         "last_sample0": last_sample0,
         "pcap_sha256": sha256,
+        "continuity_checks": continuity_checks,
     }
 
 

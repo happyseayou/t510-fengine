@@ -137,7 +137,6 @@ module t510_fengine_xfft_4096_sim_model (
 endmodule
 `endif
 
-`ifndef T510_SIM_FFT_MODEL
 module t510_fengine_xfft_4096_8lane_streaming (
     input  wire         aclk,
     input  wire         aresetn,
@@ -284,9 +283,8 @@ module t510_fengine_xfft_4096_8lane_streaming (
     assign event_data_out_channel_halt = m_axis_data_tvalid && !m_axis_data_tready;
 
 endmodule
-`endif
 
-// Current 4-tap PFB multiplier pipeline and streaming channelizer.
+// Fixed 8-tap PFB multiplier pipeline and streaming channelizer.
 module t510_pfb_mult_16x18_pipe2 (
     input  wire                clk,
     input  wire                rst_n,
@@ -395,7 +393,7 @@ module feng_channelizer_4096_streaming #(
     input  wire                 coeff_abort,
     input  wire                 coeff_write,
     input  wire [3:0]           coeff_requested_taps,
-    input  wire [13:0]          coeff_index,
+    input  wire [14:0]          coeff_index,
     input  wire signed [17:0]   coeff_data,
     input  wire [31:0]          coeff_id,
     output wire [31:0]          coeff_status,
@@ -434,6 +432,8 @@ module feng_channelizer_4096_streaming #(
 );
 
     localparam integer CELL_W = NINPUT * 32;
+    localparam integer PFB_TAPS = 8;
+    localparam integer PFB_COEFF_COUNT = NCHAN * PFB_TAPS;
     localparam integer CELLS_PER_BEAT = DATA_W / CELL_W;
     localparam integer PACK_IDX_W = (CELLS_PER_BEAT <= 1) ? 1 : $clog2(CELLS_PER_BEAT);
     localparam integer FRAME_FIFO_DEPTH = 16;
@@ -471,23 +471,25 @@ module feng_channelizer_4096_streaming #(
     logic [DATA_W-1:0] prefetch_word;
     logic [63:0]       prefetch_sample0;
     logic              prefetch_word_valid;
-    logic [1:0]        fill_buf;
+    logic [2:0]        fill_buf;
     logic [11:0]       fill_bin_idx;
-    logic [2:0]        valid_frame_count;
-    logic [1:0]        win0_buf;
-    logic [1:0]        win1_buf;
-    logic [1:0]        win2_buf;
-    logic [1:0]        win3_buf;
-    logic [1:0]        new_frame_buf;
+    logic [3:0]        valid_frame_count;
+    logic [2:0]        win_buf [0:PFB_TAPS-1];
+    logic [2:0]        new_frame_buf;
     logic              new_frame_ready;
     logic              shift_pending;
-    logic [63:0]       frame_sample0_buf [0:3];
+    logic [63:0]       frame_sample0_buf [0:PFB_TAPS-1];
 
     logic              feed_active;
     logic [12:0]       feed_read_addr;
     logic [63:0]       feed_sample0;
-    (* max_fanout = 64 *) logic read_cmd_valid;
-    (* max_fanout = 64 *) logic [11:0] read_cmd_idx;
+    // These registered controls fan into 8 frame memories and 16 coefficient
+    // memories.  A 64-load replication threshold left the placer with long
+    // 322.265625 MHz routes into RAMB36 address/enable pins after the SYSREF
+    // observability logic perturbed placement.  Replicate locally per small
+    // BRAM cluster; this changes only physical fanout, not pipeline latency.
+    (* max_fanout = 16 *) logic read_cmd_valid;
+    (* max_fanout = 16 *) logic [11:0] read_cmd_idx;
     logic              read_valid;
     logic [11:0]       read_idx;
     logic              read_dout_valid;
@@ -500,15 +502,8 @@ module feng_channelizer_4096_streaming #(
     localparam integer PFB_COMPONENTS = NINPUT * 2;
     logic              pfb_r0_valid;
     logic [11:0]       pfb_r0_idx;
-    logic [1:0]        pfb_r0_w0;
-    logic [1:0]        pfb_r0_w1;
-    logic [1:0]        pfb_r0_w2;
-    logic [1:0]        pfb_r0_w3;
-    logic [CELL_W-1:0] pfb_r0_dout [0:3];
-    logic signed [17:0] pfb_r0_c0;
-    logic signed [17:0] pfb_r0_c1;
-    logic signed [17:0] pfb_r0_c2;
-    logic signed [17:0] pfb_r0_c3;
+    logic [CELL_W-1:0] pfb_r0_dout [0:PFB_TAPS-1];
+    logic signed [17:0] pfb_r0_coeff [0:PFB_TAPS-1];
     logic              pfb_s0_valid;
     logic              pfb_mul_valid;
     logic              pfb_s1_valid;
@@ -516,6 +511,7 @@ module feng_channelizer_4096_streaming #(
     logic              pfb_s3_valid;
     logic              pfb_s4_valid;
     logic              pfb_s5_valid;
+    logic              pfb_s6_valid;
     logic [11:0]       pfb_s0_idx;
     logic [11:0]       pfb_mul_idx;
     logic [11:0]       pfb_s1_idx;
@@ -523,21 +519,16 @@ module feng_channelizer_4096_streaming #(
     logic [11:0]       pfb_s3_idx;
     logic [11:0]       pfb_s4_idx;
     logic [11:0]       pfb_s5_idx;
-    logic [CELL_W-1:0] pfb_s0_d0;
-    logic [CELL_W-1:0] pfb_s0_d1;
-    logic [CELL_W-1:0] pfb_s0_d2;
-    logic [CELL_W-1:0] pfb_s0_d3;
-    logic signed [17:0] pfb_s0_c0;
-    logic signed [17:0] pfb_s0_c1;
-    logic signed [17:0] pfb_s0_c2;
-    logic signed [17:0] pfb_s0_c3;
-    wire signed [35:0] pfb_s1_prod [0:PFB_COMPONENTS-1][0:3];
-    logic signed [36:0] pfb_s2_sum01 [0:PFB_COMPONENTS-1];
-    logic signed [36:0] pfb_s2_sum23 [0:PFB_COMPONENTS-1];
-    logic signed [37:0] pfb_s3_acc [0:PFB_COMPONENTS-1];
-    logic [21:0]       pfb_s4_magnitude [0:PFB_COMPONENTS-1];
-    logic              pfb_s4_negative [0:PFB_COMPONENTS-1];
-    logic [CELL_W-1:0] pfb_s5_cell;
+    logic [11:0]       pfb_s6_idx;
+    logic [CELL_W-1:0] pfb_s0_data [0:PFB_TAPS-1];
+    logic signed [17:0] pfb_s0_coeff [0:PFB_TAPS-1];
+    wire signed [35:0] pfb_s1_prod [0:PFB_COMPONENTS-1][0:PFB_TAPS-1];
+    logic signed [36:0] pfb_s2_pair [0:PFB_COMPONENTS-1][0:3];
+    logic signed [37:0] pfb_s3_quad [0:PFB_COMPONENTS-1][0:1];
+    logic signed [38:0] pfb_s4_acc [0:PFB_COMPONENTS-1];
+    logic [22:0]       pfb_s5_magnitude [0:PFB_COMPONENTS-1];
+    logic              pfb_s5_negative [0:PFB_COMPONENTS-1];
+    logic [CELL_W-1:0] pfb_s6_cell;
     logic [12:0]       reserved_output_beats;
     logic              output_capacity_available;
 
@@ -551,7 +542,7 @@ module feng_channelizer_4096_streaming #(
     wire fill_last_word_of_frame =
         fill_word_valid && (fill_bin_idx >= (NCHAN - CELLS_PER_BEAT));
     wire input_buffer_available =
-        (valid_frame_count < 3'd4) ||
+        (valid_frame_count < 4'd8) ||
         feed_active ||
         shift_pending;
 
@@ -561,34 +552,26 @@ module feng_channelizer_4096_streaming #(
     logic         xfft_configured;
     wire [11:0]  xfft_scale_schedule = cfg_fft_shift[11:0];
 
-    logic [CELL_W-1:0] frame_dout [0:3];
-    wire frame_we0 = fill_word_valid && (fill_buf == 2'd0);
-    wire frame_we1 = fill_word_valid && (fill_buf == 2'd1);
-    wire frame_we2 = fill_word_valid && (fill_buf == 2'd2);
-    wire frame_we3 = fill_word_valid && (fill_buf == 2'd3);
+    logic [CELL_W-1:0] frame_dout [0:PFB_TAPS-1];
 
-    logic signed [17:0] coeff_dout [0:1][0:3];
-    logic [1:0] coeff_read_tap;
+    logic signed [17:0] coeff_dout [0:1][0:PFB_TAPS-1];
     logic       active_bank;
     logic       shadow_bank;
     logic       coeff_loading;
     logic       coeff_shadow_full;
+    logic       coeff_load_sequence_error;
     logic       coeff_active_valid;
     logic       coeff_commit_pending;
     logic       coeff_command_error;
     logic [3:0] coeff_active_taps;
     logic [31:0] coeff_shadow_checksum;
     logic [31:0] coeff_shadow_id;
-    wire [1:0] coeff_write_tap = coeff_index[13:12];
+    wire [2:0] coeff_write_tap = coeff_index[14:12];
     wire [11:0] coeff_write_phase = coeff_index[11:0];
-    wire coeff_write_bank0_t0 = coeff_write && coeff_loading && (shadow_bank == 1'b0) && (coeff_write_tap == 2'd0);
-    wire coeff_write_bank0_t1 = coeff_write && coeff_loading && (shadow_bank == 1'b0) && (coeff_write_tap == 2'd1);
-    wire coeff_write_bank0_t2 = coeff_write && coeff_loading && (shadow_bank == 1'b0) && (coeff_write_tap == 2'd2);
-    wire coeff_write_bank0_t3 = coeff_write && coeff_loading && (shadow_bank == 1'b0) && (coeff_write_tap == 2'd3);
-    wire coeff_write_bank1_t0 = coeff_write && coeff_loading && (shadow_bank == 1'b1) && (coeff_write_tap == 2'd0);
-    wire coeff_write_bank1_t1 = coeff_write && coeff_loading && (shadow_bank == 1'b1) && (coeff_write_tap == 2'd1);
-    wire coeff_write_bank1_t2 = coeff_write && coeff_loading && (shadow_bank == 1'b1) && (coeff_write_tap == 2'd2);
-    wire coeff_write_bank1_t3 = coeff_write && coeff_loading && (shadow_bank == 1'b1) && (coeff_write_tap == 2'd3);
+    wire coeff_write_accept = coeff_write && coeff_loading &&
+                              (coeff_requested_taps == 4'd8) &&
+                              (coeff_loaded_count < PFB_COEFF_COUNT) &&
+                              (coeff_index == coeff_loaded_count[14:0]);
 
     wire config_valid =
         (DATA_W >= CELL_W) &&
@@ -596,9 +579,9 @@ module feng_channelizer_4096_streaming #(
         (CELLS_PER_BEAT == 4) &&
         (NINPUT == 8) &&
         (NCHAN == 4096) &&
-        (cfg_taps == 16'd4) &&
+        (cfg_taps == 16'd8) &&
         coeff_active_valid &&
-        (coeff_active_taps == 4'd4) &&
+        (coeff_active_taps == 4'd8) &&
         (cfg_chan0 == 32'd0) &&
         (cfg_chan_count == 16'd256) &&
         (cfg_time_count == 16'd1);
@@ -651,11 +634,11 @@ module feng_channelizer_4096_streaming #(
     wire xfft_output_fire = xfft_m_axis_tvalid;
     wire xfft_q_empty = (xfft_q_count == 2'd0);
     wire xfft_q_full = (xfft_q_count == 2'd2);
-    (* max_fanout = 64 *) wire pfb_pipe_advance = !xfft_q_full;
+    (* max_fanout = 16 *) wire pfb_pipe_advance = !xfft_q_full;
     wire xfft_data_valid = !xfft_q_empty;
     wire [CELL_W-1:0] xfft_data = xfft_q_head_data;
     wire [11:0] xfft_data_idx = xfft_q_head_idx;
-    wire xfft_q_push = pfb_pipe_advance && pfb_s5_valid;
+    wire xfft_q_push = pfb_pipe_advance && pfb_s6_valid;
     wire read_issue = feed_active && pfb_pipe_advance && (feed_read_addr < 13'd4096);
     wire feed_last_read_issue = read_issue && (feed_read_addr == 13'd4095);
     assign xfft_s_axis_tvalid = enable && config_valid && xfft_configured && xfft_data_valid;
@@ -673,12 +656,13 @@ module feng_channelizer_4096_streaming #(
                          pfb_s2_valid ||
                          pfb_s3_valid ||
                          pfb_s4_valid ||
-                         pfb_s5_valid;
+                         pfb_s5_valid ||
+                         pfb_s6_valid;
     wire start_feed = enable && config_valid && xfft_configured &&
                       !feed_active && !pfb_pipe_busy && !xfft_data_valid &&
                       !new_frame_ready && !shift_pending &&
                       output_capacity_available &&
-                      (valid_frame_count == 3'd4);
+                      (valid_frame_count == 4'd8);
     wire pack_first_cell = (pack_slot == {PACK_IDX_W{1'b0}});
     wire pack_last_cell = (pack_slot == (CELLS_PER_BEAT - 1));
     wire pack_slot_mismatch = xfft_output_fire && (pack_slot != pack_subidx);
@@ -712,8 +696,9 @@ module feng_channelizer_4096_streaming #(
         pfb_s3_valid ||
         pfb_s4_valid ||
         pfb_s5_valid ||
+        pfb_s6_valid ||
         xfft_data_valid ||
-        (valid_frame_count != 3'd0) ||
+        (valid_frame_count != 4'd0) ||
         output_valid ||
         (pack_subidx != {PACK_IDX_W{1'b0}}) ||
         xfft_config_tvalid;
@@ -725,7 +710,7 @@ module feng_channelizer_4096_streaming #(
     assign packet_chan_count = 16'd256;
     assign packet_time_count = 16'd1;
     assign input_fifo_level = {
-        14'd0,
+        13'd0,
         prefetch_word_valid,
         new_frame_ready,
         shift_pending,
@@ -747,28 +732,28 @@ module feng_channelizer_4096_streaming #(
 
     // Split symmetric rounding and saturation across two registers.  The old
     // single function synthesized as an 11-level carry path at 322 MHz.
-    function automatic [21:0] round_magnitude_q17_38(input logic signed [37:0] acc);
-        logic [38:0] extended;
-        logic [38:0] magnitude;
-        logic [38:0] biased;
+    function automatic [22:0] round_magnitude_q17_39(input logic signed [38:0] acc);
+        logic [39:0] extended;
+        logic [39:0] magnitude;
+        logic [39:0] biased;
         begin
-            extended = {acc[37], acc};
-            magnitude = acc[37] ? (~extended + 39'd1) : extended;
-            biased = magnitude + 39'd65536;
-            round_magnitude_q17_38 = biased[38:17];
+            extended = {acc[38], acc};
+            magnitude = acc[38] ? (~extended + 40'd1) : extended;
+            biased = magnitude + 40'd65536;
+            round_magnitude_q17_39 = biased[39:17];
         end
     endfunction
 
     function automatic signed [15:0] saturate_signed_magnitude(
         input logic negative,
-        input logic [21:0] magnitude
+        input logic [22:0] magnitude
     );
         logic signed [15:0] positive_value;
         begin
             positive_value = $signed({1'b0, magnitude[14:0]});
-            if (negative && (magnitude >= 22'd32768)) begin
+            if (negative && (magnitude >= 23'd32768)) begin
                 saturate_signed_magnitude = -16'sd32768;
-            end else if (!negative && (magnitude > 22'd32767)) begin
+            end else if (!negative && (magnitude > 23'd32767)) begin
                 saturate_signed_magnitude = 16'sd32767;
             end else if (negative) begin
                 saturate_signed_magnitude = -positive_value;
@@ -780,11 +765,43 @@ module feng_channelizer_4096_streaming #(
 
     // Reference helper retained for directed simulation checks only.  The RTL
     // datapath uses the two registered functions above.
-    function automatic signed [15:0] round_sat_q17_38(input logic signed [37:0] acc);
+    function automatic signed [15:0] round_sat_q17_39(input logic signed [38:0] acc);
         begin
-            round_sat_q17_38 = saturate_signed_magnitude(
-                acc[37], round_magnitude_q17_38(acc)
+            round_sat_q17_39 = saturate_signed_magnitude(
+                acc[38], round_magnitude_q17_39(acc)
             );
+        end
+    endfunction
+
+    function automatic logic magnitude_saturates(
+        input logic negative,
+        input logic [22:0] magnitude
+    );
+        begin
+            magnitude_saturates = negative ? (magnitude >= 23'd32768)
+                                           : (magnitude > 23'd32767);
+        end
+    endfunction
+
+    // IEEE/zlib reflected CRC32 over one little-endian 32-bit coefficient
+    // word.  The public CRC value is kept in its finalized (xor-out) form so
+    // reset value zero matches zlib.crc32(data) with no prior bytes.
+    function automatic [31:0] crc32_coeff_word(
+        input logic [31:0] crc_in,
+        input logic [31:0] coeff_word
+    );
+        logic [31:0] crc;
+        integer bit_idx;
+        begin
+            crc = crc_in ^ 32'hffff_ffff;
+            for (bit_idx = 0; bit_idx < 32; bit_idx = bit_idx + 1) begin
+                if (crc[0] ^ coeff_word[bit_idx]) begin
+                    crc = (crc >> 1) ^ 32'hedb8_8320;
+                end else begin
+                    crc = crc >> 1;
+                end
+            end
+            crc32_coeff_word = crc ^ 32'hffff_ffff;
         end
     endfunction
 
@@ -801,6 +818,18 @@ module feng_channelizer_4096_streaming #(
 
     integer pfb_comp_idx;
     integer pfb_lane_idx;
+    integer pfb_tap_idx;
+    integer pfb_sat_idx;
+    logic pfb_s5_any_saturation;
+
+    always_comb begin
+        pfb_s5_any_saturation = 1'b0;
+        for (pfb_sat_idx = 0; pfb_sat_idx < PFB_COMPONENTS; pfb_sat_idx = pfb_sat_idx + 1) begin
+            pfb_s5_any_saturation = pfb_s5_any_saturation |
+                magnitude_saturates(pfb_s5_negative[pfb_sat_idx],
+                                    pfb_s5_magnitude[pfb_sat_idx]);
+        end
+    end
 
     always_comb begin
         xfft_config_tdata = 256'd0;
@@ -827,11 +856,8 @@ module feng_channelizer_4096_streaming #(
 
     genvar frame_mem_idx;
     generate
-        for (frame_mem_idx = 0; frame_mem_idx < 4; frame_mem_idx = frame_mem_idx + 1) begin : gen_frame_mem
-            wire frame_we =
-                (frame_mem_idx == 0) ? frame_we0 :
-                (frame_mem_idx == 1) ? frame_we1 :
-                (frame_mem_idx == 2) ? frame_we2 : frame_we3;
+        for (frame_mem_idx = 0; frame_mem_idx < PFB_TAPS; frame_mem_idx = frame_mem_idx + 1) begin : gen_frame_mem
+            wire frame_we = fill_word_valid && (fill_buf == frame_mem_idx[2:0]);
             xpm_memory_sdpram #(
                 .ADDR_WIDTH_A(12),
                 .ADDR_WIDTH_B(12),
@@ -881,16 +907,10 @@ module feng_channelizer_4096_streaming #(
     genvar coeff_tap_idx;
     generate
         for (coeff_bank_idx = 0; coeff_bank_idx < 2; coeff_bank_idx = coeff_bank_idx + 1) begin : gen_coeff_bank
-            for (coeff_tap_idx = 0; coeff_tap_idx < 4; coeff_tap_idx = coeff_tap_idx + 1) begin : gen_coeff_tap
-                wire coeff_we =
-                    (coeff_bank_idx == 0 && coeff_tap_idx == 0) ? coeff_write_bank0_t0 :
-                    (coeff_bank_idx == 0 && coeff_tap_idx == 1) ? coeff_write_bank0_t1 :
-                    (coeff_bank_idx == 0 && coeff_tap_idx == 2) ? coeff_write_bank0_t2 :
-                    (coeff_bank_idx == 0 && coeff_tap_idx == 3) ? coeff_write_bank0_t3 :
-                    (coeff_bank_idx == 1 && coeff_tap_idx == 0) ? coeff_write_bank1_t0 :
-                    (coeff_bank_idx == 1 && coeff_tap_idx == 1) ? coeff_write_bank1_t1 :
-                    (coeff_bank_idx == 1 && coeff_tap_idx == 2) ? coeff_write_bank1_t2 :
-                    coeff_write_bank1_t3;
+            for (coeff_tap_idx = 0; coeff_tap_idx < PFB_TAPS; coeff_tap_idx = coeff_tap_idx + 1) begin : gen_coeff_tap
+                wire coeff_we = coeff_write_accept &&
+                                (shadow_bank == coeff_bank_idx[0]) &&
+                                (coeff_write_tap == coeff_tap_idx[2:0]);
                 xpm_memory_sdpram #(
                     .ADDR_WIDTH_A(12),
                     .ADDR_WIDTH_B(12),
@@ -946,17 +966,11 @@ module feng_channelizer_4096_streaming #(
             localparam integer SAMPLE_LSB =
                 (pfb_mul_comp_idx / 2) * 32 + (pfb_mul_comp_idx % 2) * 16;
             for (pfb_mul_tap_idx = 0;
-                 pfb_mul_tap_idx < 4;
+                 pfb_mul_tap_idx < PFB_TAPS;
                  pfb_mul_tap_idx = pfb_mul_tap_idx + 1) begin : gen_pfb_mul_tap
                 wire signed [15:0] mul_sample =
-                    (pfb_mul_tap_idx == 0) ? $signed(pfb_s0_d0[SAMPLE_LSB +: 16]) :
-                    (pfb_mul_tap_idx == 1) ? $signed(pfb_s0_d1[SAMPLE_LSB +: 16]) :
-                    (pfb_mul_tap_idx == 2) ? $signed(pfb_s0_d2[SAMPLE_LSB +: 16]) :
-                                             $signed(pfb_s0_d3[SAMPLE_LSB +: 16]);
-                wire signed [17:0] mul_coeff =
-                    (pfb_mul_tap_idx == 0) ? pfb_s0_c0 :
-                    (pfb_mul_tap_idx == 1) ? pfb_s0_c1 :
-                    (pfb_mul_tap_idx == 2) ? pfb_s0_c2 : pfb_s0_c3;
+                    $signed(pfb_s0_data[pfb_mul_tap_idx][SAMPLE_LSB +: 16]);
+                wire signed [17:0] mul_coeff = pfb_s0_coeff[pfb_mul_tap_idx];
 
                 t510_pfb_mult_16x18_pipe2 u_pfb_mult (
                     .clk(clk),
@@ -1071,20 +1085,18 @@ module feng_channelizer_4096_streaming #(
             prefetch_word <= {DATA_W{1'b0}};
             prefetch_sample0 <= 64'd0;
             prefetch_word_valid <= 1'b0;
-            fill_buf <= 2'd0;
+            fill_buf <= 3'd0;
             fill_bin_idx <= 12'd0;
-            valid_frame_count <= 3'd0;
-            win0_buf <= 2'd0;
-            win1_buf <= 2'd1;
-            win2_buf <= 2'd2;
-            win3_buf <= 2'd3;
-            new_frame_buf <= 2'd0;
+            valid_frame_count <= 4'd0;
+            for (pfb_tap_idx = 0; pfb_tap_idx < PFB_TAPS; pfb_tap_idx = pfb_tap_idx + 1) begin
+                win_buf[pfb_tap_idx] <= pfb_tap_idx[2:0];
+            end
+            new_frame_buf <= 3'd0;
             new_frame_ready <= 1'b0;
             shift_pending <= 1'b0;
-            frame_sample0_buf[0] <= 64'd0;
-            frame_sample0_buf[1] <= 64'd0;
-            frame_sample0_buf[2] <= 64'd0;
-            frame_sample0_buf[3] <= 64'd0;
+            for (pfb_tap_idx = 0; pfb_tap_idx < PFB_TAPS; pfb_tap_idx = pfb_tap_idx + 1) begin
+                frame_sample0_buf[pfb_tap_idx] <= 64'd0;
+            end
             feed_active <= 1'b0;
             feed_read_addr <= 13'd0;
             feed_sample0 <= 64'd0;
@@ -1096,18 +1108,10 @@ module feng_channelizer_4096_streaming #(
             read_dout_idx <= 12'd0;
             pfb_r0_valid <= 1'b0;
             pfb_r0_idx <= 12'd0;
-            pfb_r0_w0 <= 2'd0;
-            pfb_r0_w1 <= 2'd1;
-            pfb_r0_w2 <= 2'd2;
-            pfb_r0_w3 <= 2'd3;
-            pfb_r0_dout[0] <= {CELL_W{1'b0}};
-            pfb_r0_dout[1] <= {CELL_W{1'b0}};
-            pfb_r0_dout[2] <= {CELL_W{1'b0}};
-            pfb_r0_dout[3] <= {CELL_W{1'b0}};
-            pfb_r0_c0 <= 18'sd0;
-            pfb_r0_c1 <= 18'sd0;
-            pfb_r0_c2 <= 18'sd0;
-            pfb_r0_c3 <= 18'sd0;
+            for (pfb_tap_idx = 0; pfb_tap_idx < PFB_TAPS; pfb_tap_idx = pfb_tap_idx + 1) begin
+                pfb_r0_dout[pfb_tap_idx] <= {CELL_W{1'b0}};
+                pfb_r0_coeff[pfb_tap_idx] <= 18'sd0;
+            end
             pfb_s0_valid <= 1'b0;
             pfb_mul_valid <= 1'b0;
             pfb_s1_valid <= 1'b0;
@@ -1115,6 +1119,7 @@ module feng_channelizer_4096_streaming #(
             pfb_s3_valid <= 1'b0;
             pfb_s4_valid <= 1'b0;
             pfb_s5_valid <= 1'b0;
+            pfb_s6_valid <= 1'b0;
             pfb_s0_idx <= 12'd0;
             pfb_mul_idx <= 12'd0;
             pfb_s1_idx <= 12'd0;
@@ -1122,15 +1127,12 @@ module feng_channelizer_4096_streaming #(
             pfb_s3_idx <= 12'd0;
             pfb_s4_idx <= 12'd0;
             pfb_s5_idx <= 12'd0;
-            pfb_s0_d0 <= {CELL_W{1'b0}};
-            pfb_s0_d1 <= {CELL_W{1'b0}};
-            pfb_s0_d2 <= {CELL_W{1'b0}};
-            pfb_s0_d3 <= {CELL_W{1'b0}};
-            pfb_s0_c0 <= 18'sd0;
-            pfb_s0_c1 <= 18'sd0;
-            pfb_s0_c2 <= 18'sd0;
-            pfb_s0_c3 <= 18'sd0;
-            pfb_s5_cell <= {CELL_W{1'b0}};
+            pfb_s6_idx <= 12'd0;
+            for (pfb_tap_idx = 0; pfb_tap_idx < PFB_TAPS; pfb_tap_idx = pfb_tap_idx + 1) begin
+                pfb_s0_data[pfb_tap_idx] <= {CELL_W{1'b0}};
+                pfb_s0_coeff[pfb_tap_idx] <= 18'sd0;
+            end
+            pfb_s6_cell <= {CELL_W{1'b0}};
             xfft_q_head_data <= {CELL_W{1'b0}};
             xfft_q_tail_data <= {CELL_W{1'b0}};
             xfft_q_head_idx <= 12'd0;
@@ -1165,6 +1167,7 @@ module feng_channelizer_4096_streaming #(
             shadow_bank <= 1'b1;
             coeff_loading <= 1'b0;
             coeff_shadow_full <= 1'b0;
+            coeff_load_sequence_error <= 1'b0;
             coeff_active_valid <= 1'b0;
             coeff_commit_pending <= 1'b0;
             coeff_command_error <= 1'b0;
@@ -1177,12 +1180,13 @@ module feng_channelizer_4096_streaming #(
             coeff_error_count <= 32'd0;
         end else begin
             if (coeff_load_start) begin
-                if (enable || (coeff_requested_taps != 4'd4)) begin
+                if (enable || (coeff_requested_taps != 4'd8)) begin
                     coeff_command_error <= 1'b1;
                     coeff_error_count <= coeff_error_count + 32'd1;
                 end else begin
                     coeff_loading <= 1'b1;
                     coeff_shadow_full <= 1'b0;
+                    coeff_load_sequence_error <= 1'b0;
                     coeff_commit_pending <= 1'b0;
                     coeff_command_error <= 1'b0;
                     shadow_bank <= ~active_bank;
@@ -1194,16 +1198,22 @@ module feng_channelizer_4096_streaming #(
             if (coeff_abort) begin
                 coeff_loading <= 1'b0;
                 coeff_shadow_full <= 1'b0;
+                coeff_load_sequence_error <= 1'b0;
                 coeff_commit_pending <= 1'b0;
             end
             if (coeff_write) begin
-                if (!coeff_loading) begin
+                if (!coeff_write_accept) begin
                     coeff_command_error <= 1'b1;
                     coeff_error_count <= coeff_error_count + 32'd1;
+                    coeff_load_sequence_error <= 1'b1;
+                    coeff_shadow_full <= 1'b0;
                 end else begin
                     coeff_loaded_count <= coeff_loaded_count + 32'd1;
-                    coeff_shadow_checksum <= coeff_shadow_checksum + {{14{coeff_data[17]}}, coeff_data};
-                    if (coeff_loaded_count == 32'd16383) begin
+                    coeff_shadow_checksum <= crc32_coeff_word(
+                        coeff_shadow_checksum, {14'd0, coeff_data[17:0]}
+                    );
+                    if ((coeff_loaded_count == (PFB_COEFF_COUNT - 1)) &&
+                        !coeff_load_sequence_error) begin
                         coeff_shadow_full <= 1'b1;
                     end
                 end
@@ -1216,7 +1226,7 @@ module feng_channelizer_4096_streaming #(
                 end else begin
                     active_bank <= shadow_bank;
                     coeff_active_valid <= 1'b1;
-                    coeff_active_taps <= 4'd4;
+                    coeff_active_taps <= 4'd8;
                     coeff_active_id <= coeff_shadow_id;
                     coeff_active_checksum <= coeff_shadow_checksum;
                     coeff_loading <= 1'b0;
@@ -1231,7 +1241,7 @@ module feng_channelizer_4096_streaming #(
                 prefetch_word_valid <= 1'b0;
                 fill_subidx <= {PACK_IDX_W{1'b0}};
                 fill_bin_idx <= 12'd0;
-                valid_frame_count <= 3'd0;
+                valid_frame_count <= 4'd0;
                 feed_active <= 1'b0;
                 feed_read_addr <= 13'd0;
                 read_cmd_valid <= 1'b0;
@@ -1246,6 +1256,7 @@ module feng_channelizer_4096_streaming #(
                 pfb_s3_valid <= 1'b0;
                 pfb_s4_valid <= 1'b0;
                 pfb_s5_valid <= 1'b0;
+                pfb_s6_valid <= 1'b0;
                 xfft_q_count <= 2'd0;
                 xfft_config_tvalid <= 1'b0;
                 xfft_configured <= 1'b0;
@@ -1279,12 +1290,11 @@ module feng_channelizer_4096_streaming #(
                     prefetch_word_valid <= 1'b0;
                     fill_subidx <= {PACK_IDX_W{1'b0}};
                     fill_bin_idx <= 12'd0;
-                    valid_frame_count <= 3'd0;
-                    fill_buf <= 2'd0;
-                    win0_buf <= 2'd0;
-                    win1_buf <= 2'd1;
-                    win2_buf <= 2'd2;
-                    win3_buf <= 2'd3;
+                    valid_frame_count <= 4'd0;
+                    fill_buf <= 3'd0;
+                    for (pfb_tap_idx = 0; pfb_tap_idx < PFB_TAPS; pfb_tap_idx = pfb_tap_idx + 1) begin
+                        win_buf[pfb_tap_idx] <= pfb_tap_idx[2:0];
+                    end
                     new_frame_ready <= 1'b0;
                     shift_pending <= 1'b0;
                     feed_active <= 1'b0;
@@ -1301,6 +1311,7 @@ module feng_channelizer_4096_streaming #(
                     pfb_s3_valid <= 1'b0;
                     pfb_s4_valid <= 1'b0;
                     pfb_s5_valid <= 1'b0;
+                    pfb_s6_valid <= 1'b0;
                     xfft_q_count <= 2'd0;
                     pack_subidx <= {PACK_IDX_W{1'b0}};
                     pack_word <= {DATA_W{1'b0}};
@@ -1327,9 +1338,9 @@ module feng_channelizer_4096_streaming #(
                 end else begin
                     if (start_feed) begin
                         feed_active <= 1'b1;
-                        feed_sample0 <= frame_sample0_buf[win0_buf];
+                        feed_sample0 <= frame_sample0_buf[win_buf[0]];
                         feed_read_addr <= 13'd0;
-                        fill_buf <= win0_buf;
+                        fill_buf <= win_buf[0];
                     end else if (read_issue) begin
                         feed_read_addr <= feed_read_addr + 13'd1;
                         if (feed_last_read_issue) begin
@@ -1348,20 +1359,15 @@ module feng_channelizer_4096_streaming #(
                             fill_subidx <= {PACK_IDX_W{1'b0}};
                             fill_word_valid <= 1'b0;
                             prefetch_word_valid <= 1'b0;
-                            if (valid_frame_count < 3'd4) begin
-                                case (valid_frame_count)
-                                    3'd0: win0_buf <= fill_buf;
-                                    3'd1: win1_buf <= fill_buf;
-                                    3'd2: win2_buf <= fill_buf;
-                                    default: win3_buf <= fill_buf;
-                                endcase
-                                valid_frame_count <= valid_frame_count + 3'd1;
-                                fill_buf <= fill_buf + 2'd1;
+                            if (valid_frame_count < 4'd8) begin
+                                win_buf[valid_frame_count[2:0]] <= fill_buf;
+                                valid_frame_count <= valid_frame_count + 4'd1;
+                                fill_buf <= fill_buf + 3'd1;
                             end else if (shift_pending) begin
-                                win0_buf <= win1_buf;
-                                win1_buf <= win2_buf;
-                                win2_buf <= win3_buf;
-                                win3_buf <= fill_buf;
+                                for (pfb_tap_idx = 0; pfb_tap_idx < PFB_TAPS-1; pfb_tap_idx = pfb_tap_idx + 1) begin
+                                    win_buf[pfb_tap_idx] <= win_buf[pfb_tap_idx + 1];
+                                end
+                                win_buf[PFB_TAPS-1] <= fill_buf;
                                 shift_pending <= 1'b0;
                                 new_frame_ready <= 1'b0;
                             end else begin
@@ -1411,11 +1417,11 @@ module feng_channelizer_4096_streaming #(
 	                    unique case ({xfft_q_push, xfft_q_pop})
 	                        2'b10: begin
 	                            if (xfft_q_empty) begin
-	                                xfft_q_head_data <= pfb_s5_cell;
-	                                xfft_q_head_idx <= pfb_s5_idx;
+	                                xfft_q_head_data <= pfb_s6_cell;
+	                                xfft_q_head_idx <= pfb_s6_idx;
 	                            end else begin
-	                                xfft_q_tail_data <= pfb_s5_cell;
-	                                xfft_q_tail_idx <= pfb_s5_idx;
+	                                xfft_q_tail_data <= pfb_s6_cell;
+	                                xfft_q_tail_idx <= pfb_s6_idx;
 	                            end
 	                            xfft_q_count <= xfft_q_count + 2'd1;
 	                        end
@@ -1427,8 +1433,8 @@ module feng_channelizer_4096_streaming #(
 	                            xfft_q_count <= xfft_q_count - 2'd1;
 	                        end
 	                        2'b11: begin
-	                            xfft_q_head_data <= pfb_s5_cell;
-	                            xfft_q_head_idx <= pfb_s5_idx;
+	                            xfft_q_head_data <= pfb_s6_cell;
+	                            xfft_q_head_idx <= pfb_s6_idx;
 	                        end
 	                        default: xfft_q_count <= xfft_q_count;
 	                    endcase
@@ -1445,29 +1451,25 @@ module feng_channelizer_4096_streaming #(
 
 	                        pfb_r0_valid <= read_dout_valid;
 	                        pfb_r0_idx <= read_dout_idx;
-	                        pfb_r0_w0 <= win0_buf;
-	                        pfb_r0_w1 <= win1_buf;
-	                        pfb_r0_w2 <= win2_buf;
-	                        pfb_r0_w3 <= win3_buf;
-	                        pfb_r0_dout[0] <= frame_dout[0];
-	                        pfb_r0_dout[1] <= frame_dout[1];
-	                        pfb_r0_dout[2] <= frame_dout[2];
-	                        pfb_r0_dout[3] <= frame_dout[3];
-	                        pfb_r0_c0 <= active_bank ? coeff_dout[1][0] : coeff_dout[0][0];
-	                        pfb_r0_c1 <= active_bank ? coeff_dout[1][1] : coeff_dout[0][1];
-	                        pfb_r0_c2 <= active_bank ? coeff_dout[1][2] : coeff_dout[0][2];
-	                        pfb_r0_c3 <= active_bank ? coeff_dout[1][3] : coeff_dout[0][3];
+	                        for (pfb_tap_idx = 0; pfb_tap_idx < PFB_TAPS; pfb_tap_idx = pfb_tap_idx + 1) begin
+	                            pfb_r0_dout[pfb_tap_idx] <= frame_dout[pfb_tap_idx];
+	                            pfb_r0_coeff[pfb_tap_idx] <= active_bank
+	                                ? coeff_dout[1][pfb_tap_idx[2:0] - win_buf[0]]
+	                                : coeff_dout[0][pfb_tap_idx[2:0] - win_buf[0]];
+	                        end
 
 	                        pfb_s0_valid <= pfb_r0_valid;
 	                        pfb_s0_idx <= pfb_r0_idx;
-	                        pfb_s0_d0 <= pfb_r0_dout[pfb_r0_w0];
-	                        pfb_s0_d1 <= pfb_r0_dout[pfb_r0_w1];
-	                        pfb_s0_d2 <= pfb_r0_dout[pfb_r0_w2];
-	                        pfb_s0_d3 <= pfb_r0_dout[pfb_r0_w3];
-	                        pfb_s0_c0 <= pfb_r0_c0;
-	                        pfb_s0_c1 <= pfb_r0_c1;
-	                        pfb_s0_c2 <= pfb_r0_c2;
-	                        pfb_s0_c3 <= pfb_r0_c3;
+	                        for (pfb_tap_idx = 0; pfb_tap_idx < PFB_TAPS; pfb_tap_idx = pfb_tap_idx + 1) begin
+	                            // Sum order is independent of tap identity.  Pair
+	                            // each physical frame RAM directly with the tap
+	                            // selected by the oldest-buffer pointer.  This
+	                            // moves the rotating 8:1 mux from 256-bit sample
+	                            // cells to 18-bit coefficients and avoids a large
+	                            // high-fanout datapath at 322.265625 MHz.
+	                            pfb_s0_data[pfb_tap_idx] <= pfb_r0_dout[pfb_tap_idx];
+	                            pfb_s0_coeff[pfb_tap_idx] <= pfb_r0_coeff[pfb_tap_idx];
+	                        end
 
 	                        pfb_mul_valid <= pfb_s0_valid;
 	                        pfb_mul_idx <= pfb_s0_idx;
@@ -1478,54 +1480,73 @@ module feng_channelizer_4096_streaming #(
 	                        pfb_s2_valid <= pfb_s1_valid;
 	                        pfb_s2_idx <= pfb_s1_idx;
 	                        for (pfb_comp_idx = 0; pfb_comp_idx < PFB_COMPONENTS; pfb_comp_idx = pfb_comp_idx + 1) begin
-	                            pfb_s2_sum01[pfb_comp_idx] <=
+	                            pfb_s2_pair[pfb_comp_idx][0] <=
 	                                $signed({pfb_s1_prod[pfb_comp_idx][0][35], pfb_s1_prod[pfb_comp_idx][0]}) +
 	                                $signed({pfb_s1_prod[pfb_comp_idx][1][35], pfb_s1_prod[pfb_comp_idx][1]});
-	                            pfb_s2_sum23[pfb_comp_idx] <=
+	                            pfb_s2_pair[pfb_comp_idx][1] <=
 	                                $signed({pfb_s1_prod[pfb_comp_idx][2][35], pfb_s1_prod[pfb_comp_idx][2]}) +
 	                                $signed({pfb_s1_prod[pfb_comp_idx][3][35], pfb_s1_prod[pfb_comp_idx][3]});
+	                            pfb_s2_pair[pfb_comp_idx][2] <=
+	                                $signed({pfb_s1_prod[pfb_comp_idx][4][35], pfb_s1_prod[pfb_comp_idx][4]}) +
+	                                $signed({pfb_s1_prod[pfb_comp_idx][5][35], pfb_s1_prod[pfb_comp_idx][5]});
+	                            pfb_s2_pair[pfb_comp_idx][3] <=
+	                                $signed({pfb_s1_prod[pfb_comp_idx][6][35], pfb_s1_prod[pfb_comp_idx][6]}) +
+	                                $signed({pfb_s1_prod[pfb_comp_idx][7][35], pfb_s1_prod[pfb_comp_idx][7]});
 	                        end
 
 	                        pfb_s3_valid <= pfb_s2_valid;
 	                        pfb_s3_idx <= pfb_s2_idx;
 	                        for (pfb_comp_idx = 0; pfb_comp_idx < PFB_COMPONENTS; pfb_comp_idx = pfb_comp_idx + 1) begin
-	                            pfb_s3_acc[pfb_comp_idx] <=
-	                                $signed({pfb_s2_sum01[pfb_comp_idx][36], pfb_s2_sum01[pfb_comp_idx]}) +
-	                                $signed({pfb_s2_sum23[pfb_comp_idx][36], pfb_s2_sum23[pfb_comp_idx]});
+	                            pfb_s3_quad[pfb_comp_idx][0] <=
+	                                $signed({pfb_s2_pair[pfb_comp_idx][0][36], pfb_s2_pair[pfb_comp_idx][0]}) +
+	                                $signed({pfb_s2_pair[pfb_comp_idx][1][36], pfb_s2_pair[pfb_comp_idx][1]});
+	                            pfb_s3_quad[pfb_comp_idx][1] <=
+	                                $signed({pfb_s2_pair[pfb_comp_idx][2][36], pfb_s2_pair[pfb_comp_idx][2]}) +
+	                                $signed({pfb_s2_pair[pfb_comp_idx][3][36], pfb_s2_pair[pfb_comp_idx][3]});
 	                        end
 
 	                        pfb_s4_valid <= pfb_s3_valid;
 	                        pfb_s4_idx <= pfb_s3_idx;
 	                        for (pfb_comp_idx = 0; pfb_comp_idx < PFB_COMPONENTS; pfb_comp_idx = pfb_comp_idx + 1) begin
-	                            pfb_s4_magnitude[pfb_comp_idx] <=
-	                                round_magnitude_q17_38(pfb_s3_acc[pfb_comp_idx]);
-	                            pfb_s4_negative[pfb_comp_idx] <=
-	                                pfb_s3_acc[pfb_comp_idx][37];
+	                            pfb_s4_acc[pfb_comp_idx] <=
+	                                $signed({pfb_s3_quad[pfb_comp_idx][0][37], pfb_s3_quad[pfb_comp_idx][0]}) +
+	                                $signed({pfb_s3_quad[pfb_comp_idx][1][37], pfb_s3_quad[pfb_comp_idx][1]});
 	                        end
 
 	                        pfb_s5_valid <= pfb_s4_valid;
 	                        pfb_s5_idx <= pfb_s4_idx;
+	                        for (pfb_comp_idx = 0; pfb_comp_idx < PFB_COMPONENTS; pfb_comp_idx = pfb_comp_idx + 1) begin
+	                            pfb_s5_magnitude[pfb_comp_idx] <=
+	                                round_magnitude_q17_39(pfb_s4_acc[pfb_comp_idx]);
+	                            pfb_s5_negative[pfb_comp_idx] <= pfb_s4_acc[pfb_comp_idx][38];
+	                        end
+
+	                        pfb_s6_valid <= pfb_s5_valid;
+	                        pfb_s6_idx <= pfb_s5_idx;
 	                        for (pfb_lane_idx = 0; pfb_lane_idx < NINPUT; pfb_lane_idx = pfb_lane_idx + 1) begin
-	                            pfb_s5_cell[pfb_lane_idx*32 +: 16] <=
+	                            pfb_s6_cell[pfb_lane_idx*32 +: 16] <=
 	                                saturate_signed_magnitude(
-	                                    pfb_s4_negative[pfb_lane_idx*2],
-	                                    pfb_s4_magnitude[pfb_lane_idx*2]
+	                                    pfb_s5_negative[pfb_lane_idx*2],
+	                                    pfb_s5_magnitude[pfb_lane_idx*2]
 	                                );
-	                            pfb_s5_cell[pfb_lane_idx*32 + 16 +: 16] <=
+	                            pfb_s6_cell[pfb_lane_idx*32 + 16 +: 16] <=
 	                                saturate_signed_magnitude(
-	                                    pfb_s4_negative[pfb_lane_idx*2 + 1],
-	                                    pfb_s4_magnitude[pfb_lane_idx*2 + 1]
+	                                    pfb_s5_negative[pfb_lane_idx*2 + 1],
+	                                    pfb_s5_magnitude[pfb_lane_idx*2 + 1]
 	                                );
+	                        end
+	                        if (pfb_s5_valid && pfb_s5_any_saturation) begin
+	                            tile_overflow_count <= tile_overflow_count + 32'd1;
 	                        end
 
 	                    end
 
                     if (feed_done) begin
                         if (new_frame_ready) begin
-                            win0_buf <= win1_buf;
-                            win1_buf <= win2_buf;
-                            win2_buf <= win3_buf;
-                            win3_buf <= new_frame_buf;
+                            for (pfb_tap_idx = 0; pfb_tap_idx < PFB_TAPS-1; pfb_tap_idx = pfb_tap_idx + 1) begin
+                                win_buf[pfb_tap_idx] <= win_buf[pfb_tap_idx + 1];
+                            end
+                            win_buf[PFB_TAPS-1] <= new_frame_buf;
                             new_frame_ready <= 1'b0;
                             shift_pending <= 1'b0;
                         end else begin
@@ -1646,7 +1667,7 @@ module pfb_channelizer #(
     input  wire                 coeff_abort,
     input  wire                 coeff_write,
     input  wire [3:0]           coeff_requested_taps,
-    input  wire [13:0]          coeff_index,
+    input  wire [14:0]          coeff_index,
     input  wire signed [17:0]   coeff_data,
     input  wire [31:0]          coeff_id,
     output wire [31:0]          coeff_status,

@@ -445,7 +445,7 @@ pub fn is_current_spec_format(header: &T510Header) -> bool {
     header.block_count == SPEC_BLOCK_COUNT
         && header.chan_count == SPEC_BLOCK_CHANS
         && header.time_count == SPEC_TIME_COUNT
-        && header.pfb_taps >= 4
+        && header.pfb_taps == 8
         && (header.spec_status_flags & SPEC_FFT_ONLY_FLAG) == 0
         && (header.spec_status_flags & SPEC_PFB_ACTIVE_FLAG) != 0
 }
@@ -1085,6 +1085,26 @@ mod tests {
         frame.extend_from_slice(&0u16.to_be_bytes());
         frame.extend_from_slice(udp_payload);
         frame
+    }
+
+    #[test]
+    fn current_spec_format_requires_exactly_eight_pfb_taps() {
+        let payload = synthetic_payload(64, 1, 0);
+        let mut header = parse_t510_header(&payload).unwrap();
+        header.stream_type = STREAM_SPEC;
+        header.nchan = SPEC_NCHAN;
+        header.block_index = 0;
+        header.block_count = SPEC_BLOCK_COUNT;
+        header.chan0 = 0;
+        header.chan_count = SPEC_BLOCK_CHANS;
+        header.time_count = SPEC_TIME_COUNT;
+        header.ninput = TIME_NINPUT as u16;
+        header.payload_bytes = SPEC_PAYLOAD_BYTES as u32;
+        header.pfb_taps = 8;
+        header.spec_status_flags = SPEC_PFB_ACTIVE_FLAG;
+        assert!(is_current_spec_format(&header));
+        header.pfb_taps = 4;
+        assert!(!is_current_spec_format(&header));
     }
 
     #[test]

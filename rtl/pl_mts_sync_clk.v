@@ -11,6 +11,12 @@ module pl_mts_sync_clk (
     wire pl_clk_bufds;
     wire pl_sys_ref_bufds;
     wire pl_clk_bufg;
+    // PG269's different-clock-rate topology starts with this source-
+    // synchronous PL_CLK capture.  A separate pl_mts_axis_recapture module in
+    // the BD then registers this level independently in each RFDC AXIS domain.
+    // Keep the legacy two output names so persistent Vivado projects can
+    // refresh the implementation without reusing a stale module-ref port list.
+    (* IOB = "TRUE", DONT_TOUCH = "TRUE", SHREG_EXTRACT = "NO" *)
     reg  pl_sys_ref_capture = 1'b0;
 
     IBUFDS u_pl_clk_ibufds (

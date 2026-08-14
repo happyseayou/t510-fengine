@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resident Stage 33 external-reference safety watchdog.
+"""Resident Stage 34 external-reference safety watchdog.
 
 The T510 board does not route LMK04828 STATUS_LD1/STATUS_LD2 into the FPGA.
 Consequently the PL scheduler cannot distinguish a healthy external 10 MHz
@@ -14,28 +14,62 @@ latched until a fresh CONFIGURE updates PYNQ's active-bitstream identity.
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import contextlib
 from dataclasses import dataclass
 from datetime import datetime
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
+import secrets
 import sys
 import time
 from typing import Any
 
+from python.t510_ams import aggregate_ams_snapshots, read_ams_snapshot
 from python.t510_clock import T510ClockController
 
 
 SCHEMA_VERSION = 1
-EXPECTED_CORE_VERSION = 0x0001_0033
+EXPECTED_CORE_VERSION = 0x0001_0034
 DEFAULT_STATE_PATH = Path("/run/t510-ref-watchdog.json")
 DEFAULT_LOCK_PATH = Path("/run/t510-ref-watchdog.lock")
 DEFAULT_CONFIGURE_LOCK_PATH = Path("/run/t510-configure.lock")
+DEFAULT_CLOCK_DIAGNOSTIC_STATE_PATH = Path("/run/t510-clock-diagnostic.json")
+DEFAULT_OUTPUT_LOAD_STATE_PATH = Path("/run/t510-output-load.json")
+DEFAULT_RFDC_POWER_STATE_PATH = Path("/run/t510-rfdc-power.json")
+DEFAULT_POWER_THERMAL_TELEMETRY_PATH = Path("/run/t510-power-thermal.jsonl")
 FPGA_MANAGER_STATE_PATH = Path("/sys/class/fpga_manager/fpga0/state")
+CALIBRATION_OBSERVATION_INTERVAL_SECONDS = 1.0
+AMS_SAMPLE_INTERVAL_SECONDS = 0.2
+AMS_AGGREGATE_INTERVAL_SECONDS = 1.0
+POWER_THERMAL_RING_CAPACITY_SECONDS = 4096
+POWER_THERMAL_RING_COMPACTION_SLACK = 256
+
+
+def _periodic_schedule_due(
+    now: float, anchor: float, interval_seconds: float
+) -> tuple[bool, float]:
+    """Advance a periodic deadline without accumulating callback duration.
+
+    Assigning ``anchor = now`` after every sample turns a nominal one-second
+    task into ``1 second + callback/loop jitter``.  Over a ten-minute science
+    run that previously yielded only 559 observations.  Anchoring to the
+    ideal cadence makes a late sample pull the next deadline forward again;
+    genuinely missed whole periods are skipped rather than backfilled.
+    """
+
+    if not math.isfinite(anchor):
+        return True, now
+    elapsed = now - anchor
+    if elapsed + 1.0e-9 < interval_seconds:
+        return False, anchor
+    periods = max(1, int((elapsed + 1.0e-9) // interval_seconds))
+    return True, anchor + periods * interval_seconds
 
 
 def _timestamp() -> str:
@@ -67,6 +101,64 @@ def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
     )
     os.chmod(temporary, 0o644)
     temporary.replace(path)
+
+
+def _maximum_ams_temperature(telemetry: dict[str, Any]) -> float | None:
+    values = [
+        float(row["mean"])
+        for row in dict(telemetry.get("temperatures_c", {})).values()
+        if isinstance(row, dict) and row.get("mean") is not None
+    ]
+    return max(values) if values else None
+
+
+class BoundedJsonlRing:
+    """Append one-second evidence cheaply while retaining a bounded window."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        capacity: int = POWER_THERMAL_RING_CAPACITY_SECONDS,
+        compaction_slack: int = POWER_THERMAL_RING_COMPACTION_SLACK,
+    ) -> None:
+        if capacity < 1 or compaction_slack < 1:
+            raise ValueError("telemetry ring capacity and compaction slack must be positive")
+        self.path = path
+        self.capacity = int(capacity)
+        self.compaction_slack = int(compaction_slack)
+        self.epoch_id = secrets.token_hex(16)
+        self.sequence = 0
+        self._encoded: deque[str] = deque(maxlen=self.capacity)
+        self._records_since_compaction = 0
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("", encoding="utf-8")
+        os.chmod(self.path, 0o644)
+
+    def append(self, value: dict[str, Any]) -> dict[str, Any]:
+        self.sequence += 1
+        row = {
+            **value,
+            "schema_version": 1,
+            "epoch_id": self.epoch_id,
+            "sequence": self.sequence,
+        }
+        encoded = json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+        self._encoded.append(encoded)
+        with self.path.open("a", encoding="utf-8") as stream:
+            stream.write(encoded)
+            stream.flush()
+        self._records_since_compaction += 1
+        if (
+            self.sequence > self.capacity
+            and self._records_since_compaction >= self.compaction_slack
+        ):
+            temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+            temporary.write_text("".join(self._encoded), encoding="utf-8")
+            os.chmod(temporary, 0o644)
+            temporary.replace(self.path)
+            self._records_since_compaction = 0
+        return row
 
 
 @dataclass
@@ -135,6 +227,11 @@ class ReferenceWatchdog:
         unlock_confirmations: int,
         spi_error_confirmations: int,
         configure_lock_path: Path = DEFAULT_CONFIGURE_LOCK_PATH,
+        expected_core_version: int = EXPECTED_CORE_VERSION,
+        clock_diagnostic_state_path: Path = DEFAULT_CLOCK_DIAGNOSTIC_STATE_PATH,
+        output_load_state_path: Path = DEFAULT_OUTPUT_LOAD_STATE_PATH,
+        rfdc_power_state_path: Path = DEFAULT_RFDC_POWER_STATE_PATH,
+        power_thermal_telemetry_path: Path | None = None,
     ) -> None:
         self.bitfile = bitfile.resolve()
         self.expected_bitstream_sha1 = _sha1(self.bitfile)
@@ -142,6 +239,15 @@ class ReferenceWatchdog:
         self.interval_seconds = interval_seconds
         self.stop_timeout_seconds = stop_timeout_seconds
         self.configure_lock_path = configure_lock_path
+        self.expected_core_version = int(expected_core_version)
+        self.clock_diagnostic_state_path = clock_diagnostic_state_path
+        self.output_load_state_path = output_load_state_path
+        self.rfdc_power_state_path = rfdc_power_state_path
+        self.power_thermal_ring = BoundedJsonlRing(
+            power_thermal_telemetry_path
+            if power_thermal_telemetry_path is not None
+            else state_path.with_name("t510-power-thermal.jsonl")
+        )
         self.clock = T510ClockController()
         self.policy = WatchdogPolicy(
             unlock_confirmations=unlock_confirmations,
@@ -162,6 +268,27 @@ class ReferenceWatchdog:
             "time_packets": 0,
             "spec_packets": 0,
         }
+        self.calibration_blocks: list[tuple[int, int]] | None = None
+        self.calibration_observation: dict[str, Any] = {
+            "supported": False,
+            "error": "NOT_YET_SAMPLED",
+            "captured_at_unix_ms": None,
+            "temperature_c": None,
+        }
+        self.last_calibration_observation_monotonic = float("-inf")
+        self.ams_samples: list[dict[str, Any]] = []
+        self.ams_telemetry: dict[str, Any] = {
+            "supported": False,
+            "sample_count": 0,
+            "sample_rate_hz": 5.0,
+            "temperatures_c": {},
+            "voltages_v": {},
+            "errors": ["NOT_YET_SAMPLED"],
+        }
+        self.last_ams_sample_monotonic = float("-inf")
+        self.last_ams_aggregate_monotonic = time.monotonic()
+        self.telemetry_record_due = False
+        self.last_power_thermal_record: dict[str, Any] | None = None
         self._load_previous_state()
 
     def _load_previous_state(self) -> None:
@@ -210,17 +337,22 @@ class ReferenceWatchdog:
     def _connect(self, identity: str) -> None:
         from python.t510_control import FEngineController
 
-        controller = FEngineController(self.bitfile)
+        controller = FEngineController(
+            self.bitfile,
+            expected_core_version=self.expected_core_version,
+        )
         status = controller.connect(download=False)
         version = int(status.get("core_version", 0))
-        if version != EXPECTED_CORE_VERSION:
+        if version != self.expected_core_version:
             raise RuntimeError(
                 "CORE_VERSION_MISMATCH:"
-                f"expected=0x{EXPECTED_CORE_VERSION:08x}:actual=0x{version:08x}"
+                f"expected=0x{self.expected_core_version:08x}:actual=0x{version:08x}"
             )
         old_identity = self.pl_identity
         self.controller = controller
         self.core = controller.require_core()
+        self.calibration_blocks = None
+        self.last_calibration_observation_monotonic = float("-inf")
         self.pl_identity = identity
         if old_identity is not None and identity != old_identity:
             self.policy.clear_for_fresh_configure()
@@ -228,6 +360,67 @@ class ReferenceWatchdog:
                 f"REFERENCE_WATCHDOG_FRESH_CONFIGURE identity={identity}",
                 flush=True,
             )
+
+    def _sample_ams_if_due(self) -> None:
+        now = time.monotonic()
+        sample_due, sample_anchor = _periodic_schedule_due(
+            now, self.last_ams_sample_monotonic, AMS_SAMPLE_INTERVAL_SECONDS
+        )
+        if sample_due:
+            self.ams_samples.append(read_ams_snapshot())
+            self.last_ams_sample_monotonic = sample_anchor
+        aggregate_due, aggregate_anchor = _periodic_schedule_due(
+            now, self.last_ams_aggregate_monotonic, AMS_AGGREGATE_INTERVAL_SECONDS
+        )
+        if aggregate_due and self.ams_samples:
+            self.ams_telemetry = aggregate_ams_snapshots(self.ams_samples)
+            self.ams_telemetry["captured_at_unix_ms"] = time.time_ns() // 1_000_000
+            self.ams_samples.clear()
+            self.last_ams_aggregate_monotonic = aggregate_anchor
+            self.telemetry_record_due = True
+
+    def _append_power_thermal_telemetry_if_due(self) -> None:
+        if not self.telemetry_record_due:
+            return
+        self.telemetry_record_due = False
+        tile_power: dict[str, Any]
+        try:
+            if self.core is None or not hasattr(self.core, "read_rfdc_tile_power_status"):
+                raise RuntimeError("RFDC_TILE_POWER_API_UNAVAILABLE")
+            tile_power = dict(self.core.read_rfdc_tile_power_status())
+        except Exception as exc:  # noqa: BLE001 - evidence carries the read failure
+            tile_power = {
+                "supported": False,
+                "error": f"{type(exc).__name__}:{exc}",
+            }
+        calibration = self.calibration_observation
+        coefficients = dict(calibration.get("coefficient_sha256", {}))
+        ocb1_dft = {
+            str(row.get("adc")): dict(row.get("ocb1_diagnostics", {})).get("dft", [])
+            for row in calibration.get("channels", [])
+            if isinstance(row, dict)
+        }
+        self.last_power_thermal_record = self.power_thermal_ring.append(
+            {
+                "captured_at": _timestamp(),
+                "captured_at_unix_ms": time.time_ns() // 1_000_000,
+                "service_started_at": self.service_started_at,
+                "pl_identity": self.pl_identity,
+                "hardware": self.hardware,
+                "lock_status": self.lock_status,
+                "ams": self.ams_telemetry,
+                "rfdc_tile_power": tile_power,
+                "calibration": {
+                    "supported": calibration.get("supported"),
+                    "error": calibration.get("error"),
+                    "frozen_adc_mask": calibration.get("frozen_adc_mask"),
+                    "coefficient_sha256": coefficients,
+                    "ocb1_dft": ocb1_dft,
+                },
+                "output_load": _read_json(self.output_load_state_path),
+                "rfdc_power": _read_json(self.rfdc_power_state_path),
+            }
+        )
 
     def _read_hardware_minimal(self) -> dict[str, Any]:
         if self.core is None:
@@ -242,7 +435,7 @@ class ReferenceWatchdog:
             selected = bool(sync.get("selected", False))
             generation = int(sync.get("active_generation", 0))
             sync_state = int(sync.get("state", 0))
-        return {
+        result = {
             "streaming": streaming,
             "selected": selected,
             "generation": generation,
@@ -254,6 +447,87 @@ class ReferenceWatchdog:
                 self.core.ctrl.read(self.core.regs.SPEC_PACKET_COUNT)
             ),
         }
+        if self.expected_core_version >= 0x0001_0035:
+            result["sysref_capture_counts"] = {
+                "pl_160mhz": int(
+                    self.core.ctrl.read(self.core.regs.SYSREF_PL_EDGE_COUNT)
+                ),
+                "adc_80mhz": int(
+                    self.core.ctrl.read(self.core.regs.SYSREF_ADC_EDGE_COUNT)
+                ),
+                "dac_80mhz": int(
+                    self.core.ctrl.read(self.core.regs.SYSREF_DAC_EDGE_COUNT)
+                ),
+            }
+        return result
+
+    def _observe_sysref_capture(
+        self,
+        previous: dict[str, Any],
+        current: dict[str, Any],
+    ) -> str | None:
+        """Trip if an MTS-only profile resumes physical SYSREF in science."""
+        if self.expected_core_version < 0x0001_0035:
+            return None
+        if not bool(previous.get("streaming")) or not bool(current.get("streaming")):
+            return None
+        clock_state = _read_json(self.clock_diagnostic_state_path)
+        if not isinstance(clock_state, dict) or str(clock_state.get("sysref_policy")) != "mts_only":
+            return None
+        before = previous.get("sysref_capture_counts")
+        after = current.get("sysref_capture_counts")
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            return "SYSREF_CAPTURE_EVIDENCE_UNAVAILABLE"
+        deltas = {
+            name: (int(after.get(name, 0)) - int(before.get(name, 0))) & 0xFFFF_FFFF
+            for name in ("pl_160mhz", "adc_80mhz", "dac_80mhz")
+        }
+        current["sysref_capture_count_deltas"] = deltas
+        if any(value != 0 for value in deltas.values()):
+            return "SYSREF_CAPTURE_DURING_SCIENCE"
+        return None
+
+    def _sample_calibration_if_due(self) -> None:
+        now = time.monotonic()
+        due, anchor = _periodic_schedule_due(
+            now,
+            self.last_calibration_observation_monotonic,
+            CALIBRATION_OBSERVATION_INTERVAL_SECONDS,
+        )
+        if not due:
+            return
+        self.last_calibration_observation_monotonic = anchor
+        captured_at_unix_ms = time.time_ns() // 1_000_000
+        try:
+            if self.core is None or not hasattr(
+                self.core, "read_adc_calibration_status"
+            ):
+                raise RuntimeError("RFDC_CALIBRATION_API_UNAVAILABLE")
+            if self.calibration_blocks is None:
+                self.calibration_blocks = list(self.core._adc_calibration_blocks())
+            observation = dict(
+                self.core.read_adc_calibration_status(
+                    require=True,
+                    _blocks=self.calibration_blocks,
+                )
+            )
+            observation.update(
+                {
+                    "captured_at_unix_ms": captured_at_unix_ms,
+                    "temperature_c": _maximum_ams_temperature(self.ams_telemetry),
+                    "ams": self.ams_telemetry,
+                    "error": None,
+                }
+            )
+            self.calibration_observation = observation
+        except Exception as exc:  # noqa: BLE001 - observation failure is reported, not hidden
+            self.calibration_observation = {
+                "supported": False,
+                "error": f"{type(exc).__name__}:{exc}",
+                "captured_at_unix_ms": captured_at_unix_ms,
+                "temperature_c": _maximum_ams_temperature(self.ams_telemetry),
+                "ams": self.ams_telemetry,
+            }
 
     def _trip(self, reason: str) -> None:
         if self.core is None:
@@ -341,7 +615,7 @@ class ReferenceWatchdog:
             "fault_latched": bool(self.policy.fault_latched),
             "pl_identity": self.pl_identity,
             "active_bitstream_sha1": self.expected_bitstream_sha1,
-            "expected_core_version": f"0x{EXPECTED_CORE_VERSION:08x}",
+            "expected_core_version": f"0x{self.expected_core_version:08x}",
             "poll_interval_ms": round(self.interval_seconds * 1000.0, 3),
             "unlock_confirmations_required": self.policy.unlock_confirmations,
             "spi_error_confirmations_required": self.policy.spi_error_confirmations,
@@ -350,6 +624,19 @@ class ReferenceWatchdog:
             "spi_error_count": self.policy.spi_error_count,
             "lock_status": self.lock_status,
             "hardware": self.hardware,
+            "calibration_observation_interval_ms": round(
+                CALIBRATION_OBSERVATION_INTERVAL_SECONDS * 1000.0, 3
+            ),
+            "calibration_observation": self.calibration_observation,
+            "ams_sample_interval_ms": round(AMS_SAMPLE_INTERVAL_SECONDS * 1000.0, 3),
+            "ams_telemetry": self.ams_telemetry,
+            "power_thermal_telemetry": {
+                "path": str(self.power_thermal_ring.path),
+                "epoch_id": self.power_thermal_ring.epoch_id,
+                "sequence": self.power_thermal_ring.sequence,
+                "capacity_seconds": self.power_thermal_ring.capacity,
+                "last_record": self.last_power_thermal_record,
+            },
             "last_fault": self.last_fault,
             "last_error": self.last_error,
         }
@@ -390,7 +677,11 @@ class ReferenceWatchdog:
             identity, _active = self._read_pl_identity()
             if self.core is None or identity != self.pl_identity:
                 self._connect(identity)
+            previous_hardware = dict(self.hardware)
             self.hardware = self._read_hardware_minimal()
+            self._sample_ams_if_due()
+            self._sample_calibration_if_due()
+            self._append_power_thermal_telemetry_if_due()
             try:
                 self.lock_status = self.clock.read_lock_status()
                 self.last_error = None
@@ -399,6 +690,13 @@ class ReferenceWatchdog:
                     pll1_lock=int(self.lock_status["pll1_lock"]),
                     pll2_lock=int(self.lock_status["pll2_lock"]),
                 )
+                sysref_reason = self._observe_sysref_capture(
+                    previous_hardware,
+                    self.hardware,
+                )
+                if reason is None and sysref_reason is not None:
+                    self.policy.fault_latched = True
+                    reason = sysref_reason
             except Exception as exc:  # noqa: BLE001 - sustained errors fail safe
                 self.lock_status = None
                 self.last_error = f"LMK_SPI:{type(exc).__name__}:{exc}"
@@ -477,7 +775,28 @@ def main(argv: list[str] | None = None) -> int:
         "--configure-lock",
         default=str(DEFAULT_CONFIGURE_LOCK_PATH),
     )
+    parser.add_argument(
+        "--clock-diagnostic-state",
+        default=str(DEFAULT_CLOCK_DIAGNOSTIC_STATE_PATH),
+    )
+    parser.add_argument(
+        "--output-load-state",
+        default=str(DEFAULT_OUTPUT_LOAD_STATE_PATH),
+    )
+    parser.add_argument(
+        "--rfdc-power-state",
+        default=str(DEFAULT_RFDC_POWER_STATE_PATH),
+    )
+    parser.add_argument(
+        "--power-thermal-telemetry",
+        default=str(DEFAULT_POWER_THERMAL_TELEMETRY_PATH),
+    )
     parser.add_argument("--interval-ms", type=float, default=100.0)
+    parser.add_argument(
+        "--expected-core-version",
+        default=f"0x{EXPECTED_CORE_VERSION:08x}",
+        help="catalog-bound core identity; diagnostic v35 uses 0x00010035",
+    )
     parser.add_argument("--unlock-confirmations", type=int, default=2)
     parser.add_argument("--spi-error-confirmations", type=int, default=5)
     parser.add_argument("--stop-timeout-ms", type=float, default=2000.0)
@@ -490,6 +809,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--spi-error-confirmations must be within 2..50")
     if not 100.0 <= args.stop_timeout_ms <= 10_000.0:
         parser.error("--stop-timeout-ms must be within 100..10000")
+    try:
+        expected_core_version = int(str(args.expected_core_version), 0)
+    except ValueError:
+        parser.error("--expected-core-version must be an integer such as 0x00010035")
 
     lock_descriptor = _acquire_singleton(Path(args.lock))
     try:
@@ -501,6 +824,11 @@ def main(argv: list[str] | None = None) -> int:
             unlock_confirmations=args.unlock_confirmations,
             spi_error_confirmations=args.spi_error_confirmations,
             configure_lock_path=Path(args.configure_lock),
+            expected_core_version=expected_core_version,
+            clock_diagnostic_state_path=Path(args.clock_diagnostic_state),
+            output_load_state_path=Path(args.output_load_state),
+            rfdc_power_state_path=Path(args.rfdc_power_state),
+            power_thermal_telemetry_path=Path(args.power_thermal_telemetry),
         )
         signal.signal(signal.SIGTERM, watchdog.request_stop)
         signal.signal(signal.SIGINT, watchdog.request_stop)

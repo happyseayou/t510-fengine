@@ -4,14 +4,19 @@ pub mod system;
 
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use config::{HelperBitstream, RuntimeConfig};
-use model::{ConfigureRequest, DacRequest, ExpectedBoardRequest, ScheduledSyncPrepareRequest};
-use serde::Serialize;
+use model::{
+    CalibrationRequest, ClockDiagnosticPrepareRequest, ClockDiagnosticRestoreRequest,
+    ConfigureRequest, DacRequest, DiagnosticMutationRequest, ExpectedBoardRequest, Ocb1Request,
+    OutputLoadRequest,
+    ScheduledSyncPrepareRequest,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +28,12 @@ use tokio::sync::Mutex;
 
 const HELP_HTML: &str = include_str!("../assets/help.html");
 const OPENAPI_JSON: &str = include_str!("../assets/openapi.json");
+const REFERENCE_WATCHDOG_STATE_PATH: &str = "/run/t510-ref-watchdog.json";
+const OCB1_STATE_PATH: &str = "/run/t510-ocb1.json";
+const CLOCK_DIAGNOSTIC_STATE_PATH: &str = "/run/t510-clock-diagnostic.json";
+const OUTPUT_LOAD_STATE_PATH: &str = "/run/t510-output-load.json";
+const RFDC_POWER_STATE_PATH: &str = "/run/t510-rfdc-power.json";
+const POWER_THERMAL_TELEMETRY_PATH: &str = "/run/t510-power-thermal.jsonl";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -33,6 +44,20 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(runtime: RuntimeConfig) -> Self {
+        invalidate_ocb1_transaction_on_agent_start();
+        invalidate_clock_transaction_on_agent_start();
+        invalidate_diagnostic_transaction_on_agent_start(
+            OUTPUT_LOAD_STATE_PATH,
+            "state",
+            "ACTIVE",
+            "output_load_transaction_id",
+        );
+        invalidate_diagnostic_transaction_on_agent_start(
+            RFDC_POWER_STATE_PATH,
+            "state",
+            "DAC_SHUTDOWN",
+            "rfdc_power_transaction_id",
+        );
         Self {
             runtime: Arc::new(runtime),
             hardware: Arc::new(Mutex::new(())),
@@ -47,6 +72,123 @@ impl AppState {
             .as_millis();
         let counter = self.request_counter.fetch_add(1, Ordering::Relaxed);
         format!("t510-{millis:x}-{counter:x}")
+    }
+}
+
+fn invalidate_diagnostic_transaction_on_agent_start(
+    path: &str,
+    state_key: &str,
+    active_state: &str,
+    transaction_key: &str,
+) {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(mut value) = serde_json::from_str::<Value>(&raw) else {
+        return;
+    };
+    let Some(state) = value.as_object_mut() else {
+        return;
+    };
+    if state.get(state_key).and_then(Value::as_str) != Some(active_state) {
+        return;
+    }
+    state.insert(state_key.into(), Value::String("RESTORE_REQUIRED".into()));
+    state.insert(transaction_key.into(), Value::Null);
+    state.insert("transaction_valid".into(), Value::Bool(false));
+    state.insert("restore_required".into(), Value::Bool(true));
+    state.insert(
+        "invalid_reason".into(),
+        Value::String("BOARD_AGENT_RESTART".into()),
+    );
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    state.insert("updated_at_unix_ms".into(), Value::from(millis));
+    let temporary = format!("{path}.tmp");
+    if let Ok(encoded) = serde_json::to_vec(&value) {
+        if std::fs::write(&temporary, encoded).is_ok() {
+            let _ = std::fs::rename(temporary, path);
+        }
+    }
+}
+
+fn invalidate_clock_transaction_on_agent_start() {
+    let Ok(raw) = std::fs::read_to_string(CLOCK_DIAGNOSTIC_STATE_PATH) else {
+        return;
+    };
+    let Ok(mut value) = serde_json::from_str::<Value>(&raw) else {
+        return;
+    };
+    let Some(state) = value.as_object_mut() else {
+        return;
+    };
+    if state.get("state").and_then(Value::as_str) != Some("ACTIVE") {
+        return;
+    }
+    state.insert("state".into(), Value::String("RESTORE_REQUIRED".into()));
+    state.insert("clock_transaction_id".into(), Value::Null);
+    state.insert("clock_transaction_valid".into(), Value::Bool(false));
+    state.insert("restore_required".into(), Value::Bool(true));
+    state.insert(
+        "invalid_reason".into(),
+        Value::String("BOARD_AGENT_RESTART".into()),
+    );
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    state.insert("updated_at_unix_ms".into(), Value::from(millis));
+    let temporary = format!("{CLOCK_DIAGNOSTIC_STATE_PATH}.tmp");
+    if let Ok(encoded) = serde_json::to_vec(&value) {
+        if std::fs::write(&temporary, encoded).is_ok() {
+            let _ = std::fs::rename(temporary, CLOCK_DIAGNOSTIC_STATE_PATH);
+        }
+    }
+}
+
+fn invalidate_ocb1_transaction_on_agent_start() {
+    let Ok(raw) = std::fs::read_to_string(OCB1_STATE_PATH) else {
+        return;
+    };
+    let Ok(mut value) = serde_json::from_str::<Value>(&raw) else {
+        return;
+    };
+    let Some(state) = value.as_object_mut() else {
+        return;
+    };
+    if state
+        .get("ocb1_override_state")
+        .and_then(Value::as_str)
+        != Some("OVERRIDE_ACTIVE")
+    {
+        return;
+    }
+    state.insert(
+        "ocb1_override_state".into(),
+        Value::String("RECONFIGURE_REQUIRED".into()),
+    );
+    state.insert("ocb1_transaction_id".into(), Value::Null);
+    state.insert("ocb1_transaction_valid".into(), Value::Bool(false));
+    state.insert("ocb1_restore_required".into(), Value::Bool(true));
+    state.insert(
+        "invalid_reason".into(),
+        Value::String("BOARD_AGENT_RESTART".into()),
+    );
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    state.insert("updated_at_unix_ms".into(), Value::from(millis));
+    let temporary = format!("{OCB1_STATE_PATH}.tmp");
+    if let Ok(encoded) = serde_json::to_vec(&value) {
+        if std::fs::write(&temporary, encoded).is_ok() {
+            let _ = std::fs::rename(temporary, OCB1_STATE_PATH);
+        }
     }
 }
 
@@ -244,6 +386,14 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
                 "stop": true,
                 "reset": true,
                 "dac_atomic_update": true,
+                "rfdc_calibration_observation": true,
+                "rfdc_calibration_software_freeze": true,
+                "rfdc_calibration_stopped_preview": true,
+                "rfdc_ocb1_snapshot_override": true,
+                "rfdc_ocb1_transaction_bound_start": true,
+                "clock_diagnostic_profiles": true,
+                "clock_transaction_bound_start": true,
+                "sysref_mts_only_diagnostic": true,
                 "scheduled_start": true,
                 "scheduled_sync_prepare_arm_abort": true,
                 "full_dual_clock_pipeline_flush": true,
@@ -401,7 +551,18 @@ async fn run_hardware(
             "Python helper diagnostics"
         );
     }
-    let payload: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
+    let parsed_whole = serde_json::from_str(stdout.trim());
+    let payload: Value = parsed_whole.or_else(|whole_error| {
+        // libmetal writes a few RFDC driver diagnostics directly to the C
+        // stdout file descriptor, bypassing Python's redirect_stdout.  The
+        // helper contract remains its final JSON line; preserve earlier text
+        // as diagnostics instead of hiding the structured hardware failure.
+        stdout
+            .lines()
+            .rev()
+            .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+            .ok_or(whole_error)
+    }).map_err(|error| {
         ApiError::new(
             state,
             StatusCode::SERVICE_UNAVAILABLE,
@@ -433,6 +594,431 @@ async fn status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
         &state.runtime.default_bitstream().helper,
         json!({}),
         state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn calibration_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    run_hardware(
+        &state,
+        "calibration-status",
+        &state.runtime.default_bitstream().helper,
+        json!({}),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn calibration_monitor(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let raw = std::fs::read_to_string(REFERENCE_WATCHDOG_STATE_PATH).map_err(|error| {
+        ApiError::new(
+            &state,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CALIBRATION_MONITOR_UNAVAILABLE",
+            format!("cannot read resident calibration monitor: {error}"),
+            Some(json!({"path": REFERENCE_WATCHDOG_STATE_PATH})),
+        )
+    })?;
+    let watchdog: Value = serde_json::from_str(&raw).map_err(|error| {
+        ApiError::new(
+            &state,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CALIBRATION_MONITOR_INVALID",
+            format!("resident calibration monitor is not valid JSON: {error}"),
+            Some(json!({"path": REFERENCE_WATCHDOG_STATE_PATH})),
+        )
+    })?;
+    let observation = watchdog
+        .get("calibration_observation")
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::new(
+                &state,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CALIBRATION_MONITOR_NOT_READY",
+                "resident watchdog has not published a calibration observation",
+                Some(json!({"path": REFERENCE_WATCHDOG_STATE_PATH})),
+            )
+        })?;
+    let ocb1: Value = std::fs::read_to_string(OCB1_STATE_PATH)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| json!({
+            "ocb1_override_state": "DYNAMIC",
+            "ocb1_override_adc_mask": 0,
+            "ocb1_transaction_id": null,
+            "ocb1_transaction_valid": false,
+            "ocb1_restore_required": false
+        }));
+    let current_hash = observation
+        .pointer("/coefficient_sha256/ocb1")
+        .and_then(Value::as_str);
+    let expected_hash = ocb1
+        .get("ocb1_snapshot_sha256")
+        .and_then(Value::as_str);
+    let active = ocb1
+        .get("ocb1_override_state")
+        .and_then(Value::as_str)
+        == Some("OVERRIDE_ACTIVE");
+    let ocb1_integrity_ok = !active
+        || (ocb1
+            .get("ocb1_transaction_valid")
+            .and_then(Value::as_bool)
+            == Some(true)
+            && current_hash.is_some()
+            && current_hash == expected_hash);
+    Ok(success(
+        &state,
+        json!({
+            "source": "resident_reference_watchdog",
+            "watchdog_updated_at_unix_ms": watchdog.get("updated_at_unix_ms"),
+            "watchdog_mode": watchdog.get("mode"),
+            "watchdog_healthy": watchdog.get("healthy"),
+            "hardware": watchdog.get("hardware"),
+            "calibration": observation,
+            "ams": watchdog.get("ams_telemetry"),
+            "power_thermal_telemetry": watchdog.get("power_thermal_telemetry"),
+            "ocb1": {
+                "state": ocb1,
+                "current_sha256": current_hash,
+                "integrity_ok": ocb1_integrity_ok,
+            },
+        }),
+    ))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PowerThermalQuery {
+    #[serde(default)]
+    since_seq: u64,
+}
+
+async fn power_thermal_telemetry(
+    State(state): State<AppState>,
+    Query(query): Query<PowerThermalQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let raw = std::fs::read_to_string(POWER_THERMAL_TELEMETRY_PATH).map_err(|error| {
+        ApiError::new(
+            &state,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "POWER_THERMAL_TELEMETRY_UNAVAILABLE",
+            format!("cannot read resident power/thermal telemetry: {error}"),
+            Some(json!({"path": POWER_THERMAL_TELEMETRY_PATH})),
+        )
+    })?;
+    let mut rows = Vec::new();
+    for (line_number, line) in raw.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row: Value = serde_json::from_str(line).map_err(|error| {
+            ApiError::new(
+                &state,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "POWER_THERMAL_TELEMETRY_INVALID",
+                format!("invalid telemetry JSONL at line {}: {error}", line_number + 1),
+                Some(json!({"path": POWER_THERMAL_TELEMETRY_PATH})),
+            )
+        })?;
+        let sequence = row.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+        if sequence > query.since_seq {
+            rows.push(row);
+        }
+    }
+    let first_sequence = rows
+        .first()
+        .and_then(|row| row.get("sequence"))
+        .and_then(Value::as_u64);
+    let last_sequence = rows
+        .last()
+        .and_then(|row| row.get("sequence"))
+        .and_then(Value::as_u64);
+    let epoch_id = rows
+        .last()
+        .and_then(|row| row.get("epoch_id"))
+        .and_then(Value::as_str);
+    Ok(success(
+        &state,
+        json!({
+            "source": "resident_reference_watchdog",
+            "path": POWER_THERMAL_TELEMETRY_PATH,
+            "since_seq": query.since_seq,
+            "record_count": rows.len(),
+            "first_sequence": first_sequence,
+            "last_sequence": last_sequence,
+            "epoch_id": epoch_id,
+            "records": rows,
+        }),
+    ))
+}
+
+async fn output_load_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    run_hardware(
+        &state,
+        "output-load-status",
+        &state.runtime.default_bitstream().helper,
+        json!({}),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn output_load_apply(
+    State(state): State<AppState>,
+    payload: Result<Json<OutputLoadRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    request.validate().map_err(|message| {
+        ApiError::new(
+            &state,
+            StatusCode::BAD_REQUEST,
+            "SCHEMA_VALIDATION_FAILED",
+            message,
+            None,
+        )
+    })?;
+    run_hardware(
+        &state,
+        "output-load-apply",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable output-load request"),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn output_load_restore(
+    State(state): State<AppState>,
+    payload: Result<Json<DiagnosticMutationRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "output-load-restore",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable diagnostic request"),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn rfdc_power_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    run_hardware(
+        &state,
+        "rfdc-power-status",
+        &state.runtime.default_bitstream().helper,
+        json!({}),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn rfdc_power_dac_shutdown(
+    State(state): State<AppState>,
+    payload: Result<Json<DiagnosticMutationRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "rfdc-power-dac-shutdown",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable diagnostic request"),
+        state.runtime.config.configure_timeout_seconds.saturating_add(30),
+    )
+    .await
+}
+
+async fn rfdc_power_restore(
+    State(state): State<AppState>,
+    payload: Result<Json<DiagnosticMutationRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "rfdc-power-restore",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable diagnostic request"),
+        state.runtime.config.configure_timeout_seconds.saturating_add(30),
+    )
+    .await
+}
+
+async fn ocb1_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    run_hardware(
+        &state,
+        "ocb1-status",
+        &state.runtime.default_bitstream().helper,
+        json!({}),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn ocb1_snapshot_override(
+    State(state): State<AppState>,
+    payload: Result<Json<Ocb1Request>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "ocb1-snapshot-override",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable OCB1 request"),
+        state.runtime.config.configure_timeout_seconds.saturating_add(30),
+    )
+    .await
+}
+
+async fn ocb1_release(
+    State(state): State<AppState>,
+    payload: Result<Json<Ocb1Request>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "ocb1-release",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable OCB1 request"),
+        state.runtime.config.configure_timeout_seconds.saturating_add(30),
+    )
+    .await
+}
+
+async fn clock_diagnostic_status(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    run_hardware(
+        &state,
+        "clock-diagnostic-status",
+        &state.runtime.default_bitstream().helper,
+        json!({}),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn clock_diagnostic_prepare(
+    State(state): State<AppState>,
+    payload: Result<Json<ClockDiagnosticPrepareRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    request.validate().map_err(|message| {
+        ApiError::new(
+            &state,
+            StatusCode::BAD_REQUEST,
+            "SCHEMA_VALIDATION_FAILED",
+            message,
+            None,
+        )
+    })?;
+    run_hardware(
+        &state,
+        "clock-diagnostic-prepare",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable clock diagnostic request"),
+        state.runtime.config.configure_timeout_seconds.saturating_add(30),
+    )
+    .await
+}
+
+async fn clock_diagnostic_restore(
+    State(state): State<AppState>,
+    payload: Result<Json<ClockDiagnosticRestoreRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "clock-diagnostic-restore",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable clock restore request"),
+        state.runtime.config.configure_timeout_seconds.saturating_add(30),
+    )
+    .await
+}
+
+async fn calibration_freeze(
+    State(state): State<AppState>,
+    payload: Result<Json<CalibrationRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "calibration-freeze",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable calibration request"),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn calibration_unfreeze(
+    State(state): State<AppState>,
+    payload: Result<Json<CalibrationRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "calibration-unfreeze",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable calibration request"),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn calibration_preview(
+    State(state): State<AppState>,
+    payload: Result<Json<CalibrationRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    run_hardware(
+        &state,
+        "calibration-preview",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable calibration request"),
+        state.runtime.config.operation_timeout_seconds,
+    )
+    .await
+}
+
+async fn calibration_train_freeze(
+    State(state): State<AppState>,
+    payload: Result<Json<CalibrationRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
+    if !request.training_dac_active {
+        return Err(ApiError::new(
+            &state,
+            StatusCode::BAD_REQUEST,
+            "CALIBRATION_TRAINING_DAC_REQUIRED",
+            "train-freeze requires training_dac_active=true",
+            None,
+        ));
+    }
+    let amplitude = request.training_amplitude_percent.ok_or_else(|| {
+        ApiError::new(
+            &state,
+            StatusCode::BAD_REQUEST,
+            "CALIBRATION_TRAINING_AMPLITUDE_REQUIRED",
+            "train-freeze requires training_amplitude_percent",
+            None,
+        )
+    })?;
+    if !amplitude.is_finite() || amplitude <= 0.0 || amplitude > 100.0 {
+        return Err(ApiError::new(
+            &state,
+            StatusCode::BAD_REQUEST,
+            "CALIBRATION_TRAINING_AMPLITUDE_INVALID",
+            "training_amplitude_percent must be within (0, 100]",
+            Some(json!({"training_amplitude_percent": amplitude})),
+        ));
+    }
+    run_hardware(
+        &state,
+        "calibration-train-freeze",
+        &state.runtime.default_bitstream().helper,
+        serde_json::to_value(request).expect("serializable calibration request"),
+        45,
     )
     .await
 }
@@ -642,6 +1228,51 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v2/capabilities", get(capabilities))
         .route("/api/v2/bitstreams", get(bitstreams))
         .route("/api/v2/status", get(status))
+        .route("/api/v2/rfdc/calibration", get(calibration_status))
+        .route("/api/v2/rfdc/calibration/monitor", get(calibration_monitor))
+        .route("/api/v2/telemetry/power-thermal", get(power_thermal_telemetry))
+        .route("/api/v2/diagnostics/output-load", get(output_load_status).post(output_load_apply))
+        .route(
+            "/api/v2/diagnostics/output-load/restore",
+            post(output_load_restore),
+        )
+        .route("/api/v2/rfdc/power", get(rfdc_power_status))
+        .route(
+            "/api/v2/rfdc/power/dac-shutdown",
+            post(rfdc_power_dac_shutdown),
+        )
+        .route("/api/v2/rfdc/power/restore", post(rfdc_power_restore))
+        .route("/api/v2/rfdc/calibration/ocb1", get(ocb1_status))
+        .route(
+            "/api/v2/rfdc/calibration/ocb1/snapshot-override",
+            post(ocb1_snapshot_override),
+        )
+        .route(
+            "/api/v2/rfdc/calibration/ocb1/release",
+            post(ocb1_release),
+        )
+        .route("/api/v2/clock/diagnostic", get(clock_diagnostic_status))
+        .route(
+            "/api/v2/clock/diagnostic/prepare",
+            post(clock_diagnostic_prepare),
+        )
+        .route(
+            "/api/v2/clock/diagnostic/restore",
+            post(clock_diagnostic_restore),
+        )
+        .route("/api/v2/rfdc/calibration/freeze", post(calibration_freeze))
+        .route(
+            "/api/v2/rfdc/calibration/unfreeze",
+            post(calibration_unfreeze),
+        )
+        .route(
+            "/api/v2/rfdc/calibration/preview",
+            post(calibration_preview),
+        )
+        .route(
+            "/api/v2/rfdc/calibration/train-freeze",
+            post(calibration_train_freeze),
+        )
         .route("/api/v2/configure", post(configure))
         .route("/api/v2/start", post(start))
         .route("/api/v2/sync/status", get(sync_status))
@@ -664,7 +1295,10 @@ pub fn load_state(config_path: &Path) -> Result<AppState, String> {
 mod tests {
     use super::*;
     use crate::config::{AgentConfig, BitstreamSpec, ProfileSpec, RuntimeConfig};
-    use crate::model::{Endpoint, Profile, ProfileMode, SourceIdentity, StreamKind};
+    use crate::model::{
+        ClockDiagnosticPrepareRequest, Endpoint, MtsTargetMode, Profile, ProfileMode,
+        SourceIdentity, StreamKind,
+    };
     use http_body_util::BodyExt;
     use sha2::{Digest, Sha256};
     use std::os::unix::fs::PermissionsExt;
@@ -741,7 +1375,7 @@ mod tests {
                     id: "test".into(),
                     path: bitstream,
                     sha256: sha,
-                    core_version: "0x00010033".into(),
+                    core_version: "0x00010034".into(),
                     mts_adc_target_latency: Some(240),
                     mts_dac_target_latency: Some(224),
                     mts_campaign: Some(crate::config::MtsCampaignProof {
@@ -841,6 +1475,43 @@ mod tests {
     }
 
     #[test]
+    fn negative_control_accepts_frozen_external_request_profiles_only() {
+        let request = |profile_id: &str| ClockDiagnosticPrepareRequest {
+            expected_board_id: 1,
+            profile_id: profile_id.into(),
+            sample_rate_msps: 320,
+            center_mhz: 1020.0,
+            receiver_stream_accepting: false,
+            mts_target_mode: MtsTargetMode::Fixed,
+            mts_adc_target_latency: Some(756),
+            mts_dac_target_latency: Some(252),
+            verify_sysref_negative_control: true,
+            attempt_kind: "overlay_reload".into(),
+        };
+        for profile_id in [
+            "160m_10m_request_manual_clkin2",
+            "160m_5m_request_manual_clkin2",
+            "160m_10m_request_clkin2_sdclkout3_phase_15",
+            "160m_5m_request_clkin2_sdclkout3_phase_15",
+        ] {
+            assert!(request(profile_id).validate().is_ok(), "{profile_id}");
+        }
+        for profile_id in [
+            "160m_10m_cont_manual_clkin2",
+            "160m_10m_request_manual_clkin0",
+        ] {
+            assert!(request(profile_id)
+                .validate()
+                .unwrap_err()
+                .contains("external request profile"));
+        }
+        assert!(request("160m_10m_request_clkin2_sdclkout3_phase_32")
+            .validate()
+            .unwrap_err()
+            .contains("not a frozen"));
+    }
+
+    #[test]
     fn catalog_paths_are_fixed_and_absolute() {
         let (_temp, state) = fixture(
             "#!/bin/sh\nread input\nprintf '{\"ok\":true,\"result\":{}}\\n'\n",
@@ -927,6 +1598,44 @@ mod tests {
                 "start",
             ),
             ("GET", "/api/v2/status", None, "status"),
+            (
+                "GET",
+                "/api/v2/rfdc/calibration",
+                None,
+                "calibration-status",
+            ),
+            (
+                "POST",
+                "/api/v2/rfdc/calibration/freeze",
+                Some(json!({"expected_board_id": 1})),
+                "calibration-freeze",
+            ),
+            (
+                "POST",
+                "/api/v2/rfdc/calibration/unfreeze",
+                Some(json!({"expected_board_id": 1})),
+                "calibration-unfreeze",
+            ),
+            (
+                "POST",
+                "/api/v2/rfdc/calibration/preview",
+                Some(json!({
+                    "expected_board_id": 1,
+                    "training_dac_active": true,
+                    "training_amplitude_percent": 100.0
+                })),
+                "calibration-preview",
+            ),
+            (
+                "POST",
+                "/api/v2/rfdc/calibration/train-freeze",
+                Some(json!({
+                    "expected_board_id": 1,
+                    "training_dac_active": true,
+                    "training_amplitude_percent": 100.0
+                })),
+                "calibration-train-freeze",
+            ),
             (
                 "PUT",
                 "/api/v2/dac",
@@ -1038,6 +1747,11 @@ mod tests {
             value["components"]["schemas"]["DacChannel"]["properties"]["rf_frequency_mhz"]
                 ["exclusiveMaximum"],
             1920
+        );
+        assert_eq!(
+            value["components"]["schemas"]["CalibrationRequest"]["properties"]
+                ["training_dac_active"]["default"],
+            false
         );
     }
 }

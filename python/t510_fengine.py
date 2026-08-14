@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from ipaddress import IPv4Address
 import math
 import os
 from pathlib import Path
+import struct
 import subprocess
 import time
+import zlib
 from typing import Any, Iterable, Mapping, Optional
 
 try:
@@ -56,6 +59,27 @@ def _normalize_unicast_mac(value: str) -> str:
 def _mac_from_int(value: int) -> str:
     cleaned = f"{int(value) & 0xFFFF_FFFF_FFFF:012x}"
     return ":".join(cleaned[index:index + 2] for index in range(0, 12, 2))
+
+
+def _calibration_circular_delta(left: int, right: int, width: int) -> int:
+    """Return the shortest LSB distance for a signed fixed-width value.
+
+    RFDC calibration coefficients are two's-complement fields.  A transition
+    from the largest positive code to the most negative code is one LSB on the
+    calibration accumulator, not a full-scale jump.
+    """
+
+    modulus = 1 << int(width)
+    difference = abs(int(right) - int(left))
+    return min(difference, modulus - difference)
+
+
+def _nearest_rank_percentile(values: list[int], percentile: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(int(value) for value in values)
+    rank = max(1, int(math.ceil(float(percentile) * len(ordered))))
+    return ordered[min(rank - 1, len(ordered) - 1)]
 
 
 class ObservationSpectrumStabilizer:
@@ -211,6 +235,10 @@ class RegisterMap:
     SYNC_CONFIG: int = 0x0020
     PPS_COUNT_LO: int = 0x0024
     PPS_COUNT_HI: int = 0x0028
+    SYSREF_CAPTURE_STATUS: int = 0x002C
+    SYSREF_PL_EDGE_COUNT: int = 0x0030
+    SYSREF_ADC_EDGE_COUNT: int = 0x0034
+    SYSREF_DAC_EDGE_COUNT: int = 0x0038
     SAMPLE_RATE_HZ: int = 0x0108
     QUANT_MODE: int = 0x010C
     SCALE_MODE: int = 0x0110
@@ -336,7 +364,8 @@ class RegisterMap:
     PFB_COEFF_DATA: int = 0x096C
     PFB_COEFF_LOADED_COUNT: int = 0x0970
     PFB_COEFF_ID: int = 0x0974
-    PFB_COEFF_CHECKSUM: int = 0x0978
+    PFB_COEFF_CRC32: int = 0x0978
+    PFB_COEFF_CHECKSUM: int = PFB_COEFF_CRC32
     PFB_COEFF_ERROR_COUNT: int = 0x097C
     SYNC_CAPS: int = 0xAC00
     SYNC_COMMAND: int = 0xAC04
@@ -422,21 +451,37 @@ class T510Clock:
         except ImportError:
             from t510_clock import T510ClockController
 
-        if profile != "160m_10m_continuous":
+        if profile in ("160m_10m_continuous", "160m_10m_cont_manual_clkin2") and ref == "external_10mhz":
+            self.last_config = T510ClockController().configure_external_10mhz_160m_continuous()
+        elif profile == "160m_10m_request_manual_clkin2" and ref == "external_10mhz":
+            self.last_config = T510ClockController().configure_external_10mhz_160m_request()
+        elif profile == "160m_10m_request_manual_clkin0" and ref == "tcxo_10mhz":
+            self.last_config = T510ClockController().configure_tcxo_10mhz_160m_request()
+        elif ref == "external_10mhz" and (
+            profile == "160m_5m_request_manual_clkin2"
+            or profile.startswith("160m_10m_request_clkin2_sdclkout3_phase_")
+            or profile.startswith("160m_5m_request_clkin2_sdclkout3_phase_")
+        ):
+            self.last_config = T510ClockController().configure_tics_diagnostic_profile(profile)
+        elif profile not in (
+            "160m_10m_continuous",
+            "160m_10m_cont_manual_clkin2",
+            "160m_10m_request_manual_clkin2",
+            "160m_10m_request_manual_clkin0",
+            "160m_5m_request_manual_clkin2",
+        ):
             self.last_config = {
                 "ref": ref,
                 "profile": profile,
                 "configured": False,
                 "reason": "unsupported clock profile selected",
             }
-        elif ref == "external_10mhz":
-            self.last_config = T510ClockController().configure_external_10mhz_160m_continuous()
         else:
             self.last_config = {
                 "ref": ref,
                 "profile": profile,
                 "configured": False,
-                "reason": "the current clock profile requires external_10mhz",
+                "reason": "clock reference and diagnostic profile do not match",
             }
         if self.require_low_level:
             if not self.last_config.get("configured"):
@@ -505,7 +550,7 @@ class T510FEngine:
     RFDC_ADC_ANALOG_SAMPLE_RATE_HZ = 3_840_000_000
     RFDC_DAC_ANALOG_SAMPLE_RATE_HZ = 3_840_000_000
     # API v1 compatibility: fs_analog historically used this shared alias.
-    # Stage 33 also reports the ADC and DAC analog rates explicitly.
+    # Stage 34 also reports the ADC and DAC analog rates explicitly.
     RFDC_ANALOG_SAMPLE_RATE_HZ = RFDC_ADC_ANALOG_SAMPLE_RATE_HZ
     RFDC_COMPLEX_SAMPLE_RATE_HZ = 320_000_000
     RFDC_DECIMATION = 12
@@ -529,7 +574,8 @@ class T510FEngine:
     # mode 0 remains the unchanged accepted DDS contract.  The same bitstream
     # also implements stage33_q_retard so physical direction can be reversed
     # by software alone if the first on-board comparison requires it.
-    STAGE33_DAC_TONE_MODE = "stage33_q_advance"
+    STAGE34_DAC_TONE_MODE = "stage33_q_advance"
+    STAGE33_DAC_TONE_MODE = STAGE34_DAC_TONE_MODE
     SCIENCE_SAMPLE_RATES: dict[int, dict[str, Any]] = {
         160: {"code": 1, "pl_decim": 2, "sample_rate_hz": 160_000_000.0},
         320: {"code": 2, "pl_decim": 1, "sample_rate_hz": 320_000_000.0},
@@ -575,7 +621,7 @@ class T510FEngine:
     FENGINE_DEFAULT_FFT_SHIFT: int = 0x5556
     FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT: int = 0x0556
     PRODUCTION_SCOPE = {
-        "data_streams": "TIME native 512b + SPEC/F-engine FENGINE_IQ16 4-tap RTL PFB 4096-channel science streams",
+        "data_streams": "TIME native 512b + SPEC/F-engine FENGINE_IQ16 fixed 8-tap RTL PFB 4096-channel science streams",
         "control_preview": "Jupyter notebook 00_t510_fengine_control.ipynb",
         "production_preview": "mode-selective RF reconstructed waveform and/or 4096-bin PFB spectrum",
         "production_modes": (
@@ -587,7 +633,7 @@ class T510FEngine:
         ),
         "convergence_gate": "fresh-download board counters plus mode-sized Rust/Web receive at the mode full rate",
         "spec_contract": "4096 channels, 16 blocks x 256 channels x 1 spectrum-time x 8 inputs x IQ16, 8192B payload",
-        "pfb_contract": "4-tap programmable Q1.17 coefficient bank, stopped/idle commit only",
+        "pfb_contract": "fixed 8-tap Hamming Q1.17 coefficient bank, stopped/idle commit only",
         "rate_contract": "RFDC 320MS/s complex base path; PL 55-tap half-band decim2 for 160MS/s",
         "fixed_runtime_contract": (
             "external_10mhz + external_pps",
@@ -760,9 +806,192 @@ class T510FEngine:
                 )
         if len(calls) != 8:
             raise RuntimeError(
-                f"Stage 33 expected eight RFDC tile reset calls, observed {len(calls)}"
+                f"Stage 34 expected eight RFDC tile reset calls, observed {len(calls)}"
             )
         return calls
+
+    def shutdown_all_rfdc_tiles(self) -> list[dict[str, Any]]:
+        """Quiesce every RFDC tile before interrupting its external clock.
+
+        XRFdc_Shutdown preserves the tile register settings while bringing the
+        restart state machine to a safe stopped state.  This must happen while
+        the old clock is still present; otherwise a subsequent Reset can remain
+        stuck waiting for restart state 6 after an LMK reprogramming cycle.
+        """
+        if self.rfdc is None:
+            raise RuntimeError("RFDC handle is unavailable")
+        cffi_lib: Any | None = None
+        cffi_instance = getattr(self.rfdc, "_instance", None)
+        try:
+            import xrfdc  # type: ignore
+
+            candidate = getattr(xrfdc, "_lib", None)
+            if candidate is not None and hasattr(candidate, "XRFdc_Shutdown"):
+                cffi_lib = candidate
+        except ImportError:
+            pass
+        calls: list[dict[str, Any]] = []
+        for tile_type, kind, attribute in (
+            (0, "adc", "adc_tiles"),
+            (1, "dac", "dac_tiles"),
+        ):
+            for tile_index, tile in enumerate(list(getattr(self.rfdc, attribute, []))):
+                method = next(
+                    (
+                        (name, getattr(tile, name))
+                        for name in ("Shutdown", "shutdown")
+                        if callable(getattr(tile, name, None))
+                    ),
+                    None,
+                )
+                if method is not None:
+                    name, function = method
+                    value = function()
+                    method_name = name
+                elif cffi_lib is not None and cffi_instance is not None:
+                    status = int(
+                        cffi_lib.XRFdc_Shutdown(
+                            cffi_instance, int(tile_type), int(tile_index)
+                        )
+                    )
+                    if status != 0:
+                        raise RuntimeError(
+                            f"XRFdc_Shutdown {kind} tile {tile_index} returned {status}"
+                        )
+                    value = status
+                    method_name = "cffi:XRFdc_Shutdown"
+                else:
+                    raise RuntimeError(
+                        f"{kind} tile {tile_index} has no Shutdown API and the "
+                        "libxrfdc CFFI symbol is unavailable"
+                    )
+                calls.append(
+                    {
+                        "kind": kind,
+                        "tile": tile_index,
+                        "method": method_name,
+                        "result": repr(value),
+                    }
+                )
+        if len(calls) != 8:
+            raise RuntimeError(
+                f"Stage 34 expected eight RFDC tile shutdown calls, observed {len(calls)}"
+            )
+        return calls
+
+    def read_rfdc_tile_power_status(self) -> dict[str, Any]:
+        """Return the live RFDC tile restart/power state from ``GetIPStatus``.
+
+        PYNQ exposes the driver's :c:type:`XRFdc_IPStatus` structure as the
+        ``IPStatus`` property.  Keep the normalization here so Board Agent and
+        campaign code never need to depend on PYNQ's PropertyDict layout.
+        """
+        if self.rfdc is None:
+            raise RuntimeError("RFDC handle is unavailable")
+        try:
+            raw = getattr(self.rfdc, "IPStatus")
+            if callable(raw):
+                raw = raw()
+            raw = dict(raw)
+        except Exception as exc:
+            raise RuntimeError(f"XRFdc_GetIPStatus failed: {exc}") from exc
+
+        def normalize(kind: str) -> list[dict[str, Any]]:
+            key = "ADCTileStatus" if kind == "adc" else "DACTileStatus"
+            values = list(raw.get(key, []))
+            if len(values) != 4:
+                raise RuntimeError(
+                    f"XRFdc_GetIPStatus returned {len(values)} {kind.upper()} tiles, expected 4"
+                )
+            result: list[dict[str, Any]] = []
+            for tile, value in enumerate(values):
+                row = dict(value)
+                result.append(
+                    {
+                        "kind": kind,
+                        "tile": tile,
+                        "is_enabled": bool(int(row.get("IsEnabled", 0))),
+                        "tile_state": int(row.get("TileState", 0)),
+                        "block_status_mask": int(row.get("BlockStatusMask", 0)) & 0xFF,
+                        "power_up_state": int(row.get("PowerUpState", 0)),
+                        "pll_state": int(row.get("PLLState", 0)),
+                    }
+                )
+            return result
+
+        adc = normalize("adc")
+        dac = normalize("dac")
+        return {
+            "supported": True,
+            "state": int(raw.get("State", 0)),
+            "adc_tiles": adc,
+            "dac_tiles": dac,
+            "adc_enabled_mask": sum(
+                (1 << row["tile"]) for row in adc if row["is_enabled"]
+            ),
+            "dac_enabled_mask": sum(
+                (1 << row["tile"]) for row in dac if row["is_enabled"]
+            ),
+        }
+
+    def shutdown_all_dac_tiles(self) -> dict[str, Any]:
+        """Shut down all four DAC tiles with the driver's all-tile selector."""
+        if self.rfdc is None:
+            raise RuntimeError("RFDC handle is unavailable")
+        before = self.read_rfdc_tile_power_status()
+        try:
+            import xrfdc  # type: ignore
+
+            lib = getattr(xrfdc, "_lib")
+            instance = getattr(self.rfdc, "_instance")
+            status = int(lib.XRFdc_Shutdown(instance, 1, -1))
+        except Exception as exc:
+            raise RuntimeError(f"XRFdc_Shutdown(DAC, all tiles) failed: {exc}") from exc
+        if status != 0:
+            raise RuntimeError(
+                f"XRFdc_Shutdown(DAC, all tiles) returned {status}"
+            )
+        after = self.read_rfdc_tile_power_status()
+        if int(after["adc_enabled_mask"]) != 0xF:
+            raise RuntimeError(
+                f"ADC tiles changed during DAC shutdown: {after['adc_tiles']}"
+            )
+        if int(after["dac_enabled_mask"]) != 0:
+            raise RuntimeError(
+                f"DAC tiles did not all shut down: {after['dac_tiles']}"
+            )
+        return {
+            "method": "XRFdc_Shutdown",
+            "type": "DAC",
+            "tile_id": -1,
+            "driver_status": status,
+            "before": before,
+            "after": after,
+        }
+
+    def startup_all_dac_tiles(self) -> dict[str, Any]:
+        """Best-effort low-level DAC restart used only by failure recovery."""
+        if self.rfdc is None:
+            raise RuntimeError("RFDC handle is unavailable")
+        before = self.read_rfdc_tile_power_status()
+        try:
+            import xrfdc  # type: ignore
+
+            lib = getattr(xrfdc, "_lib")
+            instance = getattr(self.rfdc, "_instance")
+            status = int(lib.XRFdc_StartUp(instance, 1, -1))
+        except Exception as exc:
+            raise RuntimeError(f"XRFdc_StartUp(DAC, all tiles) failed: {exc}") from exc
+        if status != 0:
+            raise RuntimeError(f"XRFdc_StartUp(DAC, all tiles) returned {status}")
+        return {
+            "method": "XRFdc_StartUp",
+            "type": "DAC",
+            "tile_id": -1,
+            "driver_status": status,
+            "before": before,
+            "after": self.read_rfdc_tile_power_status(),
+        }
 
     def _write64(self, lo_offset: int, value: int) -> None:
         self.ctrl.write(lo_offset, value & 0xFFFF_FFFF)
@@ -837,7 +1066,7 @@ class T510FEngine:
     def science_center_bounds_hz(cls, sample_rate_msps: int | float | str) -> tuple[float, float]:
         sample_rate_msps = int(sample_rate_msps)
         if sample_rate_msps not in cls.SCIENCE_SAMPLE_RATES:
-            raise ValueError("Stage 33 complex sample-rate setting must be 160 or 320 MS/s")
+            raise ValueError("Stage 34 complex sample-rate setting must be 160 or 320 MS/s")
         half_rate_hz = float(cls.SCIENCE_SAMPLE_RATES[sample_rate_msps]["sample_rate_hz"]) / 2.0
         return half_rate_hz, cls.RF_FIRST_NYQUIST_MAX_HZ - half_rate_hz
 
@@ -884,10 +1113,10 @@ class T510FEngine:
     ) -> None:
         if int(rfdc_complex_sample_rate_hz) != self.RFDC_COMPLEX_SAMPLE_RATE_HZ:
             raise ValueError(
-                "Stage 33 RFDC complex sample rate must be 320 MS/s"
+                "Stage 34 RFDC complex sample rate must be 320 MS/s"
             )
         if int(decimation) != self.RFDC_DECIMATION:
-            raise ValueError("Stage 33 ADC decimation must be 12")
+            raise ValueError("Stage 34 ADC decimation must be 12")
         self.ctrl.write(self.regs.SAMPLE_RATE_HZ, rfdc_complex_sample_rate_hz)
         self.rfdc_config = {
             "rfdc_complex_sample_rate_hz": rfdc_complex_sample_rate_hz,
@@ -1131,11 +1360,16 @@ class T510FEngine:
                         )
                     result["tiles"].append(tile_row)
                     for block_idx, block in enumerate(self._iter_rfdc_blocks(tile)):
+                        physical_block_idx = int(getattr(block, "_index", block_idx))
                         try:
                             mixer_settings = dict(getattr(block, "MixerSettings"))
                         except Exception:
                             continue
-                        row: dict[str, Any] = {"kind": kind, "tile": tile_idx, "block": block_idx}
+                        row: dict[str, Any] = {
+                            "kind": kind,
+                            "tile": tile_idx,
+                            "block": physical_block_idx,
+                        }
                         try:
                             row["mixer_frequency_mhz"] = float(mixer_settings["Freq"])
                         except (KeyError, TypeError, ValueError) as exc:
@@ -1147,16 +1381,16 @@ class T510FEngine:
                             row["factor"] = int(getattr(block, factor_name))
                             row["nyquist_zone"] = int(getattr(block, "NyquistZone"))
                         except Exception as exc:
-                            result["errors"].append(f"{kind}[{tile_idx}].block[{block_idx}] readback failed: {exc}")
+                            result["errors"].append(f"{kind}[{tile_idx}].block[{physical_block_idx}] readback failed: {exc}")
                             result["blocks"].append(row)
                             continue
                         if row["factor"] != expected_factor[kind]:
                             result["errors"].append(
-                                f"{kind}[{tile_idx}].block[{block_idx}] factor expected {expected_factor[kind]}, read {row['factor']}"
+                                f"{kind}[{tile_idx}].block[{physical_block_idx}] factor expected {expected_factor[kind]}, read {row['factor']}"
                             )
                         if row["nyquist_zone"] != 1:
                             result["errors"].append(
-                                f"{kind}[{tile_idx}].block[{block_idx}] NyquistZone expected 1, read {row['nyquist_zone']}"
+                                f"{kind}[{tile_idx}].block[{physical_block_idx}] NyquistZone expected 1, read {row['nyquist_zone']}"
                             )
                         result["blocks"].append(row)
         adc_blocks = sum(1 for row in result["blocks"] if row["kind"] == "adc")
@@ -1166,7 +1400,7 @@ class T510FEngine:
             result["errors"].append(f"expected 8 ADC and 8 DAC blocks, read ADC={adc_blocks} DAC={dac_blocks}")
         result["ok"] = not result["errors"]
         if require and not result["ok"]:
-            raise RuntimeError(f"RFDC_STAGE33_CONTRACT_FAILED: {result['errors']}")
+            raise RuntimeError(f"RFDC_STAGE34_CONTRACT_FAILED: {result['errors']}")
         return result
 
     @staticmethod
@@ -1342,6 +1576,540 @@ class T510FEngine:
         if getattr(self.rfdc, "_instance", None) is None:
             raise RuntimeError("RFDC_MTS_SHIM_UNAVAILABLE: RFdc object has no _instance pointer")
         return ffi, lib
+
+    def _ensure_rfdc_calibration_cffi(self) -> tuple[Any, Any]:
+        """Return the vendor CFFI handles required for ADC calibration control.
+
+        PYNQ 3.0 exposes ``CalFreeze`` as a block property, but using the
+        underlying libxrfdc calls here gives us explicit return-code checking
+        for an atomic all-eight-channel transaction.  The structures are part
+        of PYNQ's generated ``xrfdc_functions.c`` cdef; no private register
+        offsets are used.
+        """
+
+        if self.rfdc is None:
+            raise RuntimeError("RFDC_CALIBRATION_UNAVAILABLE: RFDC handle is unavailable")
+        try:
+            import xrfdc  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                f"RFDC_CALIBRATION_UNAVAILABLE: xrfdc import failed: {exc}"
+            ) from exc
+        ffi = getattr(xrfdc, "_ffi", None)
+        lib = getattr(xrfdc, "_lib", None)
+        if ffi is None or lib is None:
+            raise RuntimeError(
+                "RFDC_CALIBRATION_UNAVAILABLE: xrfdc._ffi/_lib are not available"
+            )
+        missing = [
+            name
+            for name in (
+                "XRFdc_SetCalFreeze",
+                "XRFdc_GetCalFreeze",
+                "XRFdc_GetCalCoefficients",
+                "XRFdc_SetCalCoefficients",
+                "XRFdc_DisableCoefficientsOverride",
+            )
+            if not hasattr(lib, name)
+        ]
+        if missing:
+            raise RuntimeError(
+                f"RFDC_CALIBRATION_UNAVAILABLE: libxrfdc missing symbols {missing}"
+            )
+        for type_name in (
+            "XRFdc_Cal_Freeze_Settings*",
+            "XRFdc_Calibration_Coefficients*",
+        ):
+            try:
+                ffi.typeof(type_name)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"RFDC_CALIBRATION_UNAVAILABLE: xrfdc CFFI lacks {type_name}"
+                ) from exc
+        if getattr(self.rfdc, "_instance", None) is None:
+            raise RuntimeError(
+                "RFDC_CALIBRATION_UNAVAILABLE: RFdc object has no _instance pointer"
+            )
+        return ffi, lib
+
+    def _adc_calibration_blocks(self) -> list[tuple[int, int]]:
+        if self.rfdc is None:
+            raise RuntimeError("RFDC_CALIBRATION_UNAVAILABLE: RFDC handle is unavailable")
+        contract = self.read_rfdc_contract(require=True)
+        blocks = sorted(
+            (int(row["tile"]), int(row["block"]))
+            for row in contract["blocks"]
+            if row.get("kind") == "adc"
+        )
+        if len(blocks) != 8:
+            raise RuntimeError(
+                "RFDC_CALIBRATION_UNAVAILABLE: Stage 34 requires exactly eight active "
+                f"ADC blocks, observed {len(blocks)} ({blocks})"
+            )
+        return blocks
+
+    @staticmethod
+    def _calibration_coefficient_hashes(channels: list[dict[str, Any]]) -> dict[str, str]:
+        names = ("ocb1", "ocb2", "gcb", "tscb")
+        per_kind = {name: hashlib.sha256() for name in names}
+        combined = hashlib.sha256()
+        for channel in channels:
+            for name in names:
+                for value in channel["coefficients"][name]:
+                    encoded = struct.pack("<I", int(value) & 0xFFFF_FFFF)
+                    per_kind[name].update(encoded)
+                    combined.update(encoded)
+        return {
+            **{name: digest.hexdigest() for name, digest in per_kind.items()},
+            "all": combined.hexdigest(),
+        }
+
+    @staticmethod
+    def _ocb1_diagnostics(raw_coefficients: Iterable[int]) -> dict[str, Any]:
+        """Expose the eight signed OCB1 values and their interleave DFT.
+
+        The driver ABI stores each coefficient in a u32 field.  OCB1 is a
+        signed 16-bit value in the low half; retaining both forms makes the
+        write/readback proof bit-exact while the signed view remains useful to
+        humans and correlation analysis.
+        """
+
+        raw = [int(value) & 0xFFFF_FFFF for value in raw_coefficients]
+        signed = [
+            (value & 0xFFFF) - (0x10000 if value & 0x8000 else 0)
+            for value in raw
+        ]
+        if len(signed) != 8:
+            raise ValueError(f"OCB1 requires eight coefficients, observed {len(signed)}")
+        dft = []
+        for k in range(1, 5):
+            real = sum(
+                value * math.cos(-2.0 * math.pi * k * index / 8.0)
+                for index, value in enumerate(signed)
+            )
+            imag = sum(
+                value * math.sin(-2.0 * math.pi * k * index / 8.0)
+                for index, value in enumerate(signed)
+            )
+            dft.append(
+                {
+                    "k": k,
+                    "real": real,
+                    "imag": imag,
+                    "magnitude": math.hypot(real, imag),
+                    "phase_deg": math.degrees(math.atan2(imag, real)),
+                }
+            )
+        return {"raw_u32": raw, "signed16": signed, "dft": dft}
+
+    def read_adc_calibration_status(
+        self,
+        *,
+        require: bool = False,
+        _blocks: Optional[list[tuple[int, int]]] = None,
+    ) -> dict[str, Any]:
+        """Read freeze state and all four calibration coefficient banks.
+
+        Logical ADC numbering is the existing tile-major, active-block-major
+        Stage 34 ordering: tile0/block0, tile0/block1, ... tile3/block1.
+        """
+
+        try:
+            ffi, lib = self._ensure_rfdc_calibration_cffi()
+            instance = getattr(self.rfdc, "_instance")
+            channels: list[dict[str, Any]] = []
+            coefficient_kinds = (("ocb1", 0), ("ocb2", 1), ("gcb", 2), ("tscb", 3))
+            frozen_mask = 0
+            requested_mask = 0
+            software_owned_mask = 0
+            blocks = self._adc_calibration_blocks() if _blocks is None else list(_blocks)
+            if len(blocks) != 8:
+                raise RuntimeError(
+                    f"RFDC_CALIBRATION_UNAVAILABLE: expected 8 cached ADC blocks, got {blocks}"
+                )
+            for logical_adc, (tile, block) in enumerate(blocks):
+                freeze = ffi.new("XRFdc_Cal_Freeze_Settings*")
+                status = int(lib.XRFdc_GetCalFreeze(instance, tile, block, freeze))
+                if status != 0:
+                    raise RuntimeError(
+                        f"XRFdc_GetCalFreeze adc{logical_adc} tile={tile} block={block} returned {status}"
+                    )
+                cal_frozen = bool(int(freeze.CalFrozen))
+                freeze_requested = bool(int(freeze.FreezeCalibration))
+                disable_freeze_pin = bool(int(freeze.DisableFreezePin))
+                frozen_mask |= int(cal_frozen) << logical_adc
+                requested_mask |= int(freeze_requested) << logical_adc
+                software_owned_mask |= int(disable_freeze_pin) << logical_adc
+                coefficients: dict[str, list[int]] = {}
+                for name, calibration_block in coefficient_kinds:
+                    coeff = ffi.new("XRFdc_Calibration_Coefficients*")
+                    status = int(
+                        lib.XRFdc_GetCalCoefficients(
+                            instance, tile, block, calibration_block, coeff
+                        )
+                    )
+                    if status != 0:
+                        raise RuntimeError(
+                            f"XRFdc_GetCalCoefficients {name} adc{logical_adc} "
+                            f"tile={tile} block={block} returned {status}"
+                        )
+                    coefficients[name] = [
+                        int(getattr(coeff, f"Coeff{index}")) & 0xFFFF_FFFF
+                        for index in range(8)
+                    ]
+                channels.append(
+                    {
+                        "adc": logical_adc,
+                        "tile": tile,
+                        "block": block,
+                        "cal_frozen": cal_frozen,
+                        "disable_freeze_pin": disable_freeze_pin,
+                        "freeze_calibration": freeze_requested,
+                        "coefficients": coefficients,
+                        "ocb1_diagnostics": self._ocb1_diagnostics(
+                            coefficients["ocb1"]
+                        ),
+                    }
+                )
+            return {
+                "supported": True,
+                "frozen_adc_mask": frozen_mask,
+                "requested_freeze_mask": requested_mask,
+                "software_owned_mask": software_owned_mask,
+                "channels": channels,
+                "coefficient_sha256": self._calibration_coefficient_hashes(channels),
+            }
+        except Exception as exc:
+            if require:
+                raise
+            return {
+                "supported": False,
+                "frozen_adc_mask": 0,
+                "requested_freeze_mask": 0,
+                "software_owned_mask": 0,
+                "channels": [],
+                "coefficient_sha256": {},
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    def set_adc_ocb1_snapshot_override(self) -> dict[str, Any]:
+        """Snapshot all eight OCB1 banks and write the same values back once."""
+
+        ffi, lib = self._ensure_rfdc_calibration_cffi()
+        instance = getattr(self.rfdc, "_instance")
+        blocks = self._adc_calibration_blocks()
+        before = self.read_adc_calibration_status(require=True, _blocks=blocks)
+        expected = [
+            [int(value) & 0xFFFF_FFFF for value in row["coefficients"]["ocb1"]]
+            for row in before["channels"]
+        ]
+        calls: list[dict[str, int]] = []
+
+        def release_all() -> list[dict[str, int]]:
+            releases = []
+            for logical_adc, (tile, block) in enumerate(blocks):
+                status = int(
+                    lib.XRFdc_DisableCoefficientsOverride(instance, tile, block, 0)
+                )
+                releases.append(
+                    {"adc": logical_adc, "tile": tile, "block": block, "status": status}
+                )
+                if status != 0:
+                    raise RuntimeError(
+                        "XRFdc_DisableCoefficientsOverride "
+                        f"adc{logical_adc} tile={tile} block={block} returned {status}"
+                    )
+            return releases
+
+        try:
+            for logical_adc, (tile, block) in enumerate(blocks):
+                coeff = ffi.new("XRFdc_Calibration_Coefficients*")
+                for index, value in enumerate(expected[logical_adc]):
+                    setattr(coeff, f"Coeff{index}", value)
+                status = int(
+                    lib.XRFdc_SetCalCoefficients(instance, tile, block, 0, coeff)
+                )
+                calls.append(
+                    {"adc": logical_adc, "tile": tile, "block": block, "status": status}
+                )
+                if status != 0:
+                    raise RuntimeError(
+                        f"XRFdc_SetCalCoefficients adc{logical_adc} tile={tile} "
+                        f"block={block} returned {status}; calls={calls}"
+                    )
+            after = self.read_adc_calibration_status(require=True, _blocks=blocks)
+            actual = [
+                [int(value) & 0xFFFF_FFFF for value in row["coefficients"]["ocb1"]]
+                for row in after["channels"]
+            ]
+            if actual != expected:
+                raise RuntimeError(
+                    f"RFDC_OCB1_READBACK_MISMATCH: expected={expected} actual={actual}"
+                )
+            if int(after["frozen_adc_mask"]) != 0:
+                raise RuntimeError(
+                    "RFDC_OCB1_FREEZE_CONFLICT: GCB/TSCB freeze mask changed while "
+                    "installing OCB1 snapshot"
+                )
+            return {
+                "override_adc_mask": 0xFF,
+                "calls": calls,
+                "snapshot_sha256": before["coefficient_sha256"]["ocb1"],
+                "current_sha256": after["coefficient_sha256"]["ocb1"],
+                "channels": [
+                    {
+                        "adc": row["adc"],
+                        "tile": row["tile"],
+                        "block": row["block"],
+                        **row["ocb1_diagnostics"],
+                    }
+                    for row in after["channels"]
+                ],
+                "calibration": after,
+            }
+        except Exception as original:
+            rollback_errors: list[str] = []
+            try:
+                release_all()
+            except Exception as rollback:
+                rollback_errors.append(f"{type(rollback).__name__}: {rollback}")
+            raise RuntimeError(
+                f"RFDC_OCB1_ATOMIC_OVERRIDE_FAILED: {original}; "
+                f"rollback_errors={rollback_errors}"
+            ) from original
+
+    def release_adc_ocb1_override(self) -> dict[str, Any]:
+        """Disable the OCB1 override on every active ADC block."""
+
+        ffi, lib = self._ensure_rfdc_calibration_cffi()
+        instance = getattr(self.rfdc, "_instance")
+        blocks = self._adc_calibration_blocks()
+        calls = []
+        errors = []
+        for logical_adc, (tile, block) in enumerate(blocks):
+            try:
+                status = int(
+                    lib.XRFdc_DisableCoefficientsOverride(instance, tile, block, 0)
+                )
+            except Exception as exc:
+                status = -1
+                errors.append(f"adc{logical_adc}:{type(exc).__name__}:{exc}")
+            calls.append(
+                {"adc": logical_adc, "tile": tile, "block": block, "status": status}
+            )
+            if status != 0 and not errors:
+                errors.append(f"adc{logical_adc}:status={status}")
+        if errors:
+            raise RuntimeError(f"RFDC_OCB1_RELEASE_FAILED: {errors}; calls={calls}")
+        return {
+            "override_adc_mask": 0,
+            "calls": calls,
+            "calibration": self.read_adc_calibration_status(
+                require=True, _blocks=blocks
+            ),
+        }
+
+    def wait_adc_calibration_convergence(
+        self,
+        *,
+        poll_hz: float = 5.0,
+        stable_seconds: float = 2.0,
+        timeout_seconds: float = 30.0,
+        median_delta_lsb: int | None = None,
+        p95_delta_lsb: int | None = None,
+        max_delta_lsb: int = 32,
+    ) -> dict[str, Any]:
+        """Wait until GCB/TSCB background adaptation becomes stationary.
+
+        GCB and TSCB remain adaptive until explicitly frozen, so requiring all
+        256 sub-coefficients to stop changing is not a physically meaningful
+        convergence test.  We instead bound the typical update (median), the
+        tail (p95), and any single outlier over a continuous time window.
+        """
+
+        poll_hz = float(poll_hz)
+        stable_seconds = float(stable_seconds)
+        timeout_seconds = float(timeout_seconds)
+        max_delta_lsb = int(max_delta_lsb)
+        p95_delta_lsb = min(4, max_delta_lsb) if p95_delta_lsb is None else int(p95_delta_lsb)
+        median_delta_lsb = (
+            min(1, p95_delta_lsb)
+            if median_delta_lsb is None
+            else int(median_delta_lsb)
+        )
+        if poll_hz <= 0.0 or stable_seconds <= 0.0 or timeout_seconds <= 0.0:
+            raise ValueError("calibration convergence timing values must be positive")
+        if min(median_delta_lsb, p95_delta_lsb, max_delta_lsb) < 0:
+            raise ValueError("calibration convergence LSB limits must be non-negative")
+        if not median_delta_lsb <= p95_delta_lsb <= max_delta_lsb:
+            raise ValueError("calibration convergence limits must satisfy median <= p95 <= max")
+        blocks = self._adc_calibration_blocks()
+        interval = 1.0 / poll_hz
+        required_samples = max(2, int(math.ceil(stable_seconds * poll_hz)) + 1)
+        deadline = time.monotonic() + timeout_seconds
+        previous: list[tuple[int, int]] | None = None
+        stable_samples = 0
+        trace: list[dict[str, Any]] = []
+        started = time.monotonic()
+        last_snapshot: dict[str, Any] | None = None
+        while True:
+            sampled_at = time.monotonic()
+            snapshot = self.read_adc_calibration_status(
+                require=True,
+                _blocks=blocks,
+            )
+            values: list[tuple[int, int]] = []
+            for channel in snapshot["channels"]:
+                for name, width in (("gcb", 12), ("tscb", 9)):
+                    mask = (1 << width) - 1
+                    sign = 1 << (width - 1)
+                    for packed in channel["coefficients"][name]:
+                        # libxrfdc returns two signed calibration coefficients
+                        # packed into the low/high 16-bit halves of each u32
+                        # Coeff field.  Comparing the packed u32 directly turns
+                        # a one-LSB high-half update into a false 65536-LSB jump.
+                        for shift in (0, 16):
+                            raw = (int(packed) >> shift) & mask
+                            signed = raw - (1 << width) if raw & sign else raw
+                            values.append((signed, width))
+            deltas = (
+                []
+                if previous is None
+                else [
+                    _calibration_circular_delta(left, right, width)
+                    for (left, left_width), (right, width) in zip(previous, values)
+                    if left_width == width
+                ]
+            )
+            max_delta = max(deltas, default=None)
+            median_delta = _nearest_rank_percentile(deltas, 0.50) if deltas else None
+            p95_delta = _nearest_rank_percentile(deltas, 0.95) if deltas else None
+            stable_update = bool(
+                deltas
+                and median_delta is not None
+                and p95_delta is not None
+                and max_delta is not None
+                and median_delta <= median_delta_lsb
+                and p95_delta <= p95_delta_lsb
+                and max_delta <= max_delta_lsb
+            )
+            if stable_update:
+                stable_samples += 1
+            else:
+                # The current sample is the baseline for the next continuous
+                # interval, even when the preceding update was outside limits.
+                stable_samples = 1
+            trace.append(
+                {
+                    "elapsed_seconds": sampled_at - started,
+                    "median_delta_lsb": median_delta,
+                    "p95_delta_lsb": p95_delta,
+                    "max_delta_lsb": max_delta,
+                    "stable_samples": stable_samples,
+                    "gcb_sha256": snapshot["coefficient_sha256"]["gcb"],
+                    "tscb_sha256": snapshot["coefficient_sha256"]["tscb"],
+                }
+            )
+            previous = values
+            last_snapshot = snapshot
+            if stable_samples >= required_samples:
+                return {
+                    "converged": True,
+                    "poll_hz": poll_hz,
+                    "stable_seconds": stable_seconds,
+                    "required_samples": required_samples,
+                    "limits_lsb": {
+                        "median": median_delta_lsb,
+                        "p95": p95_delta_lsb,
+                        "max": max_delta_lsb,
+                    },
+                    "elapsed_seconds": time.monotonic() - started,
+                    "trace": trace,
+                    "snapshot": last_snapshot,
+                }
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "RFDC_CALIBRATION_CONVERGENCE_TIMEOUT: GCB/TSCB updates did not "
+                    f"remain within median/p95/max={median_delta_lsb}/"
+                    f"{p95_delta_lsb}/{max_delta_lsb} LSB for {stable_seconds}s; "
+                    f"trace={trace}"
+                )
+            time.sleep(max(0.0, interval - (time.monotonic() - sampled_at)))
+    def set_adc_calibration_freeze(self, freeze: bool) -> dict[str, Any]:
+        """Atomically request one freeze state on all eight logical ADCs.
+
+        A failed write or readback triggers a best-effort all-channel unfreeze.
+        The original exception is retained together with rollback failures.
+        """
+
+        ffi, lib = self._ensure_rfdc_calibration_cffi()
+        instance = getattr(self.rfdc, "_instance")
+        blocks = self._adc_calibration_blocks()
+
+        def apply(value: bool) -> list[dict[str, int]]:
+            calls: list[dict[str, int]] = []
+            for logical_adc, (tile, block) in enumerate(blocks):
+                settings = ffi.new("XRFdc_Cal_Freeze_Settings*")
+                settings.CalFrozen = 0
+                settings.DisableFreezePin = 1
+                settings.FreezeCalibration = 1 if value else 0
+                status = int(
+                    lib.XRFdc_SetCalFreeze(instance, tile, block, settings)
+                )
+                calls.append(
+                    {
+                        "adc": logical_adc,
+                        "tile": tile,
+                        "block": block,
+                        "status": status,
+                    }
+                )
+                if status != 0:
+                    raise RuntimeError(
+                        f"XRFdc_SetCalFreeze adc{logical_adc} tile={tile} "
+                        f"block={block} returned {status}; calls={calls}"
+                    )
+            return calls
+
+        try:
+            calls = apply(bool(freeze))
+            readback = self.read_adc_calibration_status(require=True)
+            expected_mask = 0xFF if freeze else 0x00
+            if int(readback["frozen_adc_mask"]) != expected_mask:
+                raise RuntimeError(
+                    "RFDC_CALIBRATION_READBACK_MISMATCH: expected frozen mask "
+                    f"0x{expected_mask:02x}, read 0x{int(readback['frozen_adc_mask']):02x}"
+                )
+            if int(readback["requested_freeze_mask"]) != expected_mask:
+                raise RuntimeError(
+                    "RFDC_CALIBRATION_READBACK_MISMATCH: expected requested mask "
+                    f"0x{expected_mask:02x}, read 0x{int(readback['requested_freeze_mask']):02x}"
+                )
+            if int(readback["software_owned_mask"]) != 0xFF:
+                raise RuntimeError(
+                    "RFDC_CALIBRATION_READBACK_MISMATCH: software ownership mask "
+                    f"is 0x{int(readback['software_owned_mask']):02x}, expected 0xff"
+                )
+            return {"requested_freeze": bool(freeze), "calls": calls, **readback}
+        except Exception as original:
+            rollback_errors: list[str] = []
+            try:
+                apply(False)
+            except Exception as rollback:
+                rollback_errors.append(f"{type(rollback).__name__}: {rollback}")
+            try:
+                rollback_status = self.read_adc_calibration_status(require=True)
+                if int(rollback_status["frozen_adc_mask"]) != 0:
+                    rollback_errors.append(
+                        "rollback readback frozen mask is "
+                        f"0x{int(rollback_status['frozen_adc_mask']):02x}"
+                    )
+            except Exception as rollback:
+                rollback_errors.append(f"{type(rollback).__name__}: {rollback}")
+            raise RuntimeError(
+                f"RFDC_CALIBRATION_ATOMIC_UPDATE_FAILED: {original}; "
+                f"rollback_errors={rollback_errors}"
+            ) from original
 
     def _new_mts_config(self, ffi: Any, lib: Any, *, tiles: int, ref_tile: int, target_latency: int) -> tuple[Any, dict[str, Any]]:
         config = ffi.new("XRFdc_MultiConverter_Sync_Config*")
@@ -2256,6 +3024,7 @@ class T510FEngine:
         dac_source_mode: str = "constant_phasor",
         input_source_mode: str = "dac_loopback",
         clock_ref: str = PRODUCTION_CLOCK_REF,
+        clock_profile: str = PRODUCTION_CLOCK_PROFILE,
         sync_mode: str = PRODUCTION_SYNC_MODE,
         rfdc_mixer_sequence: str = "sysref_reset_before_pulse",
     ) -> dict[str, Any]:
@@ -2286,7 +3055,7 @@ class T510FEngine:
             and abs(dac_signal_hz - observe_center_hz) > 1.0
         ):
             raise ValueError(
-                "Stage 33 constant_phasor requires dac_signal_hz to equal "
+                "Stage 34 constant_phasor requires dac_signal_hz to equal "
                 "observe_center_hz; use single_tone for an offset signal"
             )
 
@@ -2301,12 +3070,22 @@ class T510FEngine:
             clock = self.clock.read_status(include_registers=False)
             status_ref = str(clock.get("selected_ref", clock.get("ref", "")))
             if bool(force_clock_reconfigure) or not bool(clock.get("configured", False)) or status_ref != str(clock_ref):
-                clock = self.configure_clock(ref=str(clock_ref))
+                clock = self.configure_clock(
+                    ref=str(clock_ref), profile=str(clock_profile)
+                )
                 clock_recovery["clock_reconfigured"] = True
                 if bool(clock.get("configured", False)):
                     settle_seconds = float(self.RFDC_CLOCK_RECOVERY_SETTLE_SECONDS)
                     time.sleep(settle_seconds)
                     clock_recovery["settle_seconds"] = settle_seconds
+                    if str(clock.get("sysref_policy")) == "mts_only":
+                        # This RFDC generation's restart sequencer reaches a
+                        # SYSREF wait at state 6.  Keep request-mode SYSREF on
+                        # across tile Reset; the MTS sequence below owns the
+                        # final synchronized deassertion.
+                        clock_recovery["sysref_request_for_tile_reset"] = (
+                            self.clock.set_sysref(True)
+                        )
                     clock_recovery["tile_reset_calls"] = self.reset_all_rfdc_tiles()
             else:
                 self._write_sync_config(clock_ref=self.CLOCK_REFS[str(clock_ref)])
@@ -2325,7 +3104,7 @@ class T510FEngine:
         dac_tone_mode = (
             "constant_phasor"
             if dac_source_mode == "constant_phasor"
-            else self.STAGE33_DAC_TONE_MODE
+            else self.STAGE34_DAC_TONE_MODE
         )
 
         self.configure_rfdc(
@@ -2400,6 +3179,7 @@ class T510FEngine:
             "enable_mask": int(enable_mask),
             "adc_active_mask": int(adc_active_mask),
             "clock_ref": str(clock_ref),
+            "clock_profile": str(clock_profile),
             "sync_mode": str(sync_mode),
             "rfdc_mixer_sequence": str(rfdc_mixer_sequence),
             "clock": dict(clock) if isinstance(clock, Mapping) else clock,
@@ -2700,7 +3480,7 @@ class T510FEngine:
         except Exception as exc:
             raise ValueError(f"Unsupported science sample rate: {sample_rate_msps!r}") from exc
         if value not in cls.SCIENCE_SAMPLE_RATES:
-            raise ValueError("Stage 33 complex sample-rate setting must be 160 or 320 MS/s")
+            raise ValueError("Stage 34 complex sample-rate setting must be 160 or 320 MS/s")
         return value
 
     @classmethod
@@ -2710,7 +3490,7 @@ class T510FEngine:
             if code not in cls.SCIENCE_OUTPUT_MODE_NAMES:
                 raise ValueError("science output mode code must be in range 0..4")
             if code == 4:
-                raise ValueError("Stage 33 does not support TIME_MONITOR_SPEC")
+                raise ValueError("Stage 34 does not support TIME_MONITOR_SPEC")
             return cls.SCIENCE_OUTPUT_MODE_NAMES[code], code
         key = str(output_mode).strip().lower().replace("-", "_").replace(" ", "_")
         if key not in cls.SCIENCE_OUTPUT_MODES:
@@ -2720,7 +3500,7 @@ class T510FEngine:
             )
         code = int(cls.SCIENCE_OUTPUT_MODES[key])
         if code == 4:
-            raise ValueError("Stage 33 does not support TIME_MONITOR_SPEC")
+            raise ValueError("Stage 34 does not support TIME_MONITOR_SPEC")
         return cls.SCIENCE_OUTPUT_MODE_NAMES[code], code
 
     @classmethod
@@ -2884,6 +3664,7 @@ class T510FEngine:
         cmac_enable: bool = False,
         clear_counters: bool = False,
         apply_stream_mode: bool = True,
+        validate_live_ready: bool = True,
     ) -> dict[str, Any]:
         estimate = self.estimate_science_payload_rate(sample_rate_msps, output_mode)
         if not estimate["allowed"]:
@@ -2927,7 +3708,7 @@ class T510FEngine:
         cmac = self.read_cmac_status()
         live_requested = bool(cmac_enable and not force_dry_run)
         blockers = list(status.get("science_block_reasons", []))
-        if live_requested:
+        if live_requested and validate_live_ready:
             if not bool(cmac.get("cmac_live_ready", False)):
                 blockers.append("CMAC_LINK_NOT_READY")
             if output_code in (2, 3) and not bool(status.get("spec_science_ready", False)):
@@ -3270,12 +4051,12 @@ class T510FEngine:
         }
 
     @staticmethod
-    def generate_default_pfb_coefficients(*, nchan: int = 4096, taps: int = 4) -> list[int]:
-        """Generate tap-major 4-tap Hamming-windowed sinc PFB coefficients in signed Q1.17."""
+    def generate_default_pfb_coefficients(*, nchan: int = 4096, taps: int = 8) -> list[int]:
+        """Generate the fixed tap-major 8-tap Hamming PFB profile in signed Q1.17."""
         if int(nchan) != 4096:
             raise ValueError("default coefficients require nchan=4096")
-        if int(taps) != 4:
-            raise ValueError("the current PFB supports exactly 4 taps")
+        if int(taps) != 8:
+            raise ValueError("the current PFB supports exactly 8 taps")
         total = int(nchan) * int(taps)
         center = (total - 1) / 2.0
         coeff_by_tap = [[0 for _ in range(int(nchan))] for _ in range(int(taps))]
@@ -3319,42 +4100,48 @@ class T510FEngine:
         return [coeff_by_tap[tap][phase] for tap in range(int(taps)) for phase in range(int(nchan))]
 
     @staticmethod
-    def pfb_coefficients_checksum(coefficients: Iterable[int]) -> int:
-        checksum = 0
+    def pfb_coefficients_crc32(coefficients: Iterable[int]) -> int:
+        """Return IEEE/zlib CRC32 over tap-major little-endian coefficient words."""
+        crc32 = 0
         count = 0
         for coeff in coefficients:
             value = int(coeff)
             if value < -131_072 or value > 131_071:
                 raise ValueError(f"PFB coefficient {count} out of signed Q1.17 range: {value}")
-            checksum = (checksum + value) & 0xFFFF_FFFF
+            crc32 = zlib.crc32((value & 0x3FFFF).to_bytes(4, "little"), crc32)
             count += 1
-        if count != 16_384:
-            raise ValueError(f"current 4-tap PFB requires 16384 coefficients, got {count}")
-        return checksum
+        if count != 32_768:
+            raise ValueError(f"current 8-tap PFB requires 32768 coefficients, got {count}")
+        return crc32 & 0xFFFF_FFFF
+
+    @staticmethod
+    def pfb_coefficients_checksum(coefficients: Iterable[int]) -> int:
+        """Deprecated compatibility alias for :meth:`pfb_coefficients_crc32`."""
+        return T510FEngine.pfb_coefficients_crc32(coefficients)
 
     def load_pfb_coefficients(
         self,
         coefficients: Iterable[int] | None = None,
         *,
-        coeff_id: int = 0x27A4_0001,
+        coeff_id: int = 0x34A8_0001,
         stop_first: bool = True,
         verify: bool = True,
         settle_s: float = 0.01,
     ) -> dict[str, Any]:
-        """Load current 4-tap PFB coefficients into the shadow bank and commit while idle."""
+        """Load the fixed 8-tap PFB profile into the shadow bank and commit while idle."""
         coeffs = list(coefficients) if coefficients is not None else self.generate_default_pfb_coefficients()
-        checksum = self.pfb_coefficients_checksum(coeffs)
+        crc32 = self.pfb_coefficients_crc32(coeffs)
         if stop_first:
             self.stop()
             time.sleep(max(float(settle_s), 0.0))
         self.ctrl.write(self.regs.PFB_COEFF_ID, int(coeff_id) & 0xFFFF_FFFF)
-        self.ctrl.write(self.regs.PFB_COEFF_CONTROL, (4 << 4) | (1 << 3) | 0x1)
+        self.ctrl.write(self.regs.PFB_COEFF_CONTROL, (8 << 4) | (1 << 3) | 0x1)
         self.ctrl.write(self.regs.PFB_COEFF_INDEX, 0)
         for coeff in coeffs:
             self.ctrl.write(self.regs.PFB_COEFF_DATA, int(coeff) & 0x3FFFF)
         loaded_count = int(self.ctrl.read(self.regs.PFB_COEFF_LOADED_COUNT))
         status_before_commit = self.read_channelizer_status()
-        self.ctrl.write(self.regs.PFB_COEFF_CONTROL, (4 << 4) | (1 << 3) | 0x2)
+        self.ctrl.write(self.regs.PFB_COEFF_CONTROL, (8 << 4) | (1 << 3) | 0x2)
         deadline = time.monotonic() + 2.0
         status_after_commit = self.read_channelizer_status()
         while time.monotonic() < deadline:
@@ -3363,24 +4150,25 @@ class T510FEngine:
                 break
             time.sleep(0.01)
         if verify:
-            if loaded_count != 16_384:
-                raise RuntimeError(f"PFB coefficient load count mismatch: {loaded_count} != 16384")
+            if loaded_count != 32_768:
+                raise RuntimeError(f"PFB coefficient load count mismatch: {loaded_count} != 32768")
             if not int(status_after_commit.get("pfb_coeff_active_valid", 0)):
                 raise RuntimeError("PFB coefficient commit did not make an active bank valid")
-            if int(status_after_commit.get("pfb_coeff_active_taps", 0)) != 4:
+            if int(status_after_commit.get("pfb_coeff_active_taps", 0)) != 8:
                 raise RuntimeError(f"PFB active taps mismatch: {status_after_commit.get('pfb_coeff_active_taps')}")
             if int(status_after_commit.get("pfb_coeff_active_id", 0)) != (int(coeff_id) & 0xFFFF_FFFF):
                 raise RuntimeError("PFB active coefficient id mismatch")
-            if int(status_after_commit.get("pfb_coeff_checksum", 0)) != checksum:
+            if int(status_after_commit.get("pfb_coeff_crc32", 0)) != crc32:
                 raise RuntimeError(
-                    f"PFB coefficient checksum mismatch: 0x{int(status_after_commit.get('pfb_coeff_checksum', 0)):08x} != 0x{checksum:08x}"
+                    f"PFB coefficient CRC32 mismatch: 0x{int(status_after_commit.get('pfb_coeff_crc32', 0)):08x} != 0x{crc32:08x}"
                 )
             if int(status_after_commit.get("pfb_coeff_error_count", 0)) != 0:
                 raise RuntimeError(f"PFB coefficient command errors: {status_after_commit.get('pfb_coeff_error_count')}")
         return {
             "coeff_id": int(coeff_id) & 0xFFFF_FFFF,
             "coeff_count": len(coeffs),
-            "checksum": checksum,
+            "crc32": crc32,
+            "checksum": crc32,
             "loaded_count": loaded_count,
             "status_before_commit": status_before_commit,
             "status_after_commit": status_after_commit,
@@ -3397,7 +4185,7 @@ class T510FEngine:
         src_mac: str = "02:00:00:00:00:01",
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Configure one of the five Stage 33 production profiles.
+        """Configure one of the five Stage 34 production profiles.
 
         Wire layout, port allocation, flow counts, PFB layout, synchronization
         policy, and diagnostic controls remain fixed.  The board-global CMAC
@@ -3415,7 +4203,7 @@ class T510FEngine:
         }
         if (sample_rate_msps, mode_code) not in allowed:
             raise ValueError(
-                "Stage 33 production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
+                "Stage 34 production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
                 "and 320MS/s TIME_ONLY/SPEC_ONLY"
             )
         normalized_src_ip = _normalize_unicast_ipv4(src_ip)
@@ -3430,10 +4218,10 @@ class T510FEngine:
         }
         supplied = sorted(forbidden.intersection(kwargs))
         if supplied:
-            raise ValueError(f"Stage 33 fixed production parameters cannot be overridden: {supplied}")
+            raise ValueError(f"Stage 34 fixed production parameters cannot be overridden: {supplied}")
         unexpected = sorted(set(kwargs).difference({"start", "clear_counters"}))
         if unexpected:
-            raise ValueError(f"unsupported Stage 33 production parameters: {unexpected}")
+            raise ValueError(f"unsupported Stage 34 production parameters: {unexpected}")
 
         start_requested = bool(kwargs.pop("start", True))
         result = self._configure_science_data_path(
@@ -3478,10 +4266,10 @@ class T510FEngine:
         if expects_spec:
             coeff_result = self.load_pfb_coefficients(
                 None,
-                coeff_id=0x28A4_0001,
+                coeff_id=0x34A8_0001,
                 stop_first=True,
             )
-            self.ctrl.write(self.regs.PFB_TAPS, 4)
+            self.ctrl.write(self.regs.PFB_TAPS, 8)
             self.ctrl.write(self.regs.PFB_FFT_SHIFT, self.FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT)
             self.ctrl.write(self.regs.PFB_CONTROL, 0x3)
         else:
@@ -3497,12 +4285,12 @@ class T510FEngine:
                 "science_status": self.read_science_output_status(),
                 "tx_status": self.read_tx_status(),
                 "channelizer_status": self.read_channelizer_status(),
-                "stage": 33,
-                "science_product": "FENGINE_IQ16_COMPLEX_VOLTAGE_4TAP_RTL_PFB",
+                "stage": 34,
+                "science_product": "FENGINE_IQ16_COMPLEX_VOLTAGE_8TAP_RTL_PFB",
                 "production_scope": dict(self.PRODUCTION_SCOPE),
-                "convergence_target": "STAGE33_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
+                "convergence_target": "STAGE34_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
                 "fengine_nchan": 4096,
-                "fengine_taps": 4 if expects_spec else None,
+                "fengine_taps": 8 if expects_spec else None,
                 "fengine_fft_shift": self.FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT if expects_spec else None,
                 "fft_only": False,
                 "pfb_coefficients": coeff_result,
@@ -3523,7 +4311,7 @@ class T510FEngine:
                     "ninput": 8,
                     "iq_bits": 16,
                     "payload_bytes": 8192,
-                    "pfb_taps": 4,
+                    "pfb_taps": 8,
                 },
                 "started": bool(start_requested),
             }
@@ -3590,8 +4378,8 @@ class T510FEngine:
         measurement_ready_timeout_s: float = 10.0,
         **config_kwargs: Any,
     ) -> dict[str, Any]:
-        """Run the Stage 33 board gate for any production profile."""
-        expected_core_version = 0x0001_0033
+        """Run the Stage 34 board gate for any production profile."""
+        expected_core_version = 0x0001_0034
         mode_name, mode_code = self._normalize_science_output_mode(output_mode)
         sample_rate_msps = self._normalize_science_sample_rate_msps(sample_rate_msps)
         allowed = {
@@ -3603,7 +4391,7 @@ class T510FEngine:
         }
         if (sample_rate_msps, mode_code) not in allowed:
             raise ValueError(
-                "Stage 33 production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
+                "Stage 34 production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
                 "and 320MS/s TIME_ONLY/SPEC_ONLY"
             )
 
@@ -3618,7 +4406,7 @@ class T510FEngine:
             )
             config_kwargs = {}
         elif config_kwargs:
-            raise ValueError(f"unused Stage 33 config kwargs when configure=False: {sorted(config_kwargs)}")
+            raise ValueError(f"unused Stage 34 config kwargs when configure=False: {sorted(config_kwargs)}")
 
         expects_time = mode_code in (
             self.SCIENCE_OUTPUT_MODES["time_only"],
@@ -3757,7 +4545,7 @@ class T510FEngine:
             if not int(science.get("fengine_science_valid", 0)):
                 errors.append("FENGINE_SCIENCE_NOT_VALID")
             for condition, label in (
-                (int(channelizer.get("pfb_taps", -1)) != 4, "PFB_TAPS_NOT_4"),
+                (int(channelizer.get("pfb_taps", -1)) != 8, "PFB_TAPS_NOT_8"),
                 (not int(channelizer.get("pfb_active", 0)), "PFB_NOT_ACTIVE"),
                 (not int(channelizer.get("pfb_coeff_active_valid", 0)), "PFB_COEFF_NOT_VALID"),
                 (int(channelizer.get("pfb_chan_count", 0)) != 256, "PFB_CHAN_COUNT_NOT_256"),
@@ -3773,12 +4561,12 @@ class T510FEngine:
 
         ok = not errors and not blockers
         return {
-            "classification": f"STAGE33_{sample_rate_msps}MSPS_{mode_name}_BOARD_{'PASS' if ok else 'FAIL'}",
+            "classification": f"STAGE34_{sample_rate_msps}MSPS_{mode_name}_BOARD_{'PASS' if ok else 'FAIL'}",
             "ok": ok,
             "full_science_validated": ok,
-            "stage": 33,
+            "stage": 34,
             "production_scope": dict(self.PRODUCTION_SCOPE),
-            "convergence_target": "STAGE33_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
+            "convergence_target": "STAGE34_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
             "host_receiver_required": True,
             "expected_core_version": f"0x{int(expected_core_version):08x}",
             "sample_rate_msps": sample_rate_msps,
@@ -3950,6 +4738,7 @@ class T510FEngine:
             for route_id in range(self.TX_TIME_ROUTE_COUNT):
                 self.ctrl.write(self.regs.TX_TIME_ROUTE_INDIRECT_INDEX, route_id)
                 self.ctrl.write(self.regs.TX_TIME_ROUTE_INDIRECT_CONTROL, 0)
+                self.ctrl.write(self.regs.TX_TIME_ROUTE_INDIRECT_INPUT_MASK, 0)
         for index, route in enumerate(routes):
             route_id = int(route.get("id", index))
             if not 0 <= route_id < self.TX_TIME_ROUTE_COUNT:
@@ -4241,7 +5030,7 @@ class T510FEngine:
         self,
         *,
         nchan: int = 4096,
-        taps: int = 4,
+        taps: int = 8,
         chan0: int = 0,
         chan_count: int = 256,
         time_count: int = 1,
@@ -4251,8 +5040,8 @@ class T510FEngine:
     ) -> dict[str, int]:
         if nchan != 4096:
             raise ValueError("current channelizer requires nchan=4096")
-        if taps != 4:
-            raise ValueError("current channelizer requires taps=4")
+        if taps != 8:
+            raise ValueError("current channelizer requires taps=8")
         if not 0 <= fft_shift <= 0xFFFF:
             raise ValueError("fft_shift must fit in 16 bits")
         if chan0 != 0 or chan_count != 256 or time_count != 1:
@@ -4299,7 +5088,7 @@ class T510FEngine:
             "pfb_coeff_status": int(self.ctrl.read(self.regs.PFB_COEFF_STATUS)),
             "pfb_coeff_loaded_count": int(self.ctrl.read(self.regs.PFB_COEFF_LOADED_COUNT)),
             "pfb_coeff_active_id": int(self.ctrl.read(self.regs.PFB_COEFF_ID)),
-            "pfb_coeff_checksum": int(self.ctrl.read(self.regs.PFB_COEFF_CHECKSUM)),
+            "pfb_coeff_crc32": int(self.ctrl.read(self.regs.PFB_COEFF_CRC32)),
             "pfb_coeff_error_count": int(self.ctrl.read(self.regs.PFB_COEFF_ERROR_COUNT)),
         }
         raw = status["pfb_status"]
@@ -4307,7 +5096,10 @@ class T510FEngine:
         status["pfb_config_valid"] = (raw >> 1) & 0x1
         status["pfb_output_valid"] = (raw >> 2) & 0x1
         status["pfb_overflow"] = (raw >> 3) & 0x1
-        status["pfb_window_active"] = (raw >> 4) & 0x1
+        status["pfb_busy"] = (raw >> 4) & 0x1
+        status["pfb_window_active"] = status["pfb_busy"]
+        status["fir_saturation_count"] = status["pfb_tile_overflow_count"]
+        status["pfb_coeff_checksum"] = status["pfb_coeff_crc32"]
         status["pfb_science_valid"] = (raw >> 5) & 0x1
         status["pfb_input_fifo_frame_ready"] = (raw >> 6) & 0x1
         status["pfb_data_halt_seen"] = (raw >> 7) & 0x1
@@ -4332,7 +5124,7 @@ class T510FEngine:
         status["pfb_coeff_shadow_bank"] = (coeff_status >> 7) & 0x1
         status["pfb_coeff_active_taps"] = (coeff_status >> 8) & 0xF
         status["pfb_active"] = int(
-            int(status["pfb_taps"]) >= 4
+            int(status["pfb_taps"]) == 8
             and int(status["pfb_science_valid"])
             and not int(status["pfb_fft_only"])
             and int(status["pfb_coeff_active_valid"])
@@ -4578,6 +5370,10 @@ class T510FEngine:
             "sync_config": self.regs.SYNC_CONFIG,
             "pps_count_lo": self.regs.PPS_COUNT_LO,
             "pps_count_hi": self.regs.PPS_COUNT_HI,
+            "sysref_capture_status": self.regs.SYSREF_CAPTURE_STATUS,
+            "sysref_pl_edge_count": self.regs.SYSREF_PL_EDGE_COUNT,
+            "sysref_adc_edge_count": self.regs.SYSREF_ADC_EDGE_COUNT,
+            "sysref_dac_edge_count": self.regs.SYSREF_DAC_EDGE_COUNT,
             "monitor_sample_count": self.regs.MONITOR_SAMPLE_COUNT,
             "spec_packet_count": self.regs.SPEC_PACKET_COUNT,
             "spec_udp_byte_count": self.regs.SPEC_UDP_BYTE_COUNT,
@@ -4652,7 +5448,8 @@ class T510FEngine:
             "pfb_coeff_status": self.regs.PFB_COEFF_STATUS,
             "pfb_coeff_loaded_count": self.regs.PFB_COEFF_LOADED_COUNT,
             "pfb_coeff_active_id": self.regs.PFB_COEFF_ID,
-            "pfb_coeff_checksum": self.regs.PFB_COEFF_CHECKSUM,
+            "pfb_coeff_crc32": self.regs.PFB_COEFF_CRC32,
+            "pfb_coeff_checksum": self.regs.PFB_COEFF_CRC32,
             "pfb_coeff_error_count": self.regs.PFB_COEFF_ERROR_COUNT,
             "tx_control": self.regs.TX_CONTROL,
             "tx_status": self.regs.TX_STATUS,
@@ -4683,6 +5480,9 @@ class T510FEngine:
         status["pps_status_ref_locked"] = (status["pps_status"] >> 1) & 0x1
         status["pps_status_count_nonzero"] = (status["pps_status"] >> 2) & 0x1
         status["ref_status_locked"] = status["ref_status"] & 0x1
+        status["sysref_pl_capture_level"] = status["sysref_capture_status"] & 0x1
+        status["sysref_adc_capture_level"] = (status["sysref_capture_status"] >> 1) & 0x1
+        status["sysref_dac_capture_level"] = (status["sysref_capture_status"] >> 2) & 0x1
         status["rfdc_sample_count"] = (
             int(self.ctrl.read(self.regs.RFDC_SAMPLE_COUNT_LO))
             | (int(self.ctrl.read(self.regs.RFDC_SAMPLE_COUNT_HI)) << 32)
@@ -4799,7 +5599,10 @@ class T510FEngine:
         status["pfb_config_valid"] = (pfb_status >> 1) & 0x1
         status["pfb_output_valid"] = (pfb_status >> 2) & 0x1
         status["pfb_overflow"] = (pfb_status >> 3) & 0x1
-        status["pfb_window_active"] = (pfb_status >> 4) & 0x1
+        status["pfb_busy"] = (pfb_status >> 4) & 0x1
+        status["pfb_window_active"] = status["pfb_busy"]
+        status["fir_saturation_count"] = status["pfb_tile_overflow_count"]
+        status["pfb_coeff_crc32"] = status["pfb_coeff_checksum"]
         status["pfb_science_valid"] = (pfb_status >> 5) & 0x1
         status["pfb_input_fifo_frame_ready"] = (pfb_status >> 6) & 0x1
         status["pfb_data_halt_seen"] = (pfb_status >> 7) & 0x1
@@ -4824,7 +5627,7 @@ class T510FEngine:
         status["pfb_coeff_shadow_bank"] = (pfb_coeff_status >> 7) & 0x1
         status["pfb_coeff_active_taps"] = (pfb_coeff_status >> 8) & 0xF
         status["pfb_active"] = int(
-            int(status["pfb_taps"]) >= 4
+            int(status["pfb_taps"]) == 8
             and int(status["pfb_science_valid"])
             and not int(status["pfb_fft_only"])
             and int(status["pfb_coeff_active_valid"])
@@ -4943,11 +5746,17 @@ class T510FEngine:
             time.sleep(0.005)
         raise TimeoutError(f"preview capture timed out: PREVIEW_STATUS=0x{status['preview_status']:08x}")
 
-    def _trigger_preview_capture(self, input_mask: int, timeout: float = 1.0) -> dict[str, int]:
+    def _trigger_preview_capture(
+        self,
+        input_mask: int,
+        timeout: float = 1.0,
+        *,
+        allow_stopped: bool = False,
+    ) -> dict[str, int]:
         if not 0 < input_mask <= 0xFF:
             raise ValueError("preview input_mask must be in range 0x01..0xff")
         status = self.read_status()
-        if not status["streaming"]:
+        if not status["streaming"] and not allow_stopped:
             raise RuntimeError("preview capture cannot run: F-engine is not streaming")
         if not status["rfdc_adc_valid"]:
             raise RuntimeError("preview capture cannot run: RFDC ADC AXIS valid is low")
@@ -5013,9 +5822,106 @@ class T510FEngine:
         *,
         input_mask: int = 0x01,
         timeout: float = 1.0,
+        allow_stopped: bool = False,
     ) -> dict[str, Any]:
-        status = self._trigger_preview_capture(input_mask=input_mask, timeout=timeout)
+        status = self._trigger_preview_capture(
+            input_mask=input_mask,
+            timeout=timeout,
+            allow_stopped=allow_stopped,
+        )
         return self._read_preview_buffer_from_status(status, n=n, input_mask=input_mask, prefer_fast=True)
+
+    def capture_preview_calibration_quiescent(
+        self,
+        n: Optional[int] = None,
+        *,
+        input_mask: int = 0xFF,
+        timeout: float = 1.0,
+    ) -> dict[str, Any]:
+        """Capture RFDC samples without enabling the science UDP path.
+
+        STOP removes the global data-path handshake needed by the preview
+        recorder.  This transaction temporarily starts only that global path
+        while both science and TX controls are forced into dry-run.  Persistent
+        controls are restored exactly and science packet counters must not
+        advance.  It therefore does not create an unlabelled QSFP stream.
+        """
+
+        before = self.read_status()
+        if bool(before.get("streaming", 0)):
+            raise RuntimeError(
+                "CALIBRATION_PREVIEW_STATE_CONFLICT: science streaming must be stopped"
+            )
+        science_control = int(self.ctrl.read(self.regs.SCIENCE_CONTROL)) & 0xFFFF_FFFF
+        tx_control = int(self.ctrl.read(self.regs.TX_CONTROL)) & 0x1F
+        counter_names = (
+            "time_packet_count",
+            "spec_packet_count",
+            "tx_frame_sent_count",
+        )
+        capture: dict[str, Any] | None = None
+        transaction_error: Exception | None = None
+        try:
+            self.ctrl.write(self.regs.SCIENCE_CONTROL, 0x1)
+            self.configure_tx_control(
+                force_dry_run=True,
+                cmac_enable=False,
+                frame_builder_enable=False,
+                drop_on_route_miss=True,
+                clear_counters=False,
+            )
+            self.start()
+            deadline = time.monotonic() + max(float(timeout), 0.1)
+            started = self.read_status()
+            while (
+                not bool(started.get("streaming", 0))
+                or not bool(started.get("rfdc_adc_valid", 0))
+            ) and time.monotonic() < deadline:
+                time.sleep(0.005)
+                started = self.read_status()
+            if not bool(started.get("streaming", 0)):
+                raise RuntimeError(
+                    "CALIBRATION_PREVIEW_START_FAILED: internal dry-run path did not start"
+                )
+            capture = self.capture_preview_fast(
+                n=n,
+                input_mask=input_mask,
+                timeout=timeout,
+                allow_stopped=False,
+            )
+        except Exception as exc:
+            transaction_error = exc
+        finally:
+            try:
+                self.stop()
+            finally:
+                self.ctrl.write(self.regs.SCIENCE_CONTROL, science_control)
+                self.ctrl.write(self.regs.TX_CONTROL, tx_control)
+        after = self.read_status()
+        deltas = {
+            name: int(after.get(name, 0)) - int(before.get(name, 0))
+            for name in counter_names
+        }
+        cleanup_errors = []
+        if bool(after.get("streaming", 0)):
+            cleanup_errors.append("streaming remained active")
+        if any(value != 0 for value in deltas.values()):
+            cleanup_errors.append(f"science packet counters advanced: {deltas}")
+        if transaction_error is not None or cleanup_errors:
+            raise RuntimeError(
+                "CALIBRATION_PREVIEW_FAILED: "
+                f"transaction={transaction_error}; cleanup={cleanup_errors}"
+            ) from transaction_error
+        assert capture is not None
+        capture["calibration_dry_run"] = {
+            "science_udp_stopped": True,
+            "science_control_restored": int(self.ctrl.read(self.regs.SCIENCE_CONTROL))
+            == science_control,
+            "tx_control_restored": (int(self.ctrl.read(self.regs.TX_CONTROL)) & 0x1F)
+            == tx_control,
+            "packet_counter_deltas": deltas,
+        }
+        return capture
 
     def _read_preview_buffer_from_status(
         self,

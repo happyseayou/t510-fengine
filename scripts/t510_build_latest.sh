@@ -24,7 +24,7 @@ test -f "${OVERLAY_DIR}/t510_fengine_rfdc.xci"
 test -f "${OVERLAY_DIR}/t510_fengine.manifest.txt"
 test -d "${REPORT_DIR}"
 grep -qx 'release=latest' "${OVERLAY_DIR}/t510_fengine.manifest.txt"
-grep -qx 'core_version=0x00010033' "${OVERLAY_DIR}/t510_fengine.manifest.txt"
+grep -qx 'core_version=0x00010034' "${OVERLAY_DIR}/t510_fengine.manifest.txt"
 grep -qx 'project=demo-ant' "${OVERLAY_DIR}/t510_fengine.manifest.txt"
 
 python3 "${ROOT}/scripts/t510_verify_rfdc_artifacts.py" \
