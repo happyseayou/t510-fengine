@@ -607,6 +607,15 @@ module t510_fengine_top (
     wire         spur_corr_tvalid;
     wire         spur_corr_tlast;
     wire         spur_corr_tready;
+    // Calibration is deliberately performed while the science session is
+    // stopped.  Keep the corrector draining the live RFDC stream in that
+    // state so an atomic coefficient commit can reach its raw-sample boundary
+    // and corrected preview remains observable.  The selector valid gate
+    // below prevents any of these calibration beats from entering PFB/TIME or
+    // UDP.  Once streaming is asserted this reduces to the normal lossless
+    // AXIS ready/valid path.
+    wire         spur_corr_output_ready = streaming ? spur_corr_tready : 1'b1;
+    wire         spur_corr_science_valid = spur_corr_tvalid && streaming;
     wire [255:0] preview_selected_tdata0 = preview_corrected_select ?
         spur_corr_tdata[255:0] : s_axis_preview_tdata0;
     wire [255:0] preview_selected_tdata1 = preview_corrected_select ?
@@ -618,7 +627,7 @@ module t510_fengine_top (
     wire [63:0] preview_selected_sample0 = preview_corrected_select ?
         spur_corr_raw_sample0 : s_axis_preview_sample0;
     wire preview_selected_tvalid = preview_corrected_select ?
-        (spur_corr_tvalid && spur_corr_tready) : s_axis_preview_tvalid;
+        (spur_corr_tvalid && spur_corr_output_ready) : s_axis_preview_tvalid;
 
     wire [SCIENCE_DATA_W-1:0] spec_tdata;
     wire [31:0]  spec_tuser;
@@ -2497,7 +2506,7 @@ module t510_fengine_top (
         .m_axis_raw_sample0(spur_corr_raw_sample0),
         .m_axis_tvalid(spur_corr_tvalid),
         .m_axis_tlast(spur_corr_tlast),
-        .m_axis_tready(spur_corr_tready),
+        .m_axis_tready(spur_corr_output_ready),
         .shadow_enable(spur_corr_shadow_enable),
         .shadow_in_band(spur_corr_shadow_in_band),
         .shadow_bypass(spur_corr_shadow_bypass),
@@ -2544,7 +2553,7 @@ module t510_fengine_top (
         .s_axis_tdata(spur_corr_tdata),
         .s_axis_tuser(spur_corr_tuser),
         .s_axis_sample0(spur_corr_sample0),
-        .s_axis_tvalid(spur_corr_tvalid),
+        .s_axis_tvalid(spur_corr_science_valid),
         .s_axis_tlast(spur_corr_tlast),
         .s_axis_tready(spur_corr_tready),
         .m_axis_tdata(science_tdata),

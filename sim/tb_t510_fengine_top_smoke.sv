@@ -661,7 +661,27 @@ module tb_t510_fengine_top_smoke;
         end
     endtask
 
+    task automatic check_stopped_corrector_drain;
+        integer beat;
+        begin
+            reset_dut();
+            `TB_CHECK_EQ(dut.streaming, 1'b0, "corrector drain test starts stopped")
+            s_axis_adc_tvalid = 1'b1;
+            for (beat = 0; beat < 32; beat = beat + 1) begin
+                @(posedge clk);
+                `TB_CHECK_EQ(dut.spur_corr_output_ready, 1'b1,
+                             "stopped corrector always drains live ADC beats")
+                `TB_CHECK_EQ(dut.spur_corr_science_valid, 1'b0,
+                             "stopped calibration beats are gated from science")
+                `TB_CHECK_EQ(s_axis_adc_tready, 1'b1,
+                             "stopped corrector does not backpressure RFDC")
+            end
+            s_axis_adc_tvalid = 1'b0;
+        end
+    endtask
+
     initial begin
+        check_stopped_corrector_drain();
         check_stop_and_abort_flush_both_domains();
         check_default_waits_without_pps();
         run_production_spec_cmac();
