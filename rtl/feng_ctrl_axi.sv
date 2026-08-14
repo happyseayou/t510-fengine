@@ -900,6 +900,10 @@ module feng_ctrl_axi #(
             scheduled_sync_clear_status_pulse <= 1'b0;
             preview_capture_start_pulse <= 1'b0;
             preview_capture_clear_pulse <= 1'b0;
+            spur_corr_commit_pulse <= 1'b0;
+            spur_corr_tracker_heartbeat_pulse <= 1'b0;
+            spur_corr_disable_pulse <= 1'b0;
+            spur_corr_clear_errors_pulse <= 1'b0;
             tx_clear_pulse <= 1'b0;
             time_ddr_ring_clear_pulse <= 1'b0;
             pfb_clear_pulse <= 1'b0;

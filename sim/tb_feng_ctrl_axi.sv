@@ -626,6 +626,17 @@ module tb_feng_ctrl_axi;
         axi_read(16'hae94, rd);
         `TB_CHECK_EQ(rd, 32'h0000_fedc, "active phase step high")
 
+        // All Stage 34e command bits are write-one pulses.  They must return
+        // low after the AXI transaction instead of becoming level controls;
+        // otherwise the top-level toggle CDC repeatedly reissues commands.
+        axi_write(16'hae00, 32'h0000_0f04);
+        `TB_CHECK_EQ(spur_corr_commit_pulse, 1'b0, "spur commit command is one-shot")
+        `TB_CHECK_EQ(spur_corr_tracker_heartbeat_pulse, 1'b0,
+                     "spur tracker heartbeat command is one-shot")
+        `TB_CHECK_EQ(spur_corr_disable_pulse, 1'b0, "spur disable command is one-shot")
+        `TB_CHECK_EQ(spur_corr_clear_errors_pulse, 1'b0,
+                     "spur clear-errors command is one-shot")
+
         // A missing or repeated index permanently rejects a load until the
         // explicit restart pulse. This prevents a partial bank from committing.
         axi_write(16'hae00, 32'h0000_1004);

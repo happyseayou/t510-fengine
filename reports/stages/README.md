@@ -165,7 +165,7 @@
 - [34c-3 板内负载、供电与热稳定性调查](34c-3_power_thermal_causality.md)
 - [34c 后续根因调查总计划](34c_adc_correlated_noise_root_cause_plan.md)
 - [34d Allan稳定性与八路复互相关评估](34d_allan_cross_correlation.md)
-- [34e ADC时间交织固定杂散动态前馈补偿（v36已布线，开放输入诊断运行中，待50 Ω资格）](34e_adc_interleave_spur_correction.md)
+- [34e ADC时间交织固定杂散动态前馈补偿（已修复重复commit命令，v36重建中，待开放输入及50 Ω资格）](34e_adc_interleave_spur_correction.md)
 
 ## 长任务规则
 

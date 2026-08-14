@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`V36_ROUTED_CANDIDATE_EXPORTED / OPEN_INPUT_DIAGNOSTIC_RUNNING / 50OHM_QUALIFICATION_PENDING`
+`V36_COMMAND_PULSE_FIX_VERIFIED / REBUILD_PENDING / 50OHM_QUALIFICATION_PENDING`
 
 Stage 34e 是隔离的工程候选，不是当前产品发布。当前正式入口仍是 v34；候选身份固定为：
 
@@ -91,14 +91,15 @@ START合同为：不含固定项时正常bypass；含固定项但不带ID时允�
 冻结的`cargo zigbuild`流程生成ARM64静态候选产物。已连接Vivado GUI完成
 `synth → impl/phys_opt/route → write_bitstream → current-project export`：
 
-- bitstream SHA256：`a16bcd192ebcf01684ced0f80a55aca8cd7b7665f70adf100492038309e5e83e`；
-- routed WNS `+0.061 ns`、WHS `+0.009 ns`，setup/hold失败端点均为0；
-- 325,199条可布线网络全部完成，route error为0；
+- 最近一次已导出的bitstream SHA256：`1a9f78155d30ffb6d444111199ae5584ecf9ab43a5c9c693a992f6f0feb67d78`；
+- routed WNS `+0.048 ns`、WHS `+0.010 ns`，setup/hold失败端点均为0；
+- 324,855条可布线网络全部完成，route error为0；
 - 全设计DSP48E2为888，补偿器层级恰为128个DSP48E2；
-- 全设计LUT 142,938、FF 187,153、RAMB36 553、RAMB18 194；
+- 全设计LUT 142,721、FF 186,994、RAMB36 553、RAMB18 194；
 - 未新增阻断发布的DRC/methodology问题；保留的critical warning为既有CMAC Evaluation License。
 
-这些结果只闭合v36候选的构建和布线门禁，不替代开放输入及50 Ω板级资格。
+该bit随后被下述command-pulse故障拒绝，不能继续作为候选使用；这些结果只证明修复前设计的构建
+和布线门禁，不替代新RTL重建、开放输入及50 Ω板级资格。
 
 ## 开放输入诊断队列
 
@@ -134,8 +135,18 @@ science AXIS反压使原子提交无法到达8192-sample边界，门禁以commit
 修复提交`1f68c53`在停流时持续排空补偿器内部输出，使原子提交和corrected preview仍有raw beat，
 同时显式门控selector valid，保证校准beat不进入PFB、TIME或UDP；正式streaming时恢复原有无损
 ready/valid握手。补偿器单元和顶层PFB/FFT/CMAC smoke仿真均PASS，50项Python/Agent/watchdog
-回归PASS。新的Vivado GUI完整链已武装为`synth_1 → impl_1 → write_bitstream`；截至本次记录，
-新综合健康运行，须待新bitstream完成、重新导出后再续提开放输入队列。
+回归PASS。该修复的新bit完成后，invocation `59668a7563ba48a291e3c86192c522b5`再次通过首个raw
+窗口：约41.805 Gbit/s、624.9 kpacket/s、QSFP flag `0x0085`，所有drop/gap为0；但校准仍在
+commit阶段停止。现场寄存器显示commit count约599万且pending保持1，证明不是没有raw边界，而是
+同一命令被反复提交。
+
+新增顶层XSim回归稳定复现：一次AXI commit写入在4200个数据周期内产生4199个commit pulse，跨越
+两个8192-sample边界后执行两次且pending仍为1。根因是`feng_ctrl_axi`只在reset分支清零Stage 34e
+的commit、tracker heartbeat、disable和clear-errors四个命令输出，正常运行分支漏掉每拍默认清零，
+使write-one命令错误地变为永久电平。修复后同一回归精确观测到1个pulse、1次commit、pending清零，
+再跨两个边界也不重触发；完整顶层smoke、corrector和AXI XSim均PASS，Stage 34e定向Python 59项、
+Board Agent 8项、receiver 50项均PASS。须使用该RTL重新完成完整Vivado链并导出新bit后，才能续提
+开放输入队列。
 
 ## 尚未完成的硬门禁
 
