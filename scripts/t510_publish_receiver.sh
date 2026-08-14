@@ -7,6 +7,16 @@ SSH_OPTS="${T510_RX_SSH_OPTS:-}"
 MODE="${1:---build-only}"
 STAGE="${ROOT}/build/receiver/latest"
 REMOTE_STAGE="/home/astrolab/.cache/t510/latest"
+RELEASE_FILES=(
+  t510_time_rx
+  host_t510_rx_tune.sh
+  t510_host_validate.py
+  t510-time-rx.service
+  t510-rx-tune.service
+  90-t510-rx.conf
+  install-receiver.sh
+  SHA256SUMS
+)
 
 case "${MODE}" in
   --build-only|--install) ;;
@@ -53,8 +63,14 @@ if [[ "${MODE}" == "--build-only" ]]; then
   exit 0
 fi
 
-ssh ${SSH_OPTS} "${TARGET}" "mkdir -p '${REMOTE_STAGE}'"
-rsync -a --delete -e "ssh ${SSH_OPTS}" "${STAGE}/" "${TARGET}:${REMOTE_STAGE}/"
+ssh ${SSH_OPTS} "${TARGET}" "rm -rf -- '${REMOTE_STAGE}' && mkdir -p '${REMOTE_STAGE}'"
+release_paths=()
+for file in "${RELEASE_FILES[@]}"; do
+  release_paths+=("${STAGE}/${file}")
+done
+# build/receiver/latest/evidence contains multi-gigabyte campaign PCAPs.  It is
+# intentionally local evidence, not a receiver release artifact.
+rsync -a -e "ssh ${SSH_OPTS}" "${release_paths[@]}" "${TARGET}:${REMOTE_STAGE}/"
 remote_install="bash '${REMOTE_STAGE}/install-receiver.sh' '${REMOTE_STAGE}'"
 if [[ -n "${T510_RX_SUDO_PASSWORD:-}" ]]; then
   printf '%s\n' "${T510_RX_SUDO_PASSWORD}" | ssh ${SSH_OPTS} "${TARGET}" "sudo -S ${remote_install}"
