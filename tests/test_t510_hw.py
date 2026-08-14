@@ -465,11 +465,32 @@ class T510HelperTests(unittest.TestCase):
             "RFDC_POWER_STATE_PATH",
             Path(self.temp.name) / "rfdc-power.json",
         )
+        self.spur_state = mock.patch.object(
+            t510_hw,
+            "SPUR_CORRECTION_STATE_PATH",
+            Path(self.temp.name) / "spur-correction.json",
+        )
+        self.spur_model_root = mock.patch.object(
+            t510_hw,
+            "SPUR_CORRECTION_MODEL_ROOT",
+            Path(self.temp.name) / "spur-models",
+        )
+        self.spur_gate = mock.patch.object(
+            t510_hw,
+            "SPUR_CORRECTION_50OHM_GATE_PATH",
+            Path(self.temp.name) / "spur-models" / "independent-50ohm-qualified.json",
+        )
         self.output_load_state.start()
         self.rfdc_power_state.start()
+        self.spur_state.start()
+        self.spur_model_root.start()
+        self.spur_gate.start()
         self._write_watchdog_state()
 
     def tearDown(self) -> None:
+        self.spur_gate.stop()
+        self.spur_model_root.stop()
+        self.spur_state.stop()
         self.rfdc_power_state.stop()
         self.output_load_state.stop()
         self.clock_state.stop()
@@ -905,6 +926,83 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(state["shutdown_ips"]["keep"]["base_addr"], 4096)
         self.assertEqual(state["psddr"]["size"], 1234)
         self.assertFalse(state_path.with_name(".global_pl_state.json.tmp").exists())
+
+    def test_v36_start_rejects_active_hardware_model_identity_mismatch(self) -> None:
+        core = mock.Mock()
+        core.read_status.return_value = {"core_version": 0x00010036}
+        core.heartbeat_spur_correction.return_value = {
+            "active": True,
+            "active_spur_id": 2,
+            "active_phase_step": 123,
+            "active_profile_id": 0x36E80001,
+            "active_model_crc32": 0x11112222,
+            "active_generation": 7,
+        }
+        controller = mock.Mock()
+        controller.require_core.return_value = core
+        state = {
+            "credential_valid": True,
+            "spur_correction_id": "spur-test",
+            "result": {
+                "configuration_fingerprint": "f" * 64,
+                "bitstream_sha256": "a" * 64,
+                "spur": {"spur_id": 2},
+                "window": {"sample_rate_msps": 320, "center_mhz": 900.0},
+                "phase_step": 1 << 46,
+                "profile_id": "0x36e80001",
+                "model_crc32": 0x11112222,
+                "generation": 7,
+                "temperature_c": 40.0,
+            },
+        }
+        with (
+            mock.patch.object(
+                t510_hw,
+                "_spur_current_window",
+                return_value=(
+                    {"sample_rate_msps": 320, "center_mhz": 900.0},
+                    {"spur_id": 2, "offset_hz": 60_000_000.0},
+                ),
+            ),
+            mock.patch.object(t510_hw, "_load_spur_correction_state", return_value=state),
+            mock.patch.object(t510_hw, "_spur_configuration_fingerprint", return_value="f" * 64),
+            mock.patch.object(t510_hw, "_spur_temperature_c", return_value=40.0),
+        ):
+            with self.assertRaises(t510_hw.HelperError) as caught:
+                t510_hw._require_spur_correction_start_authorization(
+                    controller,
+                    {"spur_correction_id": "spur-test"},
+                    {"sha256": "a" * 64},
+                )
+        self.assertEqual(caught.exception.code, "SPUR_CORRECTION_HARDWARE_INACTIVE")
+        self.assertIn("active_phase_step", caught.exception.details["identity_mismatch"])
+
+    def test_static_tracker_mode_is_restricted_to_diagnostic_credential(self) -> None:
+        state = {
+            "credential_valid": True,
+            "diagnostic_only": False,
+            "spur_correction_id": "formal-spur",
+            "result": {"board_id": 1},
+        }
+        with (
+            mock.patch.object(t510_hw, "_controller", return_value=mock.Mock()),
+            mock.patch.object(t510_hw, "_expected_board", return_value=1),
+            mock.patch.object(t510_hw, "_load_spur_correction_state", return_value=state),
+        ):
+            with self.assertRaises(t510_hw.HelperError) as caught:
+                t510_hw._spur_correction_tracker_mode(
+                    {
+                        "request": {
+                            "expected_board_id": 1,
+                            "receiver_stream_accepting": False,
+                            "spur_correction_id": "formal-spur",
+                            "mode": "static_c0",
+                        }
+                    }
+                )
+        self.assertEqual(
+            caught.exception.code, "SPUR_CORRECTION_TRACKER_MODE_DIAGNOSTIC_ONLY"
+        )
 
 
 if __name__ == "__main__":

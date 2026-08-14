@@ -385,6 +385,33 @@ class RegisterMap:
     SYNC_ACTUAL_FIRST_TIME_SAMPLE0_LO: int = 0xAC5C
     SYNC_ACTUAL_FIRST_SPEC_SAMPLE0_LO: int = 0xAC64
     SYNC_CURRENT_PPS_LO: int = 0xAC6C
+    SPUR_CORR_CONTROL: int = 0xAE00
+    SPUR_CORR_STATUS: int = 0xAE04
+    SPUR_CORR_SHADOW_SPUR_ID: int = 0xAE08
+    SPUR_CORR_SHADOW_PHASE_STEP_LO: int = 0xAE0C
+    SPUR_CORR_SHADOW_PHASE_STEP_HI: int = 0xAE10
+    SPUR_CORR_SHADOW_PHASE_SEED_LO: int = 0xAE14
+    SPUR_CORR_SHADOW_PHASE_SEED_HI: int = 0xAE18
+    SPUR_CORR_SHADOW_PROFILE_ID: int = 0xAE1C
+    SPUR_CORR_SHADOW_MODEL_CRC32: int = 0xAE20
+    SPUR_CORR_SHADOW_GENERATION: int = 0xAE24
+    SPUR_CORR_EXPECTED_COEFF_CRC32: int = 0xAE28
+    SPUR_CORR_COMPUTED_COEFF_CRC32: int = 0xAE2C
+    SPUR_CORR_COEFF_BASE: int = 0xAE30
+    SPUR_CORR_LAST_COMMIT_SAMPLE0_LO: int = 0xAE70
+    SPUR_CORR_LAST_COMMIT_SAMPLE0_HI: int = 0xAE74
+    SPUR_CORR_SATURATION_COUNT: int = 0xAE78
+    SPUR_CORR_SAMPLE0_DISCONTINUITY_COUNT: int = 0xAE7C
+    SPUR_CORR_CRC_ERROR_COUNT: int = 0xAE80
+    SPUR_CORR_TRACKER_STALE_COUNT: int = 0xAE84
+    SPUR_CORR_COMMIT_COUNT: int = 0xAE88
+    SPUR_CORR_ACTIVE_SPUR_ID: int = 0xAE8C
+    SPUR_CORR_ACTIVE_PHASE_STEP_LO: int = 0xAE90
+    SPUR_CORR_ACTIVE_PHASE_STEP_HI: int = 0xAE94
+    SPUR_CORR_ACTIVE_PROFILE_ID: int = 0xAE98
+    SPUR_CORR_ACTIVE_MODEL_CRC32: int = 0xAE9C
+    SPUR_CORR_ACTIVE_GENERATION: int = 0xAEA0
+    SPUR_CORR_LOAD_STATUS: int = 0xAEA4
     TX_CONTROL: int = 0xB000
     TX_STATUS: int = 0xB004
     TX_FRAME_BUILT_COUNT: int = 0xB008
@@ -5328,6 +5355,169 @@ class T510FEngine:
     def start(self) -> None:
         self.ctrl.write(self.regs.CONTROL, 0x1)
 
+    @staticmethod
+    def _spur_q8_16_word(value: int) -> int:
+        value = int(value)
+        if not -(1 << 23) <= value < (1 << 23):
+            raise ValueError("spur correction Q8.16 coefficient exceeds signed 24-bit range")
+        return value & 0x00FF_FFFF
+
+    def set_spur_correction_preview(self, source: str) -> dict[str, Any]:
+        source = str(source).strip().lower()
+        if source not in {"raw", "corrected"}:
+            raise ValueError("spur correction preview source must be raw or corrected")
+        control = int(self.ctrl.read(self.regs.SPUR_CORR_CONTROL)) & 0x0F
+        if source == "corrected":
+            control |= 1 << 4
+        self.ctrl.write(self.regs.SPUR_CORR_CONTROL, control)
+        readback = int(self.ctrl.read(self.regs.SPUR_CORR_CONTROL))
+        if bool(readback & (1 << 4)) != (source == "corrected"):
+            raise RuntimeError("spur correction preview source readback mismatch")
+        return {"source": source, "control": readback}
+
+    def load_spur_correction_shadow(
+        self,
+        *,
+        spur_id: int,
+        phase_step: int,
+        phase_seed: int,
+        coefficients_q8_16: Iterable[tuple[int, int]],
+        profile_id: int,
+        model_crc32: int,
+        generation: int,
+        enable: bool = True,
+        in_band: bool = True,
+        bypass: bool = False,
+        phase_reload: bool = False,
+    ) -> dict[str, Any]:
+        if int(spur_id) not in (0, 1, 2, 3):
+            raise ValueError("spur_id must be 0 (none) or 1..3")
+        coefficient_pairs = [(int(real), int(imag)) for real, imag in coefficients_q8_16]
+        if len(coefficient_pairs) != 8:
+            raise ValueError("exactly eight complex spur correction coefficients are required")
+        words = [
+            self._spur_q8_16_word(component)
+            for pair in coefficient_pairs
+            for component in pair
+        ]
+        coeff_bytes = b"".join(struct.pack("<I", word) for word in words)
+        coeff_crc32 = zlib.crc32(coeff_bytes) & 0xFFFF_FFFF
+        phase_step_u48 = int(phase_step) & ((1 << 48) - 1)
+        phase_seed_u48 = int(phase_seed) & ((1 << 48) - 1)
+        persistent = (
+            (int(bool(enable)) << 0)
+            | (int(bool(in_band)) << 1)
+            | (int(bool(bypass)) << 2)
+            | (int(bool(phase_reload)) << 3)
+        )
+        self.ctrl.write(self.regs.SPUR_CORR_CONTROL, persistent | (1 << 12))
+        self.ctrl.write(self.regs.SPUR_CORR_SHADOW_SPUR_ID, int(spur_id))
+        self.ctrl.write(self.regs.SPUR_CORR_SHADOW_PHASE_STEP_LO, phase_step_u48 & 0xFFFF_FFFF)
+        self.ctrl.write(self.regs.SPUR_CORR_SHADOW_PHASE_STEP_HI, phase_step_u48 >> 32)
+        self.ctrl.write(self.regs.SPUR_CORR_SHADOW_PHASE_SEED_LO, phase_seed_u48 & 0xFFFF_FFFF)
+        self.ctrl.write(self.regs.SPUR_CORR_SHADOW_PHASE_SEED_HI, phase_seed_u48 >> 32)
+        self.ctrl.write(self.regs.SPUR_CORR_SHADOW_PROFILE_ID, int(profile_id) & 0xFFFF_FFFF)
+        self.ctrl.write(self.regs.SPUR_CORR_SHADOW_MODEL_CRC32, int(model_crc32) & 0xFFFF_FFFF)
+        self.ctrl.write(self.regs.SPUR_CORR_SHADOW_GENERATION, int(generation) & 0xFFFF_FFFF)
+        for index, word in enumerate(words):
+            self.ctrl.write(self.regs.SPUR_CORR_COEFF_BASE + 4 * index, word)
+        self.ctrl.write(self.regs.SPUR_CORR_EXPECTED_COEFF_CRC32, coeff_crc32)
+        load_status = int(self.ctrl.read(self.regs.SPUR_CORR_LOAD_STATUS))
+        computed_crc32 = int(self.ctrl.read(self.regs.SPUR_CORR_COMPUTED_COEFF_CRC32))
+        if ((load_status & 0x1F) != 16 or not (load_status & (1 << 6)) or
+                (load_status & (1 << 7)) or computed_crc32 != coeff_crc32):
+            raise RuntimeError(
+                "spur correction shadow load/CRC verification failed: "
+                f"status=0x{load_status:08x} expected=0x{coeff_crc32:08x} "
+                f"computed=0x{computed_crc32:08x}"
+            )
+        return {
+            "spur_id": int(spur_id),
+            "phase_step": phase_step_u48,
+            "phase_seed": phase_seed_u48,
+            "coefficients_q8_16": coefficient_pairs,
+            "coefficient_crc32": coeff_crc32,
+            "profile_id": int(profile_id) & 0xFFFF_FFFF,
+            "model_crc32": int(model_crc32) & 0xFFFF_FFFF,
+            "generation": int(generation) & 0xFFFF_FFFF,
+            "load_status": load_status,
+        }
+
+    def commit_spur_correction(self, *, timeout: float = 0.25) -> dict[str, Any]:
+        before = self.read_spur_correction_status()
+        control = int(self.ctrl.read(self.regs.SPUR_CORR_CONTROL)) & 0x1F
+        self.ctrl.write(self.regs.SPUR_CORR_CONTROL, control | (1 << 8))
+        deadline = time.monotonic() + float(timeout)
+        status = before
+        while time.monotonic() < deadline:
+            status = self.read_spur_correction_status()
+            if int(status["commit_count"]) != int(before["commit_count"]):
+                if int(status["crc_error_count"]) != int(before["crc_error_count"]):
+                    raise RuntimeError(f"spur correction commit rejected by hardware: {status}")
+                return status
+            time.sleep(0.001)
+        raise TimeoutError(f"spur correction atomic commit timed out: {status}")
+
+    def heartbeat_spur_correction(self) -> dict[str, Any]:
+        control = int(self.ctrl.read(self.regs.SPUR_CORR_CONTROL)) & 0x1F
+        self.ctrl.write(self.regs.SPUR_CORR_CONTROL, control | (1 << 9))
+        return self.read_spur_correction_status()
+
+    def disable_spur_correction(self, *, clear_errors: bool = False) -> dict[str, Any]:
+        control = int(self.ctrl.read(self.regs.SPUR_CORR_CONTROL)) & 0x1F
+        # Disable and clear are deliberately separate AXI transactions.  A stale
+        # timeout can otherwise mature on the same clock as a combined pulse and
+        # re-latch the fault after software believes that it was cleared.
+        self.ctrl.write(self.regs.SPUR_CORR_CONTROL, control | (1 << 10))
+        if clear_errors:
+            control = int(self.ctrl.read(self.regs.SPUR_CORR_CONTROL)) & 0x1F
+            self.ctrl.write(self.regs.SPUR_CORR_CONTROL, control | (1 << 11))
+        self.set_spur_correction_preview("raw")
+        return self.read_spur_correction_status()
+
+    def read_spur_correction_status(self) -> dict[str, Any]:
+        core_version = int(self.ctrl.read(self.regs.CORE_VERSION))
+        status_word = int(self.ctrl.read(self.regs.SPUR_CORR_STATUS))
+        control = int(self.ctrl.read(self.regs.SPUR_CORR_CONTROL))
+        phase_step = (
+            int(self.ctrl.read(self.regs.SPUR_CORR_ACTIVE_PHASE_STEP_LO))
+            | ((int(self.ctrl.read(self.regs.SPUR_CORR_ACTIVE_PHASE_STEP_HI)) & 0xFFFF) << 32)
+        )
+        last_commit_sample0 = (
+            int(self.ctrl.read(self.regs.SPUR_CORR_LAST_COMMIT_SAMPLE0_LO))
+            | (int(self.ctrl.read(self.regs.SPUR_CORR_LAST_COMMIT_SAMPLE0_HI)) << 32)
+        )
+        return {
+            "supported": core_version >= 0x0001_0036,
+            "core_version": core_version,
+            "control": control,
+            "status": status_word,
+            "preview_source": "corrected" if control & (1 << 4) else "raw",
+            "active": bool(status_word & (1 << 0)),
+            "uncorrected_in_band": bool(status_word & (1 << 1)),
+            "active_enable": bool(status_word & (1 << 7)),
+            "active_in_band": bool(status_word & (1 << 8)),
+            "active_bypass": bool(status_word & (1 << 9)),
+            "phase_synchronized": bool(status_word & (1 << 10)),
+            "fault_latched": bool(status_word & (1 << 11)),
+            "tracker_stale": bool(status_word & (1 << 12)),
+            "commit_pending": bool(status_word & (1 << 13)),
+            "shadow_crc_valid": bool(status_word & (1 << 14)),
+            "active_spur_id": int(self.ctrl.read(self.regs.SPUR_CORR_ACTIVE_SPUR_ID)) & 0x3,
+            "active_phase_step": phase_step,
+            "active_profile_id": int(self.ctrl.read(self.regs.SPUR_CORR_ACTIVE_PROFILE_ID)),
+            "active_model_crc32": int(self.ctrl.read(self.regs.SPUR_CORR_ACTIVE_MODEL_CRC32)),
+            "active_generation": int(self.ctrl.read(self.regs.SPUR_CORR_ACTIVE_GENERATION)),
+            "last_commit_sample0": last_commit_sample0,
+            "saturation_count": int(self.ctrl.read(self.regs.SPUR_CORR_SATURATION_COUNT)),
+            "sample0_discontinuity_count": int(self.ctrl.read(self.regs.SPUR_CORR_SAMPLE0_DISCONTINUITY_COUNT)),
+            "crc_error_count": int(self.ctrl.read(self.regs.SPUR_CORR_CRC_ERROR_COUNT)),
+            "tracker_stale_count": int(self.ctrl.read(self.regs.SPUR_CORR_TRACKER_STALE_COUNT)),
+            "commit_count": int(self.ctrl.read(self.regs.SPUR_CORR_COMMIT_COUNT)),
+            "coefficient_crc32": int(self.ctrl.read(self.regs.SPUR_CORR_COMPUTED_COEFF_CRC32)),
+            "load_status": int(self.ctrl.read(self.regs.SPUR_CORR_LOAD_STATUS)),
+        }
+
     def trigger_epoch(self) -> None:
         self.ctrl.write(self.regs.CONTROL, 0x2)
 
@@ -5463,6 +5653,27 @@ class T510FEngine:
             "tx_cmac_source_status": self.regs.TX_CMAC_SOURCE_STATUS,
         }
         status = {name: int(self.ctrl.read(offset)) for name, offset in keys.items()}
+        if int(status["core_version"]) >= 0x0001_0036:
+            spur_correction = self.read_spur_correction_status()
+        else:
+            spur_correction = {
+                "supported": False,
+                "active": False,
+                "uncorrected_in_band": False,
+                "saturation_count": 0,
+                "sample0_discontinuity_count": 0,
+                "crc_error_count": 0,
+                "tracker_stale_count": 0,
+                "commit_count": 0,
+            }
+        status["adc_interleave_spur_correction"] = spur_correction
+        status["adc_interleave_spur_correction_active"] = int(bool(spur_correction["active"]))
+        status["adc_interleave_spur_uncorrected"] = int(
+            bool(spur_correction["uncorrected_in_band"])
+        )
+        status["adc_interleave_spur_saturation_count"] = int(
+            spur_correction["saturation_count"]
+        )
         status.update(self.read_time_ddr_ring_status())
         raw_status = status["status"]
         status["armed"] = raw_status & 0x1
@@ -5852,6 +6063,19 @@ class T510FEngine:
             raise RuntimeError(
                 "CALIBRATION_PREVIEW_STATE_CONFLICT: science streaming must be stopped"
             )
+        if int(before.get("core_version", 0)) >= 0x0001_0036:
+            capture = self.capture_preview_fast(
+                n=n,
+                input_mask=input_mask,
+                timeout=timeout,
+                allow_stopped=True,
+            )
+            capture["calibration_dry_run"] = {
+                "hardware_quiescent_preview": True,
+                "science_stream_started": False,
+                "packet_counter_delta": {"time": 0, "spec": 0, "tx": 0},
+            }
+            return capture
         science_control = int(self.ctrl.read(self.regs.SCIENCE_CONTROL)) & 0xFFFF_FFFF
         tx_control = int(self.ctrl.read(self.regs.TX_CONTROL)) & 0x1F
         counter_names = (

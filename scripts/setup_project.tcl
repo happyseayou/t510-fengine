@@ -22,6 +22,8 @@ set rtl_files [list \
     [file join $repo_root rtl science_rate_selector.sv] \
     [file join $repo_root rtl requantizer.sv] \
     [file join $repo_root rtl monitor_counters.sv] \
+    [file join $repo_root rtl adc_interleave_spur_corrector.sv] \
+    [file join $repo_root rtl adc_interleave_sine_q17_1024.mem] \
     [file join $repo_root rtl pfb_channelizer.sv] \
     [file join $repo_root rtl axis_sideband_async_fifo.sv] \
     [file join $repo_root rtl axis512_register_slice.sv] \
@@ -116,6 +118,8 @@ foreach file $rtl_files {
         add_files -norecurse -fileset sources_1 $file
     }
 }
+set spur_sine_mem [file join $repo_root rtl adc_interleave_sine_q17_1024.mem]
+set_property file_type {Memory File} [get_files $spur_sine_mem]
 foreach file $xdc_files {
     if {[llength [get_files -quiet $file]] == 0} {
         add_files -norecurse -fileset constrs_1 $file

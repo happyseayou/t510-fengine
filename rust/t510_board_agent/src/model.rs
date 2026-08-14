@@ -77,6 +77,40 @@ pub struct ExpectedBoardRequest {
     pub output_load_transaction_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rfdc_power_transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spur_correction_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpurCorrectionInputState {
+    AllOpenDiagnostic,
+    AllAdcIndependent50ohm,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpurCorrectionCalibrateRequest {
+    pub expected_board_id: u16,
+    pub receiver_stream_accepting: bool,
+    pub configuration_fingerprint: String,
+    pub input_state: SpurCorrectionInputState,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpurCorrectionTrackerMode {
+    StaticC0,
+    Dynamic,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpurCorrectionTrackerModeRequest {
+    pub expected_board_id: u16,
+    pub receiver_stream_accepting: bool,
+    pub spur_correction_id: String,
+    pub mode: SpurCorrectionTrackerMode,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -198,6 +232,8 @@ pub struct ScheduledSyncPrepareRequest {
     pub output_load_transaction_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rfdc_power_transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spur_correction_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -449,9 +485,7 @@ impl ClockDiagnosticPrepareRequest {
         }
         let (center_min, center_max) = center_bounds_mhz(self.sample_rate_msps)
             .ok_or_else(|| "sample_rate_msps must be 160 or 320".to_string())?;
-        if !self.center_mhz.is_finite()
-            || !(center_min..=center_max).contains(&self.center_mhz)
-        {
+        if !self.center_mhz.is_finite() || !(center_min..=center_max).contains(&self.center_mhz) {
             return Err(format!(
                 "center_mhz must be finite and within {center_min:.0}..{center_max:.0} MHz for {} MS/s",
                 self.sample_rate_msps
@@ -466,16 +500,12 @@ impl ClockDiagnosticPrepareRequest {
                 }
             }
             MtsTargetMode::Catalog | MtsTargetMode::Discovery => {
-                if self.mts_adc_target_latency.is_some()
-                    || self.mts_dac_target_latency.is_some()
-                {
+                if self.mts_adc_target_latency.is_some() || self.mts_dac_target_latency.is_some() {
                     return Err("explicit MTS targets are only valid in fixed mode".into());
                 }
             }
         }
-        if self.verify_sysref_negative_control
-            && !is_external_request_profile(&self.profile_id)
-        {
+        if self.verify_sysref_negative_control && !is_external_request_profile(&self.profile_id) {
             return Err(
                 "SYSREF negative control is only valid for the external request profile".into(),
             );

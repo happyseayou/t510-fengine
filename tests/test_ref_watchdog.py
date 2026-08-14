@@ -8,10 +8,12 @@ from unittest import mock
 
 from python import t510_hw
 from python.t510_clock import T510ClockController
+from python.t510_spur_correction import save_model
 from python.t510_ref_watchdog import (
     BoundedJsonlRing,
     ReferenceWatchdog,
     WatchdogPolicy,
+    _expected_core_version_for_bitfile,
     _periodic_schedule_due,
 )
 
@@ -89,6 +91,167 @@ class _FakeCore:
 
 
 class ReferenceWatchdogPolicyTests(unittest.TestCase):
+    def test_watchdog_auto_core_version_follows_overlay_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bitfile = root / "t510_fengine.bit"
+            bitfile.write_bytes(b"candidate")
+            (root / "t510_fengine.manifest.txt").write_text(
+                "core_version=0x00010036\n", encoding="utf-8"
+            )
+            self.assertEqual(_expected_core_version_for_bitfile(bitfile), 0x00010036)
+
+    def test_v36_tracker_maps_read_only_ocb1_and_refreshes_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bitfile = root / "test.bit"
+            bitfile.write_bytes(b"watchdog-test-bit")
+            state_path = root / "spur.json"
+            model = save_model(
+                root / "model.json",
+                {
+                    "schema_version": 1,
+                    "lanes": [
+                        {
+                            "c0": [1.0 + adc, -2.0],
+                            "d0": [0.0, 0.0],
+                            "matrix_2x2": [[1.0, 0.0], [0.0, 1.0]],
+                        }
+                        for adc in range(8)
+                    ],
+                },
+            )
+            state = {
+                "schema_version": 1,
+                "calibration_state": "CALIBRATED",
+                "spur_correction_id": "spur-test",
+                "credential_valid": True,
+                "result": {
+                    "model_path": str(root / "model.json"),
+                    "model_sha256": model["sha256"],
+                    "spur": {"spur_id": 2, "ocb1_dft_k": 2},
+                    "phase_step": 1 << 46,
+                    "profile_id": "0x36e80001",
+                    "model_crc32": 0x12345678,
+                    "generation": 7,
+                    "temperature_c": 40.0,
+                },
+            }
+            watchdog = ReferenceWatchdog(
+                bitfile=bitfile,
+                state_path=root / "watchdog.json",
+                interval_seconds=0.1,
+                stop_timeout_seconds=0.5,
+                unlock_confirmations=2,
+                spi_error_confirmations=5,
+                expected_core_version=0x00010036,
+                spur_correction_state_path=state_path,
+            )
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            core = mock.Mock()
+            core.load_spur_correction_shadow.return_value = {"coefficient_crc32": 1}
+            core.commit_spur_correction.return_value = {"commit_count": 1}
+            hardware_identity = {
+                "active": True,
+                "active_spur_id": 2,
+                "active_phase_step": 1 << 46,
+                "active_profile_id": 0x36E80001,
+                "active_model_crc32": 0x12345678,
+                "active_generation": 7,
+            }
+            core.heartbeat_spur_correction.return_value = hardware_identity
+            watchdog.core = core
+            observation = {
+                "frozen_adc_mask": 0,
+                "temperature_c": 40.5,
+                "channels": [
+                    {
+                        "adc": adc,
+                        "ocb1_diagnostics": {
+                            "dft": [
+                                {"k": k, "real": float(k), "imag": -float(k)}
+                                for k in range(1, 5)
+                            ]
+                        },
+                    }
+                    for adc in range(8)
+                ],
+            }
+            watchdog._update_spur_tracker(observation)
+            kwargs = core.load_spur_correction_shadow.call_args.kwargs
+            self.assertEqual(kwargs["coefficients_q8_16"][0], (3 * 65536, -4 * 65536))
+            self.assertEqual(kwargs["coefficients_q8_16"][7], (10 * 65536, -4 * 65536))
+            core.commit_spur_correction.assert_called_once()
+            core.heartbeat_spur_correction.assert_called_once()
+
+            persisted = json.loads(state_path.read_text())
+            self.assertEqual(persisted["tracker"]["state"], "TRACKING")
+            self.assertTrue(persisted["credential_valid"])
+
+            # The engineering diagnostic must also be able to hold the frozen
+            # calibration C0 while continuing the hardware heartbeat.  OCB1 is
+            # still observed read-only, but must not move the applied vector.
+            persisted["tracker_mode"] = "static_c0"
+            state_path.write_text(json.dumps(persisted), encoding="utf-8")
+            watchdog._last_spur_coefficients = None
+            core.reset_mock()
+            core.load_spur_correction_shadow.return_value = {"coefficient_crc32": 2}
+            core.commit_spur_correction.return_value = {"commit_count": 2}
+            core.heartbeat_spur_correction.return_value = hardware_identity
+            watchdog._update_spur_tracker(observation)
+            kwargs = core.load_spur_correction_shadow.call_args.kwargs
+            self.assertEqual(kwargs["coefficients_q8_16"][0], (65536, -2 * 65536))
+            self.assertEqual(kwargs["coefficients_q8_16"][7], (8 * 65536, -2 * 65536))
+            static_state = json.loads(state_path.read_text())
+            self.assertEqual(static_state["tracker"]["state"], "STATIC_C0")
+            self.assertEqual(static_state["tracker"]["mode"], "static_c0")
+            core.heartbeat_spur_correction.assert_called_once()
+
+    def test_v36_tracker_failure_stops_even_after_hardware_has_fallen_to_bypass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bitfile = root / "test.bit"
+            bitfile.write_bytes(b"watchdog-test-bit")
+            state_path = root / "spur.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "credential_valid": True,
+                        "calibration_state": "CALIBRATED",
+                        "spur_correction_id": "spur-test",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            watchdog = ReferenceWatchdog(
+                bitfile=bitfile,
+                state_path=root / "watchdog.json",
+                interval_seconds=0.1,
+                stop_timeout_seconds=0.5,
+                unlock_confirmations=2,
+                spi_error_confirmations=5,
+                expected_core_version=0x00010036,
+                spur_correction_state_path=state_path,
+            )
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "credential_valid": True,
+                        "calibration_state": "CALIBRATED",
+                        "spur_correction_id": "spur-test",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            watchdog.core = mock.Mock()
+            watchdog.hardware = {"streaming": True}
+            watchdog.core.read_spur_correction_status.return_value = {"active": False}
+            watchdog._handle_spur_tracker_error(RuntimeError("OCB1 read failed"))
+            self.assertIn("OCB1 read failed", watchdog.spur_tracker_fault_reason)
+            persisted = json.loads(state_path.read_text())
+            self.assertFalse(persisted["credential_valid"])
+            watchdog.core.disable_spur_correction.assert_not_called()
+
     def test_power_thermal_jsonl_ring_has_epoch_sequence_and_bounded_window(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "telemetry.jsonl"

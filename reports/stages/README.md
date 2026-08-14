@@ -124,8 +124,9 @@
 - ADC 在 480/960/1440 MHz 的 RFDC 固定项分别为 `-89.75..-85.00`、
   `-93.95..-88.23`、`-88.25..-82.64 dBFS`，最坏约 `2.42 ADU`。一般采集足够，
   三处邻近 bin 不适合长积分弱谱线或无条件互相关。
-- 不得继续 Stage 33a 的 OCB1 override、notch、自适应抵消、
-  前馈扣除或新 RTL 修复路线；如需重新研究，应另立阶段。
+- Stage 33a 内不得继续 OCB1 override、notch、自适应抵消或前馈扣除。用户已另立Stage 34e，
+  仅允许采用“停流校准固定矢量＋运行期只读动态OCB1”的受控RTL前馈方案；不得回退为override、
+  notch、隐藏bin或从科学数据在线学习。
 
 ## Stage 32
 
@@ -164,6 +165,7 @@
 - [34c-3 板内负载、供电与热稳定性调查](34c-3_power_thermal_causality.md)
 - [34c 后续根因调查总计划](34c_adc_correlated_noise_root_cause_plan.md)
 - [34d Allan稳定性与八路复互相关评估](34d_allan_cross_correlation.md)
+- [34e ADC时间交织固定杂散动态前馈补偿（v36候选，待构建及50 Ω资格）](34e_adc_interleave_spur_correction.md)
 
 ## 长任务规则
 

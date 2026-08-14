@@ -187,24 +187,29 @@ impl RuntimeConfig {
             let core_value = u32::from_str_radix(core, 16).expect("validated core version");
             let stage34c2r_diagnostic =
                 core_value == 0x0001_0035 && item.id == "fengine-0x00010035";
-            if core_value != 0x0001_0034 && !stage34c2r_diagnostic {
+            let stage34e_candidate = core_value == 0x0001_0036 && item.id == "fengine-0x00010036";
+            if core_value != 0x0001_0034 && !stage34c2r_diagnostic && !stage34e_candidate {
                 return Err(format!(
-                    "bitstream {} must use production CORE_VERSION 0x00010034 or the isolated Stage 34c-2R diagnostic 0x00010035",
+                    "bitstream {} must use production CORE_VERSION 0x00010034, isolated Stage 34c-2R diagnostic 0x00010035, or Stage 34e candidate 0x00010036",
                     item.id
                 ));
             }
+            let discovery_candidate = stage34c2r_diagnostic
+                || (stage34e_candidate
+                    && item.mts_adc_target_latency == Some(-1)
+                    && item.mts_dac_target_latency == Some(-1));
             if item.mts_adc_target_latency.is_none()
                 || item.mts_dac_target_latency.is_none()
-                || (!stage34c2r_diagnostic
+                || (!discovery_candidate
                     && (item.mts_adc_target_latency.is_some_and(|value| value < 0)
                         || item.mts_dac_target_latency.is_some_and(|value| value < 0)))
-                || (stage34c2r_diagnostic
+                || (discovery_candidate
                     && (item.mts_adc_target_latency != Some(-1)
                         || item.mts_dac_target_latency != Some(-1)))
             {
-                return Err(if stage34c2r_diagnostic {
+                return Err(if discovery_candidate {
                     format!(
-                        "Stage 34c-2R diagnostic bitstream {} requires discovery ADC/DAC targets -1/-1",
+                        "diagnostic candidate bitstream {} requires discovery ADC/DAC targets -1/-1",
                         item.id
                     )
                 } else {
@@ -221,7 +226,7 @@ impl RuntimeConfig {
                     item.id
                 ));
             }
-            if !stage34c2r_diagnostic {
+            if !discovery_candidate {
                 let campaign = item.mts_campaign.as_ref().ok_or_else(|| {
                     format!(
                         "Stage 34 bitstream {} requires an MTS discovery/fixed campaign proof",

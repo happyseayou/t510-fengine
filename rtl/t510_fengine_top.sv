@@ -218,6 +218,23 @@ module t510_fengine_top (
     wire [7:0]  ctrl_preview_input_mask;
     wire [2:0]  ctrl_preview_rd_input;
     wire [9:0]  ctrl_preview_rd_addr;
+    wire        ctrl_preview_corrected_select;
+    wire        ctrl_spur_corr_shadow_enable;
+    wire        ctrl_spur_corr_shadow_in_band;
+    wire        ctrl_spur_corr_shadow_bypass;
+    wire        ctrl_spur_corr_shadow_phase_reload;
+    wire [1:0]  ctrl_spur_corr_shadow_spur_id;
+    wire [47:0] ctrl_spur_corr_shadow_phase_step;
+    wire [47:0] ctrl_spur_corr_shadow_phase_seed;
+    wire [383:0] ctrl_spur_corr_shadow_coefficients;
+    wire [31:0] ctrl_spur_corr_shadow_profile_id;
+    wire [31:0] ctrl_spur_corr_shadow_model_crc32;
+    wire [31:0] ctrl_spur_corr_shadow_generation;
+    wire        ctrl_spur_corr_shadow_crc_valid;
+    wire        ctrl_spur_corr_commit_pulse;
+    wire        ctrl_spur_corr_tracker_heartbeat_pulse;
+    wire        ctrl_spur_corr_disable_pulse;
+    wire        ctrl_spur_corr_clear_errors_pulse;
     wire [63:0] ctrl_unix_seconds;
     wire        ctrl_time_ddr_ring_enable;
     wire        ctrl_time_ddr_ring_clear_pulse;
@@ -323,6 +340,10 @@ module t510_fengine_top (
     logic        ctrl_pfb_coeff_commit_toggle;
     logic        ctrl_pfb_coeff_abort_toggle;
     logic        ctrl_pfb_coeff_write_toggle;
+    logic        ctrl_spur_corr_commit_toggle;
+    logic        ctrl_spur_corr_tracker_heartbeat_toggle;
+    logic        ctrl_spur_corr_disable_toggle;
+    logic        ctrl_spur_corr_clear_errors_toggle;
     logic        ctrl_tx_clear_toggle;
     logic        ctrl_time_ddr_ring_clear_toggle;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  soft_epoch_toggle_sync;
@@ -338,6 +359,10 @@ module t510_fengine_top (
     (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_coeff_abort_toggle_cmac_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  pfb_coeff_write_toggle_cmac_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  spur_corr_commit_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  spur_corr_tracker_heartbeat_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  spur_corr_disable_toggle_sync;
+    (* ASYNC_REG = "TRUE" *) logic [2:0]  spur_corr_clear_errors_toggle_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  tx_clear_toggle_cmac_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  time_ddr_ring_clear_toggle_cmac_sync;
     (* ASYNC_REG = "TRUE" *) logic [2:0]  packet_stream_reset_toggle_cmac_sync;
@@ -354,6 +379,10 @@ module t510_fengine_top (
     logic        pfb_coeff_abort_toggle_cmac_seen;
     logic        pfb_coeff_write_toggle_cmac_seen;
     logic        tx_clear_toggle_seen;
+    logic        spur_corr_commit_toggle_seen;
+    logic        spur_corr_tracker_heartbeat_toggle_seen;
+    logic        spur_corr_disable_toggle_seen;
+    logic        spur_corr_clear_errors_toggle_seen;
     logic        tx_clear_toggle_cmac_seen;
     logic        time_ddr_ring_clear_toggle_cmac_seen;
     logic        packet_stream_reset_toggle_cmac_seen;
@@ -372,6 +401,10 @@ module t510_fengine_top (
     wire         pfb_coeff_abort_pulse_cmac;
     wire         pfb_coeff_write_pulse_cmac;
     wire         tx_clear_pulse;
+    wire         spur_corr_commit_pulse;
+    wire         spur_corr_tracker_heartbeat_pulse;
+    wire         spur_corr_disable_pulse;
+    wire         spur_corr_clear_errors_pulse;
     wire         tx_clear_pulse_cmac;
     wire         time_ddr_ring_clear_pulse_cmac;
     wire         packet_stream_reset_pulse_cmac;
@@ -445,6 +478,109 @@ module t510_fengine_top (
     wire [63:0] preview_sample0_ctrl;
     wire [31:0] preview_rd_data_ctrl;
 
+    wire [583:0] ctrl_spur_corr_config_bundle = {
+        ctrl_preview_corrected_select,
+        ctrl_spur_corr_shadow_crc_valid,
+        ctrl_spur_corr_shadow_generation,
+        ctrl_spur_corr_shadow_model_crc32,
+        ctrl_spur_corr_shadow_profile_id,
+        ctrl_spur_corr_shadow_coefficients,
+        ctrl_spur_corr_shadow_phase_seed,
+        ctrl_spur_corr_shadow_phase_step,
+        ctrl_spur_corr_shadow_spur_id,
+        ctrl_spur_corr_shadow_phase_reload,
+        ctrl_spur_corr_shadow_bypass,
+        ctrl_spur_corr_shadow_in_band,
+        ctrl_spur_corr_shadow_enable
+    };
+    (* ASYNC_REG = "TRUE" *) logic [583:0] spur_corr_config_meta;
+    (* ASYNC_REG = "TRUE" *) logic [583:0] spur_corr_config_data;
+    wire preview_corrected_select;
+    wire spur_corr_shadow_crc_valid;
+    wire [31:0] spur_corr_shadow_generation;
+    wire [31:0] spur_corr_shadow_model_crc32;
+    wire [31:0] spur_corr_shadow_profile_id;
+    wire [383:0] spur_corr_shadow_coefficients;
+    wire [47:0] spur_corr_shadow_phase_seed;
+    wire [47:0] spur_corr_shadow_phase_step;
+    wire [1:0] spur_corr_shadow_spur_id;
+    wire spur_corr_shadow_phase_reload;
+    wire spur_corr_shadow_bypass;
+    wire spur_corr_shadow_in_band;
+    wire spur_corr_shadow_enable;
+    assign {
+        preview_corrected_select,
+        spur_corr_shadow_crc_valid,
+        spur_corr_shadow_generation,
+        spur_corr_shadow_model_crc32,
+        spur_corr_shadow_profile_id,
+        spur_corr_shadow_coefficients,
+        spur_corr_shadow_phase_seed,
+        spur_corr_shadow_phase_step,
+        spur_corr_shadow_spur_id,
+        spur_corr_shadow_phase_reload,
+        spur_corr_shadow_bypass,
+        spur_corr_shadow_in_band,
+        spur_corr_shadow_enable
+    } = spur_corr_config_data;
+
+    wire spur_corr_correction_active;
+    wire spur_corr_correction_uncorrected;
+    wire [31:0] spur_corr_status;
+    wire [1:0] spur_corr_active_spur_id;
+    wire [47:0] spur_corr_active_phase_step;
+    wire [31:0] spur_corr_active_profile_id;
+    wire [31:0] spur_corr_active_model_crc32;
+    wire [31:0] spur_corr_active_generation;
+    wire [63:0] spur_corr_last_commit_sample0;
+    wire [31:0] spur_corr_saturation_count;
+    wire [31:0] spur_corr_sample0_discontinuity_count;
+    wire [31:0] spur_corr_crc_error_count;
+    wire [31:0] spur_corr_tracker_stale_count;
+    wire [31:0] spur_corr_commit_count;
+    wire [401:0] spur_corr_status_bundle = {
+        spur_corr_commit_count,
+        spur_corr_tracker_stale_count,
+        spur_corr_crc_error_count,
+        spur_corr_sample0_discontinuity_count,
+        spur_corr_saturation_count,
+        spur_corr_last_commit_sample0,
+        spur_corr_active_generation,
+        spur_corr_active_model_crc32,
+        spur_corr_active_profile_id,
+        spur_corr_active_phase_step,
+        spur_corr_active_spur_id,
+        spur_corr_status
+    };
+    (* ASYNC_REG = "TRUE" *) logic [401:0] spur_corr_status_ctrl_meta;
+    (* ASYNC_REG = "TRUE" *) logic [401:0] spur_corr_status_ctrl_bundle;
+    wire [31:0] spur_corr_status_ctrl;
+    wire [1:0] spur_corr_active_spur_id_ctrl;
+    wire [47:0] spur_corr_active_phase_step_ctrl;
+    wire [31:0] spur_corr_active_profile_id_ctrl;
+    wire [31:0] spur_corr_active_model_crc32_ctrl;
+    wire [31:0] spur_corr_active_generation_ctrl;
+    wire [63:0] spur_corr_last_commit_sample0_ctrl;
+    wire [31:0] spur_corr_saturation_count_ctrl;
+    wire [31:0] spur_corr_sample0_discontinuity_count_ctrl;
+    wire [31:0] spur_corr_crc_error_count_ctrl;
+    wire [31:0] spur_corr_tracker_stale_count_ctrl;
+    wire [31:0] spur_corr_commit_count_ctrl;
+    assign {
+        spur_corr_commit_count_ctrl,
+        spur_corr_tracker_stale_count_ctrl,
+        spur_corr_crc_error_count_ctrl,
+        spur_corr_sample0_discontinuity_count_ctrl,
+        spur_corr_saturation_count_ctrl,
+        spur_corr_last_commit_sample0_ctrl,
+        spur_corr_active_generation_ctrl,
+        spur_corr_active_model_crc32_ctrl,
+        spur_corr_active_profile_id_ctrl,
+        spur_corr_active_phase_step_ctrl,
+        spur_corr_active_spur_id_ctrl,
+        spur_corr_status_ctrl
+    } = spur_corr_status_ctrl_bundle;
+
     wire spec_enable;
     wire time_enable;
     wire snapshot_enable;
@@ -463,6 +599,26 @@ module t510_fengine_top (
     wire         science_aa100_active;
     wire         science_aa100_primed;
     wire [31:0]  science_aa100_coeff_version;
+
+    wire [SCIENCE_DATA_W-1:0] spur_corr_tdata;
+    wire [31:0]  spur_corr_tuser;
+    wire [63:0]  spur_corr_sample0;
+    wire [63:0]  spur_corr_raw_sample0;
+    wire         spur_corr_tvalid;
+    wire         spur_corr_tlast;
+    wire         spur_corr_tready;
+    wire [255:0] preview_selected_tdata0 = preview_corrected_select ?
+        spur_corr_tdata[255:0] : s_axis_preview_tdata0;
+    wire [255:0] preview_selected_tdata1 = preview_corrected_select ?
+        spur_corr_tdata[511:256] : s_axis_preview_tdata1;
+    wire [255:0] preview_selected_tdata2 = preview_corrected_select ?
+        spur_corr_tdata[767:512] : s_axis_preview_tdata2;
+    wire [255:0] preview_selected_tdata3 = preview_corrected_select ?
+        spur_corr_tdata[1023:768] : s_axis_preview_tdata3;
+    wire [63:0] preview_selected_sample0 = preview_corrected_select ?
+        spur_corr_raw_sample0 : s_axis_preview_sample0;
+    wire preview_selected_tvalid = preview_corrected_select ?
+        (spur_corr_tvalid && spur_corr_tready) : s_axis_preview_tvalid;
 
     wire [SCIENCE_DATA_W-1:0] spec_tdata;
     wire [31:0]  spec_tuser;
@@ -1299,7 +1455,9 @@ module t510_fengine_top (
         tx_cmac_source_mux_status[1:0]
     };
     assign udp_packet_flags = {
-        10'd0,
+        8'd0,
+        spur_corr_correction_uncorrected,
+        spur_corr_correction_active,
         (time_dropped_count != 32'd0),
         quant_clip_any,
         tx_dry_run_active,
@@ -1320,6 +1478,15 @@ module t510_fengine_top (
         scheduled_sync_clear_status_toggle_sync[3] ^ scheduled_sync_clear_status_toggle_seen;
     assign pfb_clear_pulse = pfb_clear_toggle_sync[2] ^ pfb_clear_toggle_seen;
     assign tx_clear_pulse = tx_clear_toggle_sync[2] ^ tx_clear_toggle_seen;
+    assign spur_corr_commit_pulse =
+        spur_corr_commit_toggle_sync[2] ^ spur_corr_commit_toggle_seen;
+    assign spur_corr_tracker_heartbeat_pulse =
+        spur_corr_tracker_heartbeat_toggle_sync[2] ^
+        spur_corr_tracker_heartbeat_toggle_seen;
+    assign spur_corr_disable_pulse =
+        spur_corr_disable_toggle_sync[2] ^ spur_corr_disable_toggle_seen;
+    assign spur_corr_clear_errors_pulse =
+        spur_corr_clear_errors_toggle_sync[2] ^ spur_corr_clear_errors_toggle_seen;
     assign tx_clear_pulse_cmac = tx_clear_toggle_cmac_sync[2] ^ tx_clear_toggle_cmac_seen;
     assign pfb_coeff_load_start_pulse_cmac =
         pfb_coeff_load_start_toggle_cmac_sync[2] ^ pfb_coeff_load_start_toggle_cmac_seen;
@@ -1374,6 +1541,10 @@ module t510_fengine_top (
             ctrl_pfb_coeff_commit_toggle <= 1'b0;
             ctrl_pfb_coeff_abort_toggle <= 1'b0;
             ctrl_pfb_coeff_write_toggle <= 1'b0;
+            ctrl_spur_corr_commit_toggle <= 1'b0;
+            ctrl_spur_corr_tracker_heartbeat_toggle <= 1'b0;
+            ctrl_spur_corr_disable_toggle <= 1'b0;
+            ctrl_spur_corr_clear_errors_toggle <= 1'b0;
         end else begin
             if (ctrl_soft_epoch_pulse) begin
                 ctrl_soft_epoch_toggle <= ~ctrl_soft_epoch_toggle;
@@ -1416,6 +1587,19 @@ module t510_fengine_top (
             end
             if (ctrl_pfb_coeff_write_pulse) begin
                 ctrl_pfb_coeff_write_toggle <= ~ctrl_pfb_coeff_write_toggle;
+            end
+            if (ctrl_spur_corr_commit_pulse) begin
+                ctrl_spur_corr_commit_toggle <= ~ctrl_spur_corr_commit_toggle;
+            end
+            if (ctrl_spur_corr_tracker_heartbeat_pulse) begin
+                ctrl_spur_corr_tracker_heartbeat_toggle <=
+                    ~ctrl_spur_corr_tracker_heartbeat_toggle;
+            end
+            if (ctrl_spur_corr_disable_pulse) begin
+                ctrl_spur_corr_disable_toggle <= ~ctrl_spur_corr_disable_toggle;
+            end
+            if (ctrl_spur_corr_clear_errors_pulse) begin
+                ctrl_spur_corr_clear_errors_toggle <= ~ctrl_spur_corr_clear_errors_toggle;
             end
         end
     end
@@ -1549,6 +1733,10 @@ module t510_fengine_top (
             scheduled_sync_clear_status_toggle_sync <= 4'b0000;
             pfb_clear_toggle_sync  <= 3'b000;
             tx_clear_toggle_sync   <= 3'b000;
+            spur_corr_commit_toggle_sync <= 3'b000;
+            spur_corr_tracker_heartbeat_toggle_sync <= 3'b000;
+            spur_corr_disable_toggle_sync <= 3'b000;
+            spur_corr_clear_errors_toggle_sync <= 3'b000;
             soft_epoch_toggle_seen <= 1'b0;
             stop_toggle_seen       <= 1'b0;
             soft_reset_toggle_seen <= 1'b0;
@@ -1558,6 +1746,12 @@ module t510_fengine_top (
             scheduled_sync_clear_status_toggle_seen <= 1'b0;
             pfb_clear_toggle_seen  <= 1'b0;
             tx_clear_toggle_seen   <= 1'b0;
+            spur_corr_commit_toggle_seen <= 1'b0;
+            spur_corr_tracker_heartbeat_toggle_seen <= 1'b0;
+            spur_corr_disable_toggle_seen <= 1'b0;
+            spur_corr_clear_errors_toggle_seen <= 1'b0;
+            spur_corr_config_meta <= 584'd0;
+            spur_corr_config_data <= 584'd0;
             packet_stream_reset_toggle_cmac_src <= 1'b0;
             mode_prev              <= MODE_SPEC;
             mode_switch_reset_count <= 32'd0;
@@ -1691,6 +1885,19 @@ module t510_fengine_top (
                 {scheduled_sync_clear_status_toggle_sync[2:0], ctrl_scheduled_sync_clear_status_toggle};
             pfb_clear_toggle_sync   <= {pfb_clear_toggle_sync[1:0], ctrl_pfb_clear_toggle};
             tx_clear_toggle_sync    <= {tx_clear_toggle_sync[1:0], ctrl_tx_clear_toggle};
+            spur_corr_commit_toggle_sync <= {
+                spur_corr_commit_toggle_sync[1:0], ctrl_spur_corr_commit_toggle
+            };
+            spur_corr_tracker_heartbeat_toggle_sync <= {
+                spur_corr_tracker_heartbeat_toggle_sync[1:0],
+                ctrl_spur_corr_tracker_heartbeat_toggle
+            };
+            spur_corr_disable_toggle_sync <= {
+                spur_corr_disable_toggle_sync[1:0], ctrl_spur_corr_disable_toggle
+            };
+            spur_corr_clear_errors_toggle_sync <= {
+                spur_corr_clear_errors_toggle_sync[1:0], ctrl_spur_corr_clear_errors_toggle
+            };
             soft_epoch_toggle_seen  <= soft_epoch_toggle_sync[2];
             stop_toggle_seen        <= stop_toggle_sync[2];
             soft_reset_toggle_seen  <= soft_reset_toggle_sync[2];
@@ -1700,6 +1907,13 @@ module t510_fengine_top (
             scheduled_sync_clear_status_toggle_seen <= scheduled_sync_clear_status_toggle_sync[3];
             pfb_clear_toggle_seen   <= pfb_clear_toggle_sync[2];
             tx_clear_toggle_seen    <= tx_clear_toggle_sync[2];
+            spur_corr_commit_toggle_seen <= spur_corr_commit_toggle_sync[2];
+            spur_corr_tracker_heartbeat_toggle_seen <=
+                spur_corr_tracker_heartbeat_toggle_sync[2];
+            spur_corr_disable_toggle_seen <= spur_corr_disable_toggle_sync[2];
+            spur_corr_clear_errors_toggle_seen <= spur_corr_clear_errors_toggle_sync[2];
+            spur_corr_config_meta <= ctrl_spur_corr_config_bundle;
+            spur_corr_config_data <= spur_corr_config_meta;
             if (packet_stream_reset_pulse || pfb_clear_pulse) begin
                 packet_stream_reset_toggle_cmac_src <= ~packet_stream_reset_toggle_cmac_src;
             end
@@ -2259,6 +2473,63 @@ module t510_fengine_top (
         .actual_first_spec_sample0(scheduled_sync_actual_first_spec_sample0)
     );
 
+    adc_interleave_spur_corrector #(
+        .NINPUT(8),
+        .SUBSAMPLES(4),
+        .SAMPLE_W(32),
+        .USER_W(32),
+        .SAMPLE0_W(64),
+        .TRACKER_TIMEOUT_CYCLES(80_000_000)
+    ) u_adc_interleave_spur_corrector (
+        .clk(clk),
+        .rst_n(rst_n),
+        .clear(packet_stream_reset_pulse || pfb_clear_pulse),
+        .s_axis_tdata(s_axis_adc_tdata),
+        .s_axis_tuser(s_axis_adc_tuser),
+        .s_axis_sample0(observation_adc_sample0),
+        .s_axis_raw_sample0(s_axis_adc_sample0),
+        .s_axis_tvalid(s_axis_adc_tvalid),
+        .s_axis_tlast(s_axis_adc_tlast),
+        .s_axis_tready(s_axis_adc_tready),
+        .m_axis_tdata(spur_corr_tdata),
+        .m_axis_tuser(spur_corr_tuser),
+        .m_axis_sample0(spur_corr_sample0),
+        .m_axis_raw_sample0(spur_corr_raw_sample0),
+        .m_axis_tvalid(spur_corr_tvalid),
+        .m_axis_tlast(spur_corr_tlast),
+        .m_axis_tready(spur_corr_tready),
+        .shadow_enable(spur_corr_shadow_enable),
+        .shadow_in_band(spur_corr_shadow_in_band),
+        .shadow_bypass(spur_corr_shadow_bypass),
+        .shadow_phase_reload(spur_corr_shadow_phase_reload),
+        .shadow_spur_id(spur_corr_shadow_spur_id),
+        .shadow_phase_step(spur_corr_shadow_phase_step),
+        .shadow_phase_seed(spur_corr_shadow_phase_seed),
+        .shadow_coefficients(spur_corr_shadow_coefficients),
+        .shadow_profile_id(spur_corr_shadow_profile_id),
+        .shadow_model_crc32(spur_corr_shadow_model_crc32),
+        .shadow_generation(spur_corr_shadow_generation),
+        .shadow_crc_valid(spur_corr_shadow_crc_valid),
+        .commit_pulse(spur_corr_commit_pulse),
+        .tracker_heartbeat_pulse(spur_corr_tracker_heartbeat_pulse),
+        .disable_pulse(spur_corr_disable_pulse),
+        .clear_errors_pulse(spur_corr_clear_errors_pulse),
+        .correction_active(spur_corr_correction_active),
+        .correction_uncorrected(spur_corr_correction_uncorrected),
+        .status_word(spur_corr_status),
+        .active_spur_id(spur_corr_active_spur_id),
+        .active_phase_step(spur_corr_active_phase_step),
+        .active_profile_id(spur_corr_active_profile_id),
+        .active_model_crc32(spur_corr_active_model_crc32),
+        .active_generation(spur_corr_active_generation),
+        .last_commit_sample0(spur_corr_last_commit_sample0),
+        .saturation_count(spur_corr_saturation_count),
+        .sample0_discontinuity_count(spur_corr_sample0_discontinuity_count),
+        .crc_error_count(spur_corr_crc_error_count),
+        .tracker_stale_count(spur_corr_tracker_stale_count),
+        .commit_count(spur_corr_commit_count)
+    );
+
     science_rate_selector #(
         .NINPUT(8),
         .SUBSAMPLES_PER_BEAT(4),
@@ -2270,12 +2541,12 @@ module t510_fengine_top (
         .rst_n(rst_n),
         .clear(packet_stream_reset_pulse || pfb_clear_pulse),
         .sample_rate_mode(science_sample_rate_mode),
-        .s_axis_tdata(s_axis_adc_tdata),
-        .s_axis_tuser(s_axis_adc_tuser),
-        .s_axis_sample0(observation_adc_sample0),
-        .s_axis_tvalid(s_axis_adc_tvalid),
-        .s_axis_tlast(s_axis_adc_tlast),
-        .s_axis_tready(s_axis_adc_tready),
+        .s_axis_tdata(spur_corr_tdata),
+        .s_axis_tuser(spur_corr_tuser),
+        .s_axis_sample0(spur_corr_sample0),
+        .s_axis_tvalid(spur_corr_tvalid),
+        .s_axis_tlast(spur_corr_tlast),
+        .s_axis_tready(spur_corr_tready),
         .m_axis_tdata(science_tdata),
         .m_axis_tuser(science_tuser),
         .m_axis_sample0(science_sample0),
@@ -2308,12 +2579,12 @@ module t510_fengine_top (
         .ctrl_rst_n(ctrl_rst_n),
         .streaming(streaming),
         .input_mask(ctrl_preview_input_mask),
-        .s_axis_adc_tdata0(s_axis_preview_tdata0),
-        .s_axis_adc_tdata1(s_axis_preview_tdata1),
-        .s_axis_adc_tdata2(s_axis_preview_tdata2),
-        .s_axis_adc_tdata3(s_axis_preview_tdata3),
-        .s_axis_adc_sample0(s_axis_preview_sample0),
-        .s_axis_adc_tvalid(s_axis_preview_tvalid),
+        .s_axis_adc_tdata0(preview_selected_tdata0),
+        .s_axis_adc_tdata1(preview_selected_tdata1),
+        .s_axis_adc_tdata2(preview_selected_tdata2),
+        .s_axis_adc_tdata3(preview_selected_tdata3),
+        .s_axis_adc_sample0(preview_selected_sample0),
+        .s_axis_adc_tvalid(preview_selected_tvalid),
         .ctrl_capture_start_pulse(ctrl_preview_capture_start_pulse),
         .ctrl_capture_clear_pulse(ctrl_preview_capture_clear_pulse),
         .ctrl_rd_input(ctrl_preview_rd_input),
@@ -2845,6 +3116,16 @@ module t510_fengine_top (
     );
 
 
+    always_ff @(posedge ctrl_clk or negedge ctrl_rst_n) begin
+        if (!ctrl_rst_n) begin
+            spur_corr_status_ctrl_meta <= 402'd0;
+            spur_corr_status_ctrl_bundle <= 402'd0;
+        end else begin
+            spur_corr_status_ctrl_meta <= spur_corr_status_bundle;
+            spur_corr_status_ctrl_bundle <= spur_corr_status_ctrl_meta;
+        end
+    end
+
     feng_ctrl_axi #(
         .NINPUT(8),
         .N_TX_ENDPOINTS(TX_ENDPOINTS),
@@ -2966,6 +3247,18 @@ module t510_fengine_top (
         .preview_capture_count(preview_capture_count_ctrl),
         .preview_sample0(preview_sample0_ctrl),
         .preview_rd_data(preview_rd_data_ctrl),
+        .spur_corr_status(spur_corr_status_ctrl),
+        .spur_corr_active_spur_id(spur_corr_active_spur_id_ctrl),
+        .spur_corr_active_phase_step(spur_corr_active_phase_step_ctrl),
+        .spur_corr_active_profile_id(spur_corr_active_profile_id_ctrl),
+        .spur_corr_active_model_crc32(spur_corr_active_model_crc32_ctrl),
+        .spur_corr_active_generation(spur_corr_active_generation_ctrl),
+        .spur_corr_last_commit_sample0(spur_corr_last_commit_sample0_ctrl),
+        .spur_corr_saturation_count(spur_corr_saturation_count_ctrl),
+        .spur_corr_sample0_discontinuity_count(spur_corr_sample0_discontinuity_count_ctrl),
+        .spur_corr_crc_error_count(spur_corr_crc_error_count_ctrl),
+        .spur_corr_tracker_stale_count(spur_corr_tracker_stale_count_ctrl),
+        .spur_corr_commit_count(spur_corr_commit_count_ctrl),
         .board_id(ctrl_board_id),
         .mode(ctrl_mode),
         .arm_latched(ctrl_arm_latched),
@@ -3051,6 +3344,23 @@ module t510_fengine_top (
         .preview_input_mask(ctrl_preview_input_mask),
         .preview_rd_input(ctrl_preview_rd_input),
         .preview_rd_addr(ctrl_preview_rd_addr),
+        .preview_corrected_select(ctrl_preview_corrected_select),
+        .spur_corr_shadow_enable(ctrl_spur_corr_shadow_enable),
+        .spur_corr_shadow_in_band(ctrl_spur_corr_shadow_in_band),
+        .spur_corr_shadow_bypass(ctrl_spur_corr_shadow_bypass),
+        .spur_corr_shadow_phase_reload(ctrl_spur_corr_shadow_phase_reload),
+        .spur_corr_shadow_spur_id(ctrl_spur_corr_shadow_spur_id),
+        .spur_corr_shadow_phase_step(ctrl_spur_corr_shadow_phase_step),
+        .spur_corr_shadow_phase_seed(ctrl_spur_corr_shadow_phase_seed),
+        .spur_corr_shadow_coefficients(ctrl_spur_corr_shadow_coefficients),
+        .spur_corr_shadow_profile_id(ctrl_spur_corr_shadow_profile_id),
+        .spur_corr_shadow_model_crc32(ctrl_spur_corr_shadow_model_crc32),
+        .spur_corr_shadow_generation(ctrl_spur_corr_shadow_generation),
+        .spur_corr_shadow_crc_valid(ctrl_spur_corr_shadow_crc_valid),
+        .spur_corr_commit_pulse(ctrl_spur_corr_commit_pulse),
+        .spur_corr_tracker_heartbeat_pulse(ctrl_spur_corr_tracker_heartbeat_pulse),
+        .spur_corr_disable_pulse(ctrl_spur_corr_disable_pulse),
+        .spur_corr_clear_errors_pulse(ctrl_spur_corr_clear_errors_pulse),
         .unix_seconds(ctrl_unix_seconds),
         .time_live_interval_beats(ctrl_time_live_interval_beats),
         .time_ddr_ring_enable(ctrl_time_ddr_ring_enable),

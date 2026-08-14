@@ -12,9 +12,9 @@ set sysref_10m_profile_sha256 "2dee613b9c267ffc452a904f22f19d69009187b33a080c572
 set sysref_5m_profile_id "160m_5m_request_clkin2_sdclkout3_phase_15"
 set sysref_5m_profile_sha256 "31eb4c56ec9bfacedab4a1246e2d43a601698fc8f785c32c10a56a23953b88d9"
 set tics_manifest_sha256 "695308db629e6223ec2d9ef19c9c07cb0ebd231b5b18f8632a964c6210d17009"
-set export_mode "diagnostic"
-if {[info exists ::env(T510_STAGE34C2R_EXPORT_MODE)]} {
-    set export_mode [string tolower [string trim $::env(T510_STAGE34C2R_EXPORT_MODE)]]
+set export_mode "candidate"
+if {[info exists ::env(T510_CURRENT_EXPORT_MODE)]} {
+    set export_mode [string tolower [string trim $::env(T510_CURRENT_EXPORT_MODE)]]
 }
 if {$export_mode eq "release"} {
     set build_dir [file normalize [file join $repo_root build vivado latest]]
@@ -22,29 +22,22 @@ if {$export_mode eq "release"} {
     set report_dir [file join $build_dir reports]
     set overlay_dir [file join $build_dir overlay]
     set release_label "latest"
-} elseif {$export_mode eq "diagnostic" || $export_mode eq "candidate"} {
+} elseif {$export_mode eq "candidate"} {
     # The attached Vivado GUI runs as the unprivileged board user.  Keep the
-    # candidate below /run, but use that user's standard writable runtime
+    # engineering export below /run, but use that user's standard writable runtime
     # directory instead of attempting to create a root-owned /run child.
     if {[info exists ::env(XDG_RUNTIME_DIR)] && [string match "/run/*" $::env(XDG_RUNTIME_DIR)]} {
         set runtime_root [file normalize $::env(XDG_RUNTIME_DIR)]
     } else {
         set runtime_root [file normalize [file join /run user [exec id -u]]]
     }
-    if {$export_mode eq "candidate"} {
-        set build_dir [file normalize [file join $runtime_root t510-stage34c2r-v35-candidate]]
-        set expected_build_dir [file normalize [file join $runtime_root t510-stage34c2r-v35-candidate]]
-        set report_dir [file normalize [file join $repo_root build board latest evidence clock_sysref_causality final_candidate_bit]]
-        set release_label "stage34c2r-final-candidate"
-    } else {
-        set build_dir [file normalize [file join $runtime_root t510-stage34c2r-v35-diagnostic]]
-        set expected_build_dir [file normalize [file join $runtime_root t510-stage34c2r-v35-diagnostic]]
-        set report_dir [file normalize [file join $repo_root build board latest evidence clock_sysref_causality diagnostic_bit]]
-        set release_label "stage34c2r-diagnostic-candidate"
-    }
-    set overlay_dir [file join $build_dir overlay]
+    set build_dir [file normalize [file join $runtime_root t510-current-export]]
+    set expected_build_dir [file normalize [file join $runtime_root t510-current-export]]
+    set report_dir [file normalize [file join $repo_root build board latest evidence adc_interleave_spur_correction bitstream]]
+    set release_label "v36-engineering-diagnostic"
+    set overlay_dir [file join $report_dir overlay]
 } else {
-    error "T510_STAGE34C2R_EXPORT_MODE must be diagnostic, candidate, or release, got '$export_mode'"
+    error "T510_CURRENT_EXPORT_MODE must be candidate or release, got '$export_mode'"
 }
 
 if {[current_project -quiet] eq ""} {
@@ -100,10 +93,10 @@ if {[file exists $synth_log]} {
 if {[file exists $impl_log]} {
     file copy $impl_log [file join $report_dir implementation_run.log]
 }
-set candidate_identity [file join $report_dir candidate_identity.txt]
-set fh [open $candidate_identity w]
+set build_identity [file join $report_dir build_identity.txt]
+set fh [open $build_identity w]
 puts $fh "export_mode=$export_mode"
-puts $fh "core_version=0x00010035"
+puts $fh "core_version=0x00010036"
 puts $fh "synth_status=$synth_status"
 puts $fh "impl_status=$impl_status"
 puts $fh "bit=$bit_dst"
@@ -118,28 +111,33 @@ report_methodology -file [file join $report_dir methodology.rpt]
 report_design_analysis -congestion -file [file join $report_dir congestion.rpt]
 report_high_fanout_nets -timing -max_nets 100 -file [file join $report_dir high_fanout_nets.rpt]
 report_utilization -hierarchical -file [file join $report_dir utilization_hierarchical.rpt]
+set spur_cells [get_cells -hier -quiet -filter {NAME =~ *u_adc_interleave_spur_corrector*}]
+if {[llength $spur_cells] == 0} {
+    error "v36 routed design does not contain adc_interleave_spur_corrector"
+}
+report_utilization -cells $spur_cells -file [file join $report_dir utilization_spur_corrector.rpt]
 report_clock_utilization -file [file join $report_dir clock_utilization.rpt]
 report_datasheet -file [file join $report_dir datasheet.rpt]
 report_timing -delay_type min_max -from [get_ports -quiet {pl_sys_ref_p pl_sys_ref_n}] \
     -max_paths 20 -file [file join $report_dir pl_sysref_input_timing.rpt]
 set sysref_capture_cells [get_cells -hier -quiet -filter {NAME =~ *pl_mts_sync_clk_0*pl_sys_ref_capture_reg}]
 if {[llength $sysref_capture_cells] != 1} {
-    error "v35 expected exactly one PL SYSREF first-stage capture register, found $sysref_capture_cells"
+    error "v36 expected exactly one PL SYSREF first-stage capture register, found $sysref_capture_cells"
 }
 set sysref_capture_loc [get_property LOC [lindex $sysref_capture_cells 0]]
 if {$sysref_capture_loc eq "" || [string match "SLICE*" $sysref_capture_loc]} {
-    error "v35 PL SYSREF first-stage capture is not placed in an input IOB: LOC=$sysref_capture_loc"
+    error "v36 PL SYSREF first-stage capture is not placed in an input IOB: LOC=$sysref_capture_loc"
 }
 set sysref_capture_d [get_pins -quiet -of_objects [lindex $sysref_capture_cells 0] -filter {REF_PIN_NAME == D}]
 set sysref_capture_q [get_pins -quiet -of_objects [lindex $sysref_capture_cells 0] -filter {REF_PIN_NAME == Q}]
 set sysref_timing_paths [get_timing_paths -quiet -from [get_ports -quiet {pl_sys_ref_p pl_sys_ref_n}] -to $sysref_capture_d -max_paths 1]
 if {[llength $sysref_capture_d] != 1 || [llength $sysref_capture_q] != 1 || [llength $sysref_timing_paths] == 0} {
-    error "v35 PL SYSREF input has no timed capture path"
+    error "v36 PL SYSREF input has no timed capture path"
 }
 set adc_recapture_cells [get_cells -hier -quiet -filter {NAME =~ *pl_mts_axis_recapture_0*adc_sysref_level_reg}]
 set dac_recapture_cells [get_cells -hier -quiet -filter {NAME =~ *pl_mts_axis_recapture_0*dac_sysref_level_reg}]
 if {[llength $adc_recapture_cells] != 1 || [llength $dac_recapture_cells] != 1} {
-    error "v35 expected exactly one ADC and DAC SYSREF recapture register: ADC=$adc_recapture_cells DAC=$dac_recapture_cells"
+    error "v36 expected exactly one ADC and DAC SYSREF recapture register: ADC=$adc_recapture_cells DAC=$dac_recapture_cells"
 }
 set adc_recapture_d [get_pins -quiet -of_objects [lindex $adc_recapture_cells 0] -filter {REF_PIN_NAME == D}]
 set dac_recapture_d [get_pins -quiet -of_objects [lindex $dac_recapture_cells 0] -filter {REF_PIN_NAME == D}]
@@ -151,13 +149,13 @@ foreach endpoint [list $adc_recapture_d $dac_recapture_d] {
     foreach delay_type {max min} {
         set path [get_timing_paths -quiet -delay_type $delay_type -from $sysref_capture_q -to $endpoint -max_paths 1]
         if {[llength $path] != 1 || [get_property SLACK [lindex $path 0]] < 0.0} {
-            error "v35 PL-to-AXIS SYSREF recapture timing failed delay_type=$delay_type endpoint=$endpoint path=$path"
+            error "v36 PL-to-AXIS SYSREF recapture timing failed delay_type=$delay_type endpoint=$endpoint path=$path"
         }
     }
 }
 set timing18 [get_methodology_violations -quiet -filter {ID == TIMING-18}]
 if {[llength $timing18] != 0} {
-    error "v35 methodology still reports TIMING-18: $timing18"
+    error "v36 methodology still reports TIMING-18: $timing18"
 }
 write_checkpoint -force [file join $report_dir t510_fengine_board_top_routed.dcp]
 
@@ -203,7 +201,7 @@ set manifest [file join $overlay_dir t510_fengine.manifest.txt]
 set fh [open $manifest w]
 puts $fh "release=$release_label"
 puts $fh "export_mode=$export_mode"
-puts $fh "core_version=0x00010035"
+puts $fh "core_version=0x00010036"
 puts $fh "project=$project_name"
 puts $fh "project_dir=$project_dir"
 puts $fh "part=[get_property PART [current_project]]"
@@ -234,7 +232,7 @@ set summary [file join $report_dir build_summary.txt]
 set fh [open $summary w]
 puts $fh "release=$release_label"
 puts $fh "export_mode=$export_mode"
-puts $fh "core_version=0x00010035"
+puts $fh "core_version=0x00010036"
 puts $fh "project=$project_name"
 puts $fh "project_dir=$project_dir"
 puts $fh "part=[get_property PART [current_project]]"

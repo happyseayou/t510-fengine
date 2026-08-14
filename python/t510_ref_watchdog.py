@@ -43,8 +43,9 @@ DEFAULT_CLOCK_DIAGNOSTIC_STATE_PATH = Path("/run/t510-clock-diagnostic.json")
 DEFAULT_OUTPUT_LOAD_STATE_PATH = Path("/run/t510-output-load.json")
 DEFAULT_RFDC_POWER_STATE_PATH = Path("/run/t510-rfdc-power.json")
 DEFAULT_POWER_THERMAL_TELEMETRY_PATH = Path("/run/t510-power-thermal.jsonl")
+DEFAULT_SPUR_CORRECTION_STATE_PATH = Path("/run/t510-spur-correction.json")
 FPGA_MANAGER_STATE_PATH = Path("/sys/class/fpga_manager/fpga0/state")
-CALIBRATION_OBSERVATION_INTERVAL_SECONDS = 1.0
+CALIBRATION_OBSERVATION_INTERVAL_SECONDS = 0.2
 AMS_SAMPLE_INTERVAL_SECONDS = 0.2
 AMS_AGGREGATE_INTERVAL_SECONDS = 1.0
 POWER_THERMAL_RING_CAPACITY_SECONDS = 4096
@@ -82,6 +83,19 @@ def _sha1(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _expected_core_version_for_bitfile(bitfile: Path) -> int:
+    manifest = bitfile.resolve().with_name("t510_fengine.manifest.txt")
+    try:
+        rows = dict(
+            line.split("=", 1)
+            for line in manifest.read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+        return int(rows["core_version"], 0)
+    except (OSError, KeyError, ValueError):
+        return EXPECTED_CORE_VERSION
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -231,6 +245,7 @@ class ReferenceWatchdog:
         clock_diagnostic_state_path: Path = DEFAULT_CLOCK_DIAGNOSTIC_STATE_PATH,
         output_load_state_path: Path = DEFAULT_OUTPUT_LOAD_STATE_PATH,
         rfdc_power_state_path: Path = DEFAULT_RFDC_POWER_STATE_PATH,
+        spur_correction_state_path: Path = DEFAULT_SPUR_CORRECTION_STATE_PATH,
         power_thermal_telemetry_path: Path | None = None,
     ) -> None:
         self.bitfile = bitfile.resolve()
@@ -243,6 +258,7 @@ class ReferenceWatchdog:
         self.clock_diagnostic_state_path = clock_diagnostic_state_path
         self.output_load_state_path = output_load_state_path
         self.rfdc_power_state_path = rfdc_power_state_path
+        self.spur_correction_state_path = spur_correction_state_path
         self.power_thermal_ring = BoundedJsonlRing(
             power_thermal_telemetry_path
             if power_thermal_telemetry_path is not None
@@ -289,7 +305,30 @@ class ReferenceWatchdog:
         self.last_ams_aggregate_monotonic = time.monotonic()
         self.telemetry_record_due = False
         self.last_power_thermal_record: dict[str, Any] | None = None
+        self.spur_tracker: dict[str, Any] = {
+            "supported": self.expected_core_version >= 0x0001_0036,
+            "state": "IDLE",
+            "last_update_unix_ms": None,
+            "last_coefficient_crc32": None,
+            "last_error": None,
+        }
+        self.spur_tracker_fault_reason: str | None = None
+        self._last_spur_coefficients: tuple[tuple[int, int], ...] | None = None
         self._load_previous_state()
+        if self.expected_core_version >= 0x0001_0036:
+            state = _read_json(self.spur_correction_state_path)
+            if isinstance(state, dict) and bool(state.get("credential_valid")):
+                _write_json_atomic(
+                    self.spur_correction_state_path,
+                    {
+                        **state,
+                        "calibration_state": "INVALID",
+                        "spur_correction_id": None,
+                        "credential_valid": False,
+                        "invalid_reason": "SPUR_TRACKER_SERVICE_RESTART",
+                        "updated_at_unix_ms": time.time_ns() // 1_000_000,
+                    },
+                )
 
     def _load_previous_state(self) -> None:
         previous = _read_json(self.state_path)
@@ -520,6 +559,7 @@ class ReferenceWatchdog:
                 }
             )
             self.calibration_observation = observation
+            self._update_spur_tracker(observation)
         except Exception as exc:  # noqa: BLE001 - observation failure is reported, not hidden
             self.calibration_observation = {
                 "supported": False,
@@ -528,6 +568,172 @@ class ReferenceWatchdog:
                 "temperature_c": _maximum_ams_temperature(self.ams_telemetry),
                 "ams": self.ams_telemetry,
             }
+            self._handle_spur_tracker_error(exc)
+            self._handle_spur_tracker_error(exc)
+
+    def _persist_spur_tracker_state(
+        self, state: dict[str, Any], **updates: Any
+    ) -> dict[str, Any]:
+        value = {
+            **state,
+            **updates,
+            "updated_at_unix_ms": time.time_ns() // 1_000_000,
+        }
+        _write_json_atomic(self.spur_correction_state_path, value)
+        return value
+
+    @staticmethod
+    def _ocb1_dft_from_observation(
+        observation: dict[str, Any], adc: int, k: int
+    ) -> complex:
+        channels = {
+            int(row["adc"]): row
+            for row in observation.get("channels", [])
+            if isinstance(row, dict) and row.get("adc") is not None
+        }
+        diagnostics = dict(channels[int(adc)].get("ocb1_diagnostics", {}))
+        row = next(
+            item
+            for item in diagnostics.get("dft", [])
+            if int(item.get("k", -1)) == int(k)
+        )
+        return complex(float(row["real"]), float(row["imag"]))
+
+    def _handle_spur_tracker_error(self, exc: Exception) -> None:
+        if self.expected_core_version < 0x0001_0036:
+            return
+        state = _read_json(self.spur_correction_state_path)
+        if not isinstance(state, dict) or not bool(state.get("credential_valid")):
+            return
+        reason = f"SPUR_TRACKER:{type(exc).__name__}:{exc}"
+        self.spur_tracker.update({"state": "FAULT", "last_error": reason})
+        self._persist_spur_tracker_state(
+            state,
+            calibration_state="INVALID",
+            spur_correction_id=None,
+            credential_valid=False,
+            invalid_reason=reason,
+            tracker=self.spur_tracker,
+        )
+        # A valid correction credential means this is a corrected science
+        # session.  Even if hardware has already failed itself to bypass (for
+        # example on tracker timeout), the stream must STOP instead of silently
+        # continuing with the uncorrected flag.
+        if bool(self.hardware.get("streaming")):
+            self.spur_tracker_fault_reason = reason
+        else:
+            try:
+                self.core.disable_spur_correction(clear_errors=False)
+            except Exception:
+                pass
+
+    def _update_spur_tracker(self, observation: dict[str, Any]) -> None:
+        """Refresh v36 coefficients from read-only dynamic OCB1 at 5 Hz."""
+
+        if self.expected_core_version < 0x0001_0036 or self.core is None:
+            return
+        state = _read_json(self.spur_correction_state_path)
+        if not isinstance(state, dict) or not bool(state.get("credential_valid")):
+            self.spur_tracker.update({"state": "IDLE", "last_error": None})
+            return
+        try:
+            from python.t510_spur_correction import (
+                LaneSpurModel,
+                coefficient_crc32,
+                load_model,
+                quantize_q8_16,
+            )
+
+            result = dict(state.get("result") or {})
+            model = load_model(str(result["model_path"]))
+            if str(model.get("sha256")) != str(result.get("model_sha256")):
+                raise RuntimeError("credential/model SHA256 mismatch")
+            if int(observation.get("frozen_adc_mask", -1)) != 0:
+                raise RuntimeError("ADC calibration freeze mask changed from 0x00")
+            spur = dict(result["spur"])
+            k = int(spur["ocb1_dft_k"])
+            lane_models = [LaneSpurModel.from_json(row) for row in model["lanes"]]
+            if len(lane_models) != 8:
+                raise RuntimeError("frozen spur model does not contain eight lanes")
+            tracker_mode = str(state.get("tracker_mode", "dynamic"))
+            if tracker_mode not in ("static_c0", "dynamic"):
+                raise RuntimeError(f"unsupported spur tracker mode {tracker_mode!r}")
+            coefficients = tuple(
+                quantize_q8_16(
+                    lane_models[adc].c0
+                    if tracker_mode == "static_c0"
+                    else lane_models[adc].tracked(
+                        self._ocb1_dft_from_observation(observation, adc, k)
+                    )
+                )
+                for adc in range(8)
+            )
+            temperature = observation.get("temperature_c")
+            calibrated_temperature = result.get("temperature_c")
+            delta_c = (
+                abs(float(temperature) - float(calibrated_temperature))
+                if temperature is not None and calibrated_temperature is not None
+                else None
+            )
+            if delta_c is not None and delta_c > 5.0:
+                raise RuntimeError(f"temperature delta {delta_c:.3f} C exceeds 5 C")
+
+            load = None
+            commit = None
+            if coefficients != self._last_spur_coefficients:
+                load = self.core.load_spur_correction_shadow(
+                    spur_id=int(spur["spur_id"]),
+                    phase_step=int(result["phase_step"]),
+                    phase_seed=0,
+                    coefficients_q8_16=coefficients,
+                    profile_id=int(str(result["profile_id"]), 0),
+                    model_crc32=int(result["model_crc32"]),
+                    generation=int(result["generation"]),
+                    enable=True,
+                    in_band=True,
+                    bypass=False,
+                    phase_reload=False,
+                )
+                commit = self.core.commit_spur_correction()
+                self._last_spur_coefficients = coefficients
+            hardware = self.core.heartbeat_spur_correction()
+            expected_hardware = {
+                "active_spur_id": int(spur["spur_id"]),
+                "active_phase_step": int(result["phase_step"]) & ((1 << 48) - 1),
+                "active_profile_id": int(str(result["profile_id"]), 0),
+                "active_model_crc32": int(result["model_crc32"]) & 0xFFFF_FFFF,
+                "active_generation": int(result["generation"]) & 0xFFFF_FFFF,
+            }
+            identity_mismatch = {
+                key: {"expected": expected, "actual": hardware.get(key)}
+                for key, expected in expected_hardware.items()
+                if int(hardware.get(key, -1)) != expected
+            }
+            if bool(self.hardware.get("streaming")) and (
+                not bool(hardware.get("active")) or identity_mismatch
+            ):
+                raise RuntimeError(
+                    "hardware correction became inactive or changed identity: "
+                    f"hardware={hardware} mismatch={identity_mismatch}"
+                )
+            now_ms = time.time_ns() // 1_000_000
+            self.spur_tracker = {
+                "supported": True,
+                "state": "STATIC_C0" if tracker_mode == "static_c0" else "TRACKING",
+                "mode": tracker_mode,
+                "last_update_unix_ms": now_ms,
+                "last_coefficient_crc32": coefficient_crc32(coefficients),
+                "temperature_delta_c": delta_c,
+                "temperature_warning": bool(delta_c is not None and delta_c > 2.0),
+                "coefficient_changed": load is not None,
+                "hardware": hardware,
+                "commit": commit,
+                "last_error": None,
+            }
+            self._persist_spur_tracker_state(state, tracker=self.spur_tracker)
+            self.spur_tracker_fault_reason = None
+        except Exception as exc:
+            self._handle_spur_tracker_error(exc)
 
     def _trip(self, reason: str) -> None:
         if self.core is None:
@@ -543,6 +749,25 @@ class ReferenceWatchdog:
             flush=True,
         )
         self.core.stop()
+        # A tracker fault is a science-integrity failure.  The DAC mask and all
+        # amplitude registers are explicitly cleared, not merely hidden by the
+        # global enable bit.
+        try:
+            self.core.set_dac_enable_mask(0)
+            self.core.set_dac_tone(enable=False, amplitude=0, phase_step=0)
+            for channel in range(8):
+                self.core.set_dac_tone(
+                    enable=False,
+                    amplitude=0,
+                    phase_step=0,
+                    channel=channel,
+                    phase0=0,
+                    phase_inject=0,
+                )
+            if self.expected_core_version >= 0x0001_0036:
+                self.core.disable_spur_correction(clear_errors=False)
+        except Exception as exc:  # noqa: BLE001 - retain stop evidence below
+            self.last_error = f"FAULT_CLEANUP:{type(exc).__name__}:{exc}"
         stopped_ns: int | None = None
         deadline = time.monotonic() + self.stop_timeout_seconds
         last = dict(before)
@@ -628,6 +853,7 @@ class ReferenceWatchdog:
                 CALIBRATION_OBSERVATION_INTERVAL_SECONDS * 1000.0, 3
             ),
             "calibration_observation": self.calibration_observation,
+            "spur_tracker": self.spur_tracker,
             "ams_sample_interval_ms": round(AMS_SAMPLE_INTERVAL_SECONDS * 1000.0, 3),
             "ams_telemetry": self.ams_telemetry,
             "power_thermal_telemetry": {
@@ -697,6 +923,9 @@ class ReferenceWatchdog:
                 if reason is None and sysref_reason is not None:
                     self.policy.fault_latched = True
                     reason = sysref_reason
+                if reason is None and self.spur_tracker_fault_reason is not None:
+                    self.policy.fault_latched = True
+                    reason = self.spur_tracker_fault_reason
             except Exception as exc:  # noqa: BLE001 - sustained errors fail safe
                 self.lock_status = None
                 self.last_error = f"LMK_SPI:{type(exc).__name__}:{exc}"
@@ -788,14 +1017,18 @@ def main(argv: list[str] | None = None) -> int:
         default=str(DEFAULT_RFDC_POWER_STATE_PATH),
     )
     parser.add_argument(
+        "--spur-correction-state",
+        default=str(DEFAULT_SPUR_CORRECTION_STATE_PATH),
+    )
+    parser.add_argument(
         "--power-thermal-telemetry",
         default=str(DEFAULT_POWER_THERMAL_TELEMETRY_PATH),
     )
     parser.add_argument("--interval-ms", type=float, default=100.0)
     parser.add_argument(
         "--expected-core-version",
-        default=f"0x{EXPECTED_CORE_VERSION:08x}",
-        help="catalog-bound core identity; diagnostic v35 uses 0x00010035",
+        default="auto",
+        help="catalog-bound core identity; auto reads the overlay manifest (v34 fallback)",
     )
     parser.add_argument("--unlock-confirmations", type=int, default=2)
     parser.add_argument("--spi-error-confirmations", type=int, default=5)
@@ -810,9 +1043,13 @@ def main(argv: list[str] | None = None) -> int:
     if not 100.0 <= args.stop_timeout_ms <= 10_000.0:
         parser.error("--stop-timeout-ms must be within 100..10000")
     try:
-        expected_core_version = int(str(args.expected_core_version), 0)
+        expected_core_version = (
+            _expected_core_version_for_bitfile(Path(args.bitfile))
+            if str(args.expected_core_version).strip().lower() == "auto"
+            else int(str(args.expected_core_version), 0)
+        )
     except ValueError:
-        parser.error("--expected-core-version must be an integer such as 0x00010035")
+        parser.error("--expected-core-version must be auto or an integer such as 0x00010036")
 
     lock_descriptor = _acquire_singleton(Path(args.lock))
     try:
@@ -828,6 +1065,7 @@ def main(argv: list[str] | None = None) -> int:
             clock_diagnostic_state_path=Path(args.clock_diagnostic_state),
             output_load_state_path=Path(args.output_load_state),
             rfdc_power_state_path=Path(args.rfdc_power_state),
+            spur_correction_state_path=Path(args.spur_correction_state),
             power_thermal_telemetry_path=Path(args.power_thermal_telemetry),
         )
         signal.signal(signal.SIGTERM, watchdog.request_stop)

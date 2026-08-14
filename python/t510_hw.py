@@ -57,6 +57,9 @@ OCB1_STATE_PATH = Path("/run/t510-ocb1.json")
 CLOCK_DIAGNOSTIC_STATE_PATH = Path("/run/t510-clock-diagnostic.json")
 OUTPUT_LOAD_STATE_PATH = Path("/run/t510-output-load.json")
 RFDC_POWER_STATE_PATH = Path("/run/t510-rfdc-power.json")
+SPUR_CORRECTION_STATE_PATH = Path("/run/t510-spur-correction.json")
+SPUR_CORRECTION_MODEL_ROOT = Path("/var/lib/t510/spur-correction")
+SPUR_CORRECTION_50OHM_GATE_PATH = SPUR_CORRECTION_MODEL_ROOT / "independent-50ohm-qualified.json"
 LAST_CONFIGURE_REQUEST_PATH = Path("/run/t510-last-configure.json")
 REFERENCE_WATCHDOG_MAX_AGE_MS = 1_500
 CALIBRATION_OFFICIAL_MIN_DBFS = -40.0
@@ -88,6 +91,51 @@ RFDC_POWER_NORMAL = "NORMAL"
 RFDC_POWER_DAC_SHUTDOWN = "DAC_SHUTDOWN"
 RFDC_POWER_RESTORE_REQUIRED = "RESTORE_REQUIRED"
 RFDC_POWER_FAULT_LATCHED = "FAULT_LATCHED"
+SPUR_CORRECTION_CORE_VERSION = 0x0001_0036
+
+
+def _default_spur_correction_state() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "calibration_state": "UNCALIBRATED",
+        "spur_correction_id": None,
+        "credential_valid": False,
+        "diagnostic_only": True,
+        "tracker_mode": "dynamic",
+        "invalid_reason": "NOT_CALIBRATED",
+        "result": None,
+        "updated_at_unix_ms": time.time_ns() // 1_000_000,
+    }
+
+
+def _load_spur_correction_state() -> dict[str, Any]:
+    try:
+        value = json.loads(SPUR_CORRECTION_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _default_spur_correction_state()
+    if not isinstance(value, dict) or int(value.get("schema_version", 0)) != 1:
+        return {**_default_spur_correction_state(), "invalid_reason": "INVALID_STATE_FILE"}
+    return {**_default_spur_correction_state(), **value}
+
+
+def _persist_spur_correction_state(value: dict[str, Any]) -> dict[str, Any]:
+    state = {**_default_spur_correction_state(), **value}
+    state["updated_at_unix_ms"] = time.time_ns() // 1_000_000
+    _write_json_atomic(SPUR_CORRECTION_STATE_PATH, state)
+    return state
+
+
+def _invalidate_spur_correction_state(reason: str) -> dict[str, Any]:
+    previous = _load_spur_correction_state()
+    return _persist_spur_correction_state(
+        {
+            **previous,
+            "calibration_state": "INVALID",
+            "spur_correction_id": None,
+            "credential_valid": False,
+            "invalid_reason": str(reason),
+        }
+    )
 
 
 def _extend_stage34c2r_clock_profiles() -> None:
@@ -1388,6 +1436,10 @@ def _status_snapshot(controller: FEngineController) -> dict[str, Any]:
         "scheduled_sync": scheduled_sync,
         "reference_watchdog": _reference_watchdog_status(),
         "output_load": _load_output_load_state(),
+        "adc_interleave_spur_correction": {
+            **_load_spur_correction_state(),
+            "hardware": status.get("adc_interleave_spur_correction", {}),
+        },
         "dac": controller.read_dac_channels(center_mhz=center_mhz),
     }
 
@@ -1605,6 +1657,7 @@ def _repeat_active_clock_profile_mts(
 
 
 def _configure(request: dict[str, Any]) -> dict[str, Any]:
+    _invalidate_spur_correction_state("CONFIGURE_STARTED")
     _invalidate_clock_diagnostic_state("CONFIGURE_STARTED")
     _invalidate_ocb1_state("CONFIGURE_STARTED")
     _invalidate_output_load_state("CONFIGURE_STARTED")
@@ -1813,6 +1866,7 @@ def _clock_diagnostic_prepare(request: dict[str, Any]) -> dict[str, Any]:
     controller = _controller(request)
     board_id = _expected_board(controller, body)
     _require_clock_diagnostic_quiescent(controller, body)
+    _invalidate_spur_correction_state("CLOCK_DIAGNOSTIC_PREPARE")
     current_state = _load_clock_diagnostic_state()
     attempt_kind = str(body.get("attempt_kind", "overlay_reload")).strip().lower()
     repeat_active = (
@@ -2219,6 +2273,7 @@ def _ocb1_snapshot_override(request: dict[str, Any]) -> dict[str, Any]:
     controller = _controller(request)
     _expected_board(controller, body)
     _status, dac, center_mhz = _require_ocb1_quiescent(controller, body)
+    _invalidate_spur_correction_state("OCB1_OVERRIDE")
     before_state = _load_ocb1_state()
     if before_state.get("ocb1_override_state") != OCB1_DYNAMIC:
         raise HelperError(
@@ -2435,6 +2490,9 @@ def _calibration_set(request: dict[str, Any], *, freeze: bool) -> dict[str, Any]
             if training and freeze
             else None
         ),
+    )
+    _invalidate_spur_correction_state(
+        "ADC_CALIBRATION_FREEZE" if freeze else "ADC_CALIBRATION_UNFREEZE"
     )
     try:
         result = controller.require_core().set_adc_calibration_freeze(bool(freeze))
@@ -3092,6 +3150,735 @@ def _rfdc_power_restore(request: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
 
+def _spur_configuration_fingerprint(request: dict[str, Any] | None = None) -> str:
+    if request is None:
+        try:
+            request = json.loads(LAST_CONFIGURE_REQUEST_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HelperError(
+                "SPUR_CORRECTION_CONFIG_UNAVAILABLE",
+                f"cannot read the current configure identity: {exc}",
+                exit_code=EXIT_STATE_CONFLICT,
+            ) from exc
+    body = dict(request.get("request", {}))
+    bitstream = dict(request.get("bitstream", {}))
+    identity = {
+        "board_id": body.get("board_id"),
+        "profile": body.get("profile"),
+        "bitstream_id": bitstream.get("id"),
+        "bitstream_sha256": bitstream.get("sha256"),
+        "core_version": bitstream.get("core_version"),
+        "mts": json.loads(MTS_STATE_PATH.read_text(encoding="utf-8"))
+        if MTS_STATE_PATH.is_file()
+        else None,
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _spur_current_window(controller: FEngineController) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    from python.t510_spur_correction import find_in_band_spur
+
+    core = controller.require_core()
+    status = core.read_status()
+    sample_rate_msps = int(status.get("science_sample_rate_msps", 0))
+    if sample_rate_msps not in (160, 320):
+        raise HelperError(
+            "SPUR_CORRECTION_PROFILE_INVALID",
+            "spur correction requires a configured 160 or 320 MS/s science profile",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={"sample_rate_msps": sample_rate_msps},
+        )
+    mixers = core.read_rfdc_mixer_frequencies()
+    adc_centers = [
+        float(row["frequency_mhz"])
+        for row in mixers.get("mixers", [])
+        if row.get("kind") == "adc" and row.get("frequency_mhz") is not None
+    ]
+    if len(adc_centers) != 8 or max(adc_centers) - min(adc_centers) > 1.0e-6:
+        raise HelperError(
+            "SPUR_CORRECTION_MIXER_READBACK_INVALID",
+            "all eight ADC mixer readbacks must be present and identical",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={"adc_centers_mhz": adc_centers},
+        )
+    center_hz = 1.0e6 * sum(adc_centers) / len(adc_centers)
+    window = {
+        "sample_rate_msps": sample_rate_msps,
+        "sample_rate_hz": sample_rate_msps * 1_000_000,
+        "center_mhz": center_hz / 1.0e6,
+        "center_hz": center_hz,
+    }
+    return window, find_in_band_spur(center_hz, sample_rate_msps * 1.0e6)
+
+
+def _spur_temperature_c() -> float | None:
+    snapshot = read_ams_snapshot()
+    values = [float(value) for value in dict(snapshot.get("temperatures_c", {})).values()]
+    return max(values) if values else None
+
+
+def _spur_ocb_dft(calibration: dict[str, Any], adc: int, k: int) -> complex:
+    channels = {int(row["adc"]): row for row in calibration.get("channels", [])}
+    rows = dict(channels[int(adc)].get("ocb1_diagnostics", {})).get("dft", [])
+    row = next(item for item in rows if int(item.get("k", -1)) == int(k))
+    return complex(float(row["real"]), float(row["imag"]))
+
+
+def _spur_correction_status(request: dict[str, Any]) -> dict[str, Any]:
+    controller = _controller(request)
+    core = controller.require_core()
+    window, spur = _spur_current_window(controller)
+    return {
+        "state": _load_spur_correction_state(),
+        "configuration_fingerprint": _spur_configuration_fingerprint(),
+        "window": window,
+        "in_band_spur": spur,
+        "hardware": core.read_spur_correction_status(),
+        "temperature_c": _spur_temperature_c(),
+    }
+
+
+def _spur_correction_calibrate(request: dict[str, Any]) -> dict[str, Any]:
+    from python.t510_spur_correction import (
+        LaneSpurModel,
+        SPUR_PROFILE_ID,
+        apply_ocb_tracking_matrix,
+        canonical_sha256,
+        estimate_preview_vector,
+        fit_real_2x2,
+        phase_step_u48,
+        quantize_q8_16,
+        save_model,
+    )
+
+    body = _body(request)
+    controller = _controller(request)
+    board_id = _expected_board(controller, body)
+    if body.get("receiver_stream_accepting") is not False:
+        raise HelperError(
+            "SPUR_CORRECTION_RECEIVER_QUIESCENCE_REQUIRED",
+            "spur calibration requires receiver_stream_accepting=false",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+    fingerprint = _spur_configuration_fingerprint()
+    if str(body.get("configuration_fingerprint", "")) != fingerprint:
+        raise HelperError(
+            "SPUR_CORRECTION_CONFIG_MISMATCH",
+            "configuration_fingerprint does not match the current board configuration",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={"expected": fingerprint, "provided": body.get("configuration_fingerprint")},
+        )
+    input_state = str(body.get("input_state", ""))
+    if input_state not in ("all_open_diagnostic", "all_adc_independent_50ohm"):
+        raise HelperError(
+            "SPUR_CORRECTION_INPUT_STATE_INVALID",
+            "input_state must be all_open_diagnostic or all_adc_independent_50ohm",
+            exit_code=EXIT_INVALID,
+        )
+    bitstream = _bitstream(request)
+    core = controller.require_core()
+    status, dac, _center_mhz = _require_calibration_quiescent(
+        controller, allow_training_dac=False
+    )
+    if int(status.get("core_version", 0)) != SPUR_CORRECTION_CORE_VERSION:
+        raise HelperError(
+            "SPUR_CORRECTION_UNSUPPORTED",
+            "spur correction calibration requires CORE_VERSION 0x00010036",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+    calibration_before = core.read_adc_calibration_status(require=True)
+    ocb1_state = _load_ocb1_state()
+    if int(calibration_before.get("frozen_adc_mask", 0)) != 0 or str(
+        ocb1_state.get("ocb1_override_state", OCB1_DYNAMIC)
+    ) != OCB1_DYNAMIC:
+        raise HelperError(
+            "SPUR_CORRECTION_OCB1_NOT_DYNAMIC",
+            "spur correction requires dynamic RFDC calibration with freeze mask 0x00",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={"calibration": calibration_before, "ocb1": ocb1_state},
+        )
+    window, spur = _spur_current_window(controller)
+    if spur is None:
+        raise HelperError(
+            "SPUR_CORRECTION_NOT_IN_BAND",
+            "the current observation window contains none of 480/960/1440 MHz",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={"window": window},
+        )
+    if input_state == "all_adc_independent_50ohm":
+        try:
+            gate = json.loads(SPUR_CORRECTION_50OHM_GATE_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HelperError(
+                "SPUR_CORRECTION_50OHM_GATE_REQUIRED",
+                "independent 50 ohm qualification evidence is not installed",
+                exit_code=EXIT_STATE_CONFLICT,
+                details={"path": str(SPUR_CORRECTION_50OHM_GATE_PATH), "error": str(exc)},
+            ) from exc
+        if not bool(gate.get("qualified")) or int(gate.get("board_id", -1)) != board_id:
+            raise HelperError(
+                "SPUR_CORRECTION_50OHM_GATE_REQUIRED",
+                "independent 50 ohm qualification is not valid for this board",
+                exit_code=EXIT_STATE_CONFLICT,
+                details={"gate": gate},
+            )
+
+    state = _persist_spur_correction_state(
+        {
+            "calibration_state": "RUNNING",
+            "credential_valid": False,
+            "diagnostic_only": input_state != "all_adc_independent_50ohm",
+            "tracker_mode": "dynamic",
+            "invalid_reason": None,
+            "progress": {"step": "raw_preview_ensemble", "completed": 0, "total": 64},
+        }
+    )
+    core.disable_spur_correction(clear_errors=True)
+    core.set_spur_correction_preview("raw")
+    step = phase_step_u48(float(spur["offset_hz"]))
+    c_observations: list[list[complex]] = [[] for _ in range(8)]
+    d_observations: list[list[complex]] = [[] for _ in range(8)]
+    preview_records: list[tuple[int, list[list[list[int]]]]] = []
+    raw_preview_sha = hashlib.sha256()
+    first_preview_sample0: int | None = None
+    for capture_index in range(64):
+        preview = core.capture_preview_calibration_quiescent(
+            n=1024, input_mask=0xFF, timeout=1.0
+        )
+        if first_preview_sample0 is None:
+            first_preview_sample0 = int(preview["sample0"])
+        calibration = core.read_adc_calibration_status(require=True)
+        capture_lanes: list[list[list[int]]] = []
+        for adc in range(8):
+            iq = preview["iq"][adc]
+            d_value = _spur_ocb_dft(calibration, adc, int(spur["ocb1_dft_k"]))
+            d_observations[adc].append(d_value)
+            pairs = iq.tolist() if hasattr(iq, "tolist") else list(iq)
+            normalized_pairs = [[int(i_value), int(q_value)] for i_value, q_value in pairs]
+            capture_lanes.append(normalized_pairs)
+            for i_value, q_value in pairs:
+                raw_preview_sha.update(int(i_value).to_bytes(2, "little", signed=True))
+                raw_preview_sha.update(int(q_value).to_bytes(2, "little", signed=True))
+        preview_records.append((int(preview["sample0"]), capture_lanes))
+        if capture_index in (7, 15, 31, 47, 63):
+            state = _persist_spur_correction_state(
+                {
+                    **state,
+                    "progress": {
+                        "step": "raw_preview_ensemble",
+                        "completed": capture_index + 1,
+                        "total": 64,
+                    },
+                }
+            )
+
+    # First establish the actual hardware NCO origin.  Atomic commit latency is
+    # intentionally unconstrained; correlating against sample0-origin makes the
+    # calibration valid for arbitrary mixer centers rather than only offsets
+    # whose period divides 8192 samples.
+    generation = int(time.time_ns() & 0xFFFF_FFFF) or 1
+    core.load_spur_correction_shadow(
+        spur_id=int(spur["spur_id"]),
+        phase_step=step,
+        phase_seed=0,
+        coefficients_q8_16=[(0, 0)] * 8,
+        profile_id=SPUR_PROFILE_ID,
+        model_crc32=0,
+        generation=generation,
+        enable=True,
+        in_band=True,
+        bypass=False,
+        phase_reload=True,
+    )
+    origin_commit = core.commit_spur_correction()
+    phase_origin_sample0 = int(origin_commit["last_commit_sample0"])
+    core.heartbeat_spur_correction()
+    for capture_index, (capture_sample0, capture_lanes) in enumerate(preview_records):
+        for adc in range(8):
+            c_observations[adc].append(
+                estimate_preview_vector(
+                    capture_lanes[adc],
+                    sample0=capture_sample0,
+                    step_u48=step,
+                    phase_origin_sample0=phase_origin_sample0,
+                )
+            )
+
+    lane_models: list[LaneSpurModel] = []
+    coefficient_values: list[complex] = []
+    tracking_fit: list[dict[str, Any]] = []
+    for adc in range(8):
+        try:
+            matrix_raw = fit_real_2x2(d_observations[adc], c_observations[adc])
+            fit_state = "FULL_2X2"
+            fit_error = None
+        except ValueError as exc:
+            matrix_raw = [[0.0, 0.0], [0.0, 0.0]]
+            fit_state = "STATIC_C0_ONLY"
+            fit_error = str(exc)
+        matrix = (
+            (float(matrix_raw[0][0]), float(matrix_raw[0][1])),
+            (float(matrix_raw[1][0]), float(matrix_raw[1][1])),
+        )
+        d0 = sum(d_observations[adc], 0j) / len(d_observations[adc])
+        c0 = sum(c_observations[adc], 0j) / len(c_observations[adc])
+        model = LaneSpurModel(
+            c0=c0,
+            d0=d0,
+            matrix_2x2=matrix,
+        )
+        lane_models.append(model)
+        coefficient_values.append(model.tracked(d_observations[adc][-1]))
+        tracking_fit.append(
+            {
+                "adc": adc,
+                "state": fit_state,
+                "error": fit_error,
+                "observations": len(d_observations[adc]),
+            }
+        )
+
+    model_payload: dict[str, Any] = {
+        "schema_version": 1,
+        "board_id": board_id,
+        "core_version": f"0x{SPUR_CORRECTION_CORE_VERSION:08x}",
+        "bitstream_sha256": str(bitstream["sha256"]),
+        "configuration_fingerprint": fingerprint,
+        "input_state": input_state,
+        "window": window,
+        "spur": spur,
+        "phase_origin_sample0": phase_origin_sample0,
+        "profile_id": f"0x{SPUR_PROFILE_ID:08x}",
+        "raw_preview_sha256": raw_preview_sha.hexdigest(),
+        "tracking_fit": tracking_fit,
+        "lanes": [model.to_json() for model in lane_models],
+    }
+    # The initial transaction is deliberately marked with a provisional model
+    # identity.  Residual refinement changes C0, so the final frozen model is
+    # re-hashed and committed once more below before a credential is issued.
+    provisional_model_sha = canonical_sha256(model_payload)
+    model_crc32 = zlib.crc32(provisional_model_sha.encode("ascii")) & 0xFFFF_FFFF
+    quantized = [quantize_q8_16(value) for value in coefficient_values]
+    load = core.load_spur_correction_shadow(
+        spur_id=int(spur["spur_id"]),
+        phase_step=step,
+        phase_seed=0,
+        coefficients_q8_16=quantized,
+        profile_id=SPUR_PROFILE_ID,
+        model_crc32=model_crc32,
+        generation=generation,
+        enable=True,
+        in_band=True,
+        bypass=False,
+        phase_reload=False,
+    )
+    commit = core.commit_spur_correction()
+    core.heartbeat_spur_correction()
+
+    residual_history: list[dict[str, Any]] = []
+    for refinement in range(2):
+        core.set_spur_correction_preview("corrected")
+        preview = core.capture_preview_calibration_quiescent(
+            n=1024, input_mask=0xFF, timeout=1.0
+        )
+        residual = [
+            estimate_preview_vector(
+                preview["iq"][adc],
+                sample0=int(preview["sample0"]),
+                step_u48=step,
+                phase_origin_sample0=phase_origin_sample0,
+            )
+            for adc in range(8)
+        ]
+        residual_history.append(
+            {
+                "iteration": refinement + 1,
+                "sample0": int(preview["sample0"]),
+                "residual": [[value.real, value.imag] for value in residual],
+            }
+        )
+        coefficient_values = [value + delta for value, delta in zip(coefficient_values, residual)]
+        quantized = [quantize_q8_16(value) for value in coefficient_values]
+        load = core.load_spur_correction_shadow(
+            spur_id=int(spur["spur_id"]),
+            phase_step=step,
+            phase_seed=0,
+            coefficients_q8_16=quantized,
+            profile_id=SPUR_PROFILE_ID,
+            model_crc32=model_crc32,
+            generation=generation,
+            enable=True,
+            in_band=True,
+            bypass=False,
+            phase_reload=False,
+        )
+        commit = core.commit_spur_correction()
+        core.heartbeat_spur_correction()
+
+    core.set_spur_correction_preview("raw")
+    accumulated_residual = [complex(0.0, 0.0) for _ in range(8)]
+    for row in residual_history:
+        for adc, pair in enumerate(row["residual"]):
+            accumulated_residual[adc] += complex(float(pair[0]), float(pair[1]))
+    lane_models = [
+        LaneSpurModel(
+            c0=model.c0 + accumulated_residual[adc],
+            d0=model.d0,
+            matrix_2x2=model.matrix_2x2,
+        )
+        for adc, model in enumerate(lane_models)
+    ]
+    model_payload["lanes"] = [model.to_json() for model in lane_models]
+    model_payload["residual_refinement"] = residual_history
+    model_payload["final_coefficients_q8_16"] = [list(value) for value in quantized]
+    model_sha = canonical_sha256(model_payload)
+    model_crc32 = zlib.crc32(model_sha.encode("ascii")) & 0xFFFF_FFFF
+    load = core.load_spur_correction_shadow(
+        spur_id=int(spur["spur_id"]),
+        phase_step=step,
+        phase_seed=0,
+        coefficients_q8_16=quantized,
+        profile_id=SPUR_PROFILE_ID,
+        model_crc32=model_crc32,
+        generation=generation,
+        enable=True,
+        in_band=True,
+        bypass=False,
+        phase_reload=False,
+    )
+    commit = core.commit_spur_correction()
+    core.heartbeat_spur_correction()
+    core.set_spur_correction_preview("corrected")
+    verification_preview = core.capture_preview_calibration_quiescent(
+        n=1024, input_mask=0xFF, timeout=1.0
+    )
+    verification_residual = [
+        estimate_preview_vector(
+            verification_preview["iq"][adc],
+            sample0=int(verification_preview["sample0"]),
+            step_u48=step,
+            phase_origin_sample0=phase_origin_sample0,
+        )
+        for adc in range(8)
+    ]
+    verification_dbfs = [
+        20.0 * math.log10(max(abs(value) / 32768.0, 1.0e-15))
+        for value in verification_residual
+    ]
+    core.set_spur_correction_preview("raw")
+    if input_state == "all_adc_independent_50ohm" and any(
+        value > -90.0 for value in verification_dbfs
+    ):
+        core.disable_spur_correction(clear_errors=False)
+        raise HelperError(
+            "SPUR_CORRECTION_PREVIEW_RESIDUAL_FAILED",
+            "corrected preview residual exceeds the -90 dBFS formal calibration gate",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={
+                "residual_dbfs": verification_dbfs,
+                "limit_dbfs": -90.0,
+                "sample0": int(verification_preview["sample0"]),
+            },
+        )
+    model_name = f"board{board_id}_spur{int(spur['spur_id'])}_{int(window['sample_rate_msps'])}msps.json"
+    frozen_model = save_model(SPUR_CORRECTION_MODEL_ROOT / model_name, model_payload)
+    if frozen_model["sha256"] != model_sha:
+        raise RuntimeError("final spur model SHA changed during persistence")
+    temperature_c = _spur_temperature_c()
+    credential_id = f"spur-{secrets.token_hex(16)}"
+    result = {
+        "spur_correction_id": credential_id,
+        "diagnostic_only": input_state != "all_adc_independent_50ohm",
+        "board_id": board_id,
+        "core_version": f"0x{SPUR_CORRECTION_CORE_VERSION:08x}",
+        "bitstream_sha256": str(bitstream["sha256"]),
+        "configuration_fingerprint": fingerprint,
+        "window": window,
+        "spur": spur,
+        "phase_step": step,
+        "profile_id": f"0x{SPUR_PROFILE_ID:08x}",
+        "model_path": str(SPUR_CORRECTION_MODEL_ROOT / model_name),
+        "model_sha256": frozen_model["sha256"],
+        "model_crc32": model_crc32,
+        "coefficient_crc32": load["coefficient_crc32"],
+        "generation": generation,
+        "ocb1_baseline_sha256": calibration_before.get("coefficient_sha256", {}).get("ocb1"),
+        "temperature_c": temperature_c,
+        "raw_first_sample0": first_preview_sample0,
+        "phase_origin_sample0": phase_origin_sample0,
+        "origin_commit": origin_commit,
+        "residual_refinement": residual_history,
+        "corrected_preview_verification": {
+            "sample0": int(verification_preview["sample0"]),
+            "residual": [[value.real, value.imag] for value in verification_residual],
+            "residual_dbfs": verification_dbfs,
+            "all_lanes_at_or_below_minus_90_dbfs": all(
+                value <= -90.0 for value in verification_dbfs
+            ),
+        },
+        "hardware": commit,
+        "dac": dac,
+    }
+    state = _persist_spur_correction_state(
+        {
+            "calibration_state": "CALIBRATED",
+            "spur_correction_id": credential_id,
+            "credential_valid": True,
+            "diagnostic_only": result["diagnostic_only"],
+            "tracker_mode": "dynamic",
+            "invalid_reason": None,
+            "result": result,
+            "progress": {"step": "complete", "completed": 64, "total": 64},
+        }
+    )
+    return {"calibrated": True, "state": state, "result": result}
+
+
+def _spur_correction_tracker_mode(request: dict[str, Any]) -> dict[str, Any]:
+    """Select static-C0 or read-only dynamic-OCB tracking for diagnostics."""
+
+    from python.t510_spur_correction import (
+        LaneSpurModel,
+        load_model,
+        quantize_q8_16,
+    )
+
+    body = _body(request)
+    controller = _controller(request)
+    board_id = _expected_board(controller, body)
+    if body.get("receiver_stream_accepting") is not False:
+        raise HelperError(
+            "SPUR_CORRECTION_RECEIVER_QUIESCENCE_REQUIRED",
+            "changing tracker mode requires receiver_stream_accepting=false",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+    mode = str(body.get("mode", ""))
+    if mode not in ("static_c0", "dynamic"):
+        raise HelperError(
+            "SPUR_CORRECTION_TRACKER_MODE_INVALID",
+            "tracker mode must be static_c0 or dynamic",
+            exit_code=EXIT_INVALID,
+        )
+    state = _load_spur_correction_state()
+    supplied = str(body.get("spur_correction_id", ""))
+    if (
+        not bool(state.get("credential_valid"))
+        or not supplied
+        or supplied != str(state.get("spur_correction_id"))
+    ):
+        raise HelperError(
+            "SPUR_CORRECTION_CREDENTIAL_INVALID",
+            "changing tracker mode requires the matching active credential",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={"state": state},
+        )
+    if not bool(state.get("diagnostic_only")):
+        raise HelperError(
+            "SPUR_CORRECTION_TRACKER_MODE_DIAGNOSTIC_ONLY",
+            "static/dynamic tracker A/B selection is restricted to diagnostic credentials",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+    result = dict(state.get("result") or {})
+    if int(result.get("board_id", -1)) != board_id:
+        raise HelperError(
+            "SPUR_CORRECTION_CREDENTIAL_INVALID",
+            "credential board ID does not match the requested board",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+    controller.stop_and_verify()
+    core = controller.require_core()
+    model = load_model(str(result["model_path"]))
+    if str(model.get("sha256")) != str(result.get("model_sha256")):
+        raise HelperError(
+            "SPUR_CORRECTION_MODEL_INVALID",
+            "credential/model SHA256 mismatch",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+    calibration = core.read_adc_calibration_status(require=True)
+    if int(calibration.get("frozen_adc_mask", -1)) != 0:
+        raise HelperError(
+            "SPUR_CORRECTION_OCB1_NOT_DYNAMIC",
+            "tracker mode requires freeze mask 0x00",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+    spur = dict(result["spur"])
+    k = int(spur["ocb1_dft_k"])
+    lane_models = [LaneSpurModel.from_json(row) for row in model["lanes"]]
+    if len(lane_models) != 8:
+        raise HelperError(
+            "SPUR_CORRECTION_MODEL_INVALID",
+            "frozen model does not contain eight lanes",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+    values = []
+    for adc, lane_model in enumerate(lane_models):
+        value = lane_model.c0
+        if mode == "dynamic":
+            value = lane_model.tracked(_spur_ocb_dft(calibration, adc, k))
+        values.append(quantize_q8_16(value))
+    load = core.load_spur_correction_shadow(
+        spur_id=int(spur["spur_id"]),
+        phase_step=int(result["phase_step"]),
+        phase_seed=0,
+        coefficients_q8_16=values,
+        profile_id=int(str(result["profile_id"]), 0),
+        model_crc32=int(result["model_crc32"]),
+        generation=int(result["generation"]),
+        enable=True,
+        in_band=True,
+        bypass=False,
+        phase_reload=False,
+    )
+    commit = core.commit_spur_correction()
+    hardware = core.heartbeat_spur_correction()
+    updated = _persist_spur_correction_state(
+        {
+            **state,
+            "tracker_mode": mode,
+            "tracker_mode_changed_at_unix_ms": time.time_ns() // 1_000_000,
+        }
+    )
+    return {
+        "updated": True,
+        "tracker_mode": mode,
+        "state": updated,
+        "load": load,
+        "commit": commit,
+        "hardware": hardware,
+    }
+
+
+def _spur_correction_disable(request: dict[str, Any]) -> dict[str, Any]:
+    body = _body(request)
+    controller = _controller(request)
+    _expected_board(controller, body)
+    if body.get("receiver_stream_accepting") is not False:
+        raise HelperError(
+            "SPUR_CORRECTION_RECEIVER_QUIESCENCE_REQUIRED",
+            "disabling correction requires receiver_stream_accepting=false",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+    controller.stop_and_verify()
+    hardware = controller.require_core().disable_spur_correction(clear_errors=False)
+    state = _invalidate_spur_correction_state("EXPLICIT_DISABLE")
+    return {"disabled": True, "state": state, "hardware": hardware}
+
+
+def _require_spur_correction_start_authorization(
+    controller: FEngineController,
+    body: dict[str, Any],
+    bitstream: dict[str, Any],
+) -> dict[str, Any]:
+    from python.t510_spur_correction import SPUR_PROFILE_ID, phase_step_u48
+
+    core = controller.require_core()
+    status = core.read_status()
+    if int(status.get("core_version", 0)) < SPUR_CORRECTION_CORE_VERSION:
+        return {"supported": False, "active": False, "warning": None}
+    window, spur = _spur_current_window(controller)
+    supplied = body.get("spur_correction_id")
+    if spur is None:
+        if supplied:
+            raise HelperError(
+                "SPUR_CORRECTION_NOT_APPLICABLE",
+                "a spur_correction_id was supplied but no fixed spur is in-band",
+                exit_code=EXIT_STATE_CONFLICT,
+            )
+        hardware = core.disable_spur_correction(clear_errors=False)
+        return {"supported": True, "active": False, "warning": None, "window": window, "hardware": hardware}
+
+    state = _load_spur_correction_state()
+    if supplied:
+        result = dict(state.get("result") or {})
+        current_fingerprint = _spur_configuration_fingerprint()
+        valid = (
+            bool(state.get("credential_valid"))
+            and str(supplied) == str(state.get("spur_correction_id"))
+            and str(result.get("configuration_fingerprint")) == current_fingerprint
+            and str(result.get("bitstream_sha256")) == str(bitstream.get("sha256"))
+            and int(dict(result.get("spur", {})).get("spur_id", -1)) == int(spur["spur_id"])
+            and int(dict(result.get("window", {})).get("sample_rate_msps", -1)) == int(window["sample_rate_msps"])
+            and abs(float(dict(result.get("window", {})).get("center_mhz", -1.0)) - float(window["center_mhz"])) <= 1.0e-6
+        )
+        if not valid:
+            raise HelperError(
+                "SPUR_CORRECTION_CREDENTIAL_INVALID",
+                "spur_correction_id is missing, stale, or bound to another configuration",
+                exit_code=EXIT_STATE_CONFLICT,
+                details={"state": state, "window": window, "spur": spur},
+            )
+        current_temperature = _spur_temperature_c()
+        calibration_temperature = result.get("temperature_c")
+        temperature_delta = (
+            abs(float(current_temperature) - float(calibration_temperature))
+            if current_temperature is not None and calibration_temperature is not None
+            else None
+        )
+        if temperature_delta is not None and temperature_delta > 5.0:
+            _invalidate_spur_correction_state("TEMPERATURE_DELTA_GT_5C")
+            core.disable_spur_correction(clear_errors=False)
+            raise HelperError(
+                "SPUR_CORRECTION_TEMPERATURE_INVALID",
+                "temperature changed by more than 5 C since calibration",
+                exit_code=EXIT_STATE_CONFLICT,
+                details={"temperature_delta_c": temperature_delta},
+            )
+        hardware = core.heartbeat_spur_correction()
+        expected_hardware = {
+            "active_spur_id": int(spur["spur_id"]),
+            "active_phase_step": int(result["phase_step"]) & ((1 << 48) - 1),
+            "active_profile_id": int(str(result["profile_id"]), 0),
+            "active_model_crc32": int(result["model_crc32"]) & 0xFFFF_FFFF,
+            "active_generation": int(result["generation"]) & 0xFFFF_FFFF,
+        }
+        identity_mismatch = {
+            key: {"expected": expected, "actual": hardware.get(key)}
+            for key, expected in expected_hardware.items()
+            if int(hardware.get(key, -1)) != expected
+        }
+        if not bool(hardware.get("active")) or identity_mismatch:
+            raise HelperError(
+                "SPUR_CORRECTION_HARDWARE_INACTIVE",
+                "the credential is valid but the active hardware model identity does not match",
+                exit_code=EXIT_STATE_CONFLICT,
+                details={"hardware": hardware, "identity_mismatch": identity_mismatch},
+            )
+        return {
+            "supported": True,
+            "active": True,
+            "warning": "TEMPERATURE_DELTA_GT_2C" if temperature_delta is not None and temperature_delta > 2.0 else None,
+            "temperature_delta_c": temperature_delta,
+            "credential": result,
+            "hardware": hardware,
+        }
+
+    step = phase_step_u48(float(spur["offset_hz"]))
+    generation = int(time.time_ns() & 0xFFFF_FFFF) or 1
+    core.load_spur_correction_shadow(
+        spur_id=int(spur["spur_id"]),
+        phase_step=step,
+        phase_seed=0,
+        coefficients_q8_16=[(0, 0)] * 8,
+        profile_id=SPUR_PROFILE_ID,
+        model_crc32=0,
+        generation=generation,
+        enable=False,
+        in_band=True,
+        bypass=True,
+        phase_reload=False,
+    )
+    hardware = core.commit_spur_correction()
+    return {
+        "supported": True,
+        "active": False,
+        "warning": "ADC_INTERLEAVE_SPUR_UNCORRECTED",
+        "window": window,
+        "spur": spur,
+        "hardware": hardware,
+    }
+
+
 def _require_output_load_start_authorization(
     controller: FEngineController, body: dict[str, Any]
 ) -> dict[str, Any]:
@@ -3187,6 +3974,9 @@ def _start(request: dict[str, Any]) -> dict[str, Any]:
     clock_diagnostic = _require_clock_start_authorization(controller, body)
     output_load = _require_output_load_start_authorization(controller, body)
     rfdc_power = _require_rfdc_power_start_authorization(controller, body)
+    spur_correction = _require_spur_correction_start_authorization(
+        controller, body, _bitstream(request)
+    )
     watchdog = _require_reference_watchdog_ready(_bitstream(request))
     status = controller.start_immediate()
     return {
@@ -3196,6 +3986,7 @@ def _start(request: dict[str, Any]) -> dict[str, Any]:
         "clock_diagnostic": clock_diagnostic,
         "output_load": output_load,
         "rfdc_power": rfdc_power,
+        "adc_interleave_spur_correction": spur_correction,
         "status": status,
         "snapshot": _status_snapshot(controller),
     }
@@ -3209,6 +4000,9 @@ def _sync_prepare(request: dict[str, Any]) -> dict[str, Any]:
     clock_diagnostic = _require_clock_start_authorization(controller, body)
     output_load = _require_output_load_start_authorization(controller, body)
     rfdc_power = _require_rfdc_power_start_authorization(controller, body)
+    spur_correction = _require_spur_correction_start_authorization(
+        controller, body, _bitstream(request)
+    )
     core = controller.require_core()
     status = core.prepare_scheduled_sync(
         generation=int(body["generation"]),
@@ -3228,6 +4022,7 @@ def _sync_prepare(request: dict[str, Any]) -> dict[str, Any]:
         "clock_diagnostic": clock_diagnostic,
         "output_load": output_load,
         "rfdc_power": rfdc_power,
+        "adc_interleave_spur_correction": spur_correction,
         "sync": status,
         "snapshot": _status_snapshot(controller),
     }
@@ -3241,6 +4036,9 @@ def _sync_arm(request: dict[str, Any]) -> dict[str, Any]:
     clock_diagnostic = _require_clock_start_authorization(controller, body)
     output_load = _load_output_load_state()
     rfdc_power = _load_rfdc_power_state()
+    spur_correction = _require_spur_correction_start_authorization(
+        controller, body, _bitstream(request)
+    )
     watchdog = _require_reference_watchdog_ready(_bitstream(request))
     status = controller.require_core().arm_scheduled_sync()
     return {
@@ -3250,6 +4048,7 @@ def _sync_arm(request: dict[str, Any]) -> dict[str, Any]:
         "clock_diagnostic": clock_diagnostic,
         "output_load": output_load,
         "rfdc_power": rfdc_power,
+        "adc_interleave_spur_correction": spur_correction,
         "sync": status,
         "snapshot": _status_snapshot(controller),
     }
@@ -3291,6 +4090,7 @@ def _reset(request: dict[str, Any]) -> dict[str, Any]:
     _invalidate_clock_diagnostic_state("RFDC_RESET")
     _invalidate_output_load_state("RFDC_RESET")
     _invalidate_rfdc_power_state("RFDC_RESET")
+    _invalidate_spur_correction_state("RFDC_RESET")
     controller.stop_and_verify()
     controller.require_core().reset()
     return {"reset": True, "snapshot": _status_snapshot(controller)}
@@ -3346,6 +4146,10 @@ COMMANDS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "rfdc-power-status": _rfdc_power_status,
     "rfdc-power-dac-shutdown": _rfdc_power_dac_shutdown,
     "rfdc-power-restore": _rfdc_power_restore,
+    "spur-correction-status": _spur_correction_status,
+    "spur-correction-calibrate": _spur_correction_calibrate,
+    "spur-correction-tracker-mode": _spur_correction_tracker_mode,
+    "spur-correction-disable": _spur_correction_disable,
     "configure": _configure,
     "start": _start,
     "sync-prepare": _sync_prepare,

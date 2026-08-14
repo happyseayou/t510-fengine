@@ -200,6 +200,19 @@ pub struct T510Header {
     pub sync_status: u64,
 }
 
+pub const FLAG_ADC_INTERLEAVE_SPUR_CORRECTION_ACTIVE: u16 = 1 << 6;
+pub const FLAG_ADC_INTERLEAVE_SPUR_UNCORRECTED: u16 = 1 << 7;
+
+impl T510Header {
+    pub fn adc_interleave_spur_correction_active(&self) -> bool {
+        self.flags & FLAG_ADC_INTERLEAVE_SPUR_CORRECTION_ACTIVE != 0
+    }
+
+    pub fn adc_interleave_spur_uncorrected(&self) -> bool {
+        self.flags & FLAG_ADC_INTERLEAVE_SPUR_UNCORRECTED != 0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FastPacketError {
     FrameTooShort,
@@ -1118,6 +1131,32 @@ mod tests {
         assert_eq!(header.time_count, 64);
         assert_eq!(header.ninput, 8);
         assert_eq!(header.payload_bytes as usize, TIME_PAYLOAD_BYTES);
+    }
+
+    #[test]
+    fn decodes_v36_spur_correction_packet_flags_without_rejecting_legacy() {
+        let mut payload = synthetic_payload(64, 12, 1000);
+        let active_word = (37u64 << 48)
+            | (1u64 << 32)
+            | (1u64 << 16)
+            | u64::from(FLAG_ADC_INTERLEAVE_SPUR_CORRECTION_ACTIVE);
+        payload[8..16].copy_from_slice(&active_word.to_le_bytes());
+        let active = parse_t510_header(&payload).unwrap();
+        assert!(active.adc_interleave_spur_correction_active());
+        assert!(!active.adc_interleave_spur_uncorrected());
+
+        let warning_word = (37u64 << 48)
+            | (1u64 << 32)
+            | (1u64 << 16)
+            | u64::from(FLAG_ADC_INTERLEAVE_SPUR_UNCORRECTED);
+        payload[8..16].copy_from_slice(&warning_word.to_le_bytes());
+        let warning = parse_t510_header(&payload).unwrap();
+        assert!(!warning.adc_interleave_spur_correction_active());
+        assert!(warning.adc_interleave_spur_uncorrected());
+
+        let legacy = parse_t510_header(&synthetic_payload(64, 12, 1000)).unwrap();
+        assert!(!legacy.adc_interleave_spur_correction_active());
+        assert!(!legacy.adc_interleave_spur_uncorrected());
     }
 
     #[test]
