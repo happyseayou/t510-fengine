@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`RTL_AND_CONTROL_IMPLEMENTED / REGRESSION_PASS / V36_BUILD_PENDING`
+`V36_ROUTED_CANDIDATE_EXPORTED / OPEN_INPUT_DIAGNOSTIC_RUNNING / 50OHM_QUALIFICATION_PENDING`
 
 Stage 34e 是隔离的工程候选，不是当前产品发布。当前正式入口仍是 v34；候选身份固定为：
 
@@ -88,8 +88,17 @@ START合同为：不含固定项时正常bypass；含固定项但不带ID时允�
 
 当前最终提交前回归记录：Python 219项、Board Agent 8项、receiver 50项和XSim 19/19均通过；
 最后一次清流边界修复后，补偿器定向仿真和完整顶层冒烟仿真也已重新通过。Board Agent已用项目
-冻结的`cargo zigbuild`流程生成ARM64静态候选产物。Vivado routed资源、WNS/WHS、
-DRC/methodology和最终bit SHA尚待本轮完整构建，因此本报告不能提前写“硬件通过”。
+冻结的`cargo zigbuild`流程生成ARM64静态候选产物。已连接Vivado GUI完成
+`synth → impl/phys_opt/route → write_bitstream → current-project export`：
+
+- bitstream SHA256：`a16bcd192ebcf01684ced0f80a55aca8cd7b7665f70adf100492038309e5e83e`；
+- routed WNS `+0.061 ns`、WHS `+0.009 ns`，setup/hold失败端点均为0；
+- 325,199条可布线网络全部完成，route error为0；
+- 全设计DSP48E2为888，补偿器层级恰为128个DSP48E2；
+- 全设计LUT 142,938、FF 187,153、RAMB36 553、RAMB18 194；
+- 未新增阻断发布的DRC/methodology问题；保留的critical warning为既有CMAC Evaluation License。
+
+这些结果只闭合v36候选的构建和布线门禁，不替代开放输入及50 Ω板级资格。
 
 ## 开放输入诊断队列
 
@@ -107,12 +116,22 @@ DRC/methodology和最终bit SHA尚待本轮完整构建，因此本报告不能�
 开放输入必须看到八路改善方向一致才继续；结果统一标记 `OPEN_INPUT_DIAGNOSTIC`。它既不能建立
 正式模型，也不能发布v36。
 
+候选队列使用用户级systemd单元`t510-stage34e-v36-open-input.service`。启动期间发现并修复了三类
+受门禁正确拦截的问题：候选/生产bitstream切换顺序、Agent短暂硬件互斥，以及ADC mixer readback
+的数字下变频负号到物理RF轴的换算；失败现场完整保存在`attempts/attempt_001..004`。receiver已
+原位升级为同时兼容v34/v36的版本，远端二进制SHA256为
+`1a27931a6bf341cc958a510cd271dd4981539bac20f6a2b3b27e046d7527f493`。
+
+2026-08-14提交的当前队列invocation ID为`09b098224a0e4f27b9b5a2b7685dbeb9`。首个
+480 MHz/160 MS/s raw窗口已健康进入60秒monitor：v36、center 420 MHz、SPEC_ONLY，采集机
+实测约41.80 Gbit/s和624.8 kpacket/s；QSFP UDP flag为`0x0085`，即bit7未校正警告有效、bit6
+未置。FPGA、NIC、ring、application drop及seq/frame/sample0 gap均为0，DAC mask为0，首份
+16端口PCAP已从receiver主PACKET_MMAP环导出。按长任务规则，确认首窗运行后不继续驻留轮询。
+
 ## 尚未完成的硬门禁
 
-1. 已连接Vivado GUI完整 `synth → impl/phys_opt/route → write_bitstream` 和current-project导出；
-2. routed WNS/WHS均不小于0、DSP约888且128个补偿乘法器未变成大规模LUT；
-3. 当前八路开放输入六窗、60分钟tracker和全速矩阵；
-4. 八个独立50 Ω负载到货后的144组合、三条60分钟跟踪、SSA同频信号保持、积分A/B、MTS 40/40、
+1. 当前八路开放输入六窗、60分钟tracker和全速矩阵；
+2. 八个独立50 Ω负载到货后的144组合、三条60分钟跟踪、SSA同频信号保持、积分A/B、MTS 40/40、
    20次循环和全速soak。
 
 正式目标仍是每个60秒平均固定项不高于局部噪底+6 dB，raw-preview固定矢量不差于-90 dBFS；
