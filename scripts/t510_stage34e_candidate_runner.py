@@ -209,6 +209,26 @@ def deploy_candidate(args: argparse.Namespace, bundle: Path) -> None:
             if time.monotonic() >= deadline:
                 raise
             time.sleep(1.0)
+
+
+def start_candidate_watchdog(args: argparse.Namespace) -> None:
+    """Start the v36 watchdog only after v36 is the proven active bitstream.
+
+    The candidate Agent must be available before CONFIGURE, but the watchdog
+    must not inspect hardware while PYNQ still records the production v34
+    image.  Keeping these two steps separate preserves the active-bitstream
+    identity gate instead of weakening it for the deployment transition.
+    """
+    remote_sudo(
+        args.board_ssh,
+        f"systemctl stop {WATCHDOG_UNIT} >/dev/null 2>&1 || true",
+    )
+    common = (
+        "--property=User=root --property=Group=root --property=Restart=no "
+        "--property=NoNewPrivileges=true --property=PrivateTmp=true "
+        "--property=ProtectKernelModules=true --property=ProtectControlGroups=true"
+    )
+    manifest_remote = f"{REMOTE_ROOT}/profiles/manifest.json"
     remote_sudo(
         args.board_ssh,
         "systemd-run "
@@ -338,6 +358,21 @@ def run(args: argparse.Namespace) -> int:
             write_json(runner_path, state)
             deploy_candidate(args, bundle)
         state["candidate_deployed"] = True
+        bootstrap_profile = {
+            "sample_rate_msps": 160,
+            "mode": "spec_only",
+            "center_mhz": 420.0,
+        }
+        state["candidate_bootstrap_configure"] = fullband._http_json(
+            args.agent_base.rstrip("/") + "/api/v2/configure",
+            method="POST",
+            body=configure_body(template, CANDIDATE_ID, bootstrap_profile),
+            timeout=240.0,
+        )
+        state["candidate_bootstrap_status"] = wait_agent(
+            args.agent_base, CANDIDATE_CORE
+        )
+        start_candidate_watchdog(args)
         write_json(runner_path, state)
         command = [
             sys.executable, "-u", str(args.repo / "scripts/t510_adc_interleave_spur_diagnostic.py"),

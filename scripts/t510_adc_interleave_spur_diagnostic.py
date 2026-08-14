@@ -696,8 +696,16 @@ def submit_systemd(args: argparse.Namespace) -> int:
 
 
 def run_campaign(args: argparse.Namespace) -> int:
-    if args.receiver_output.exists() and any(args.receiver_output.iterdir()):
-        raise RuntimeError(f"refusing to overwrite non-empty evidence {args.receiver_output}")
+    existing = (
+        [path for path in args.receiver_output.iterdir() if path.name != "attempts"]
+        if args.receiver_output.exists()
+        else []
+    )
+    if existing:
+        raise RuntimeError(
+            f"refusing to overwrite non-empty evidence {args.receiver_output}: "
+            + ", ".join(path.name for path in existing)
+        )
     args.receiver_output.mkdir(parents=True, exist_ok=True)
     args.board_output.mkdir(parents=True, exist_ok=True)
     template = json.loads(args.configure_template.read_text())
