@@ -116,17 +116,26 @@ START合同为：不含固定项时正常bypass；含固定项但不带ID时允�
 开放输入必须看到八路改善方向一致才继续；结果统一标记 `OPEN_INPUT_DIAGNOSTIC`。它既不能建立
 正式模型，也不能发布v36。
 
-候选队列使用用户级systemd单元`t510-stage34e-v36-open-input.service`。启动期间发现并修复了三类
-受门禁正确拦截的问题：候选/生产bitstream切换顺序、Agent短暂硬件互斥，以及ADC mixer readback
-的数字下变频负号到物理RF轴的换算；失败现场完整保存在`attempts/attempt_001..004`。receiver已
+候选队列使用用户级systemd单元`t510-stage34e-v36-open-input.service`。启动期间发现并修复了五类
+受门禁正确拦截的问题：候选/生产bitstream切换顺序、Agent短暂硬件互斥、receiver候选flag版本、
+ADC mixer readback的数字下变频负号到物理RF轴的换算，以及模型CRC32 helper缺失；失败现场完整
+保存在`attempts/attempt_001..005`。receiver已
 原位升级为同时兼容v34/v36的版本，远端二进制SHA256为
 `1a27931a6bf341cc958a510cd271dd4981539bac20f6a2b3b27e046d7527f493`。
 
-2026-08-14提交的当前队列invocation ID为`09b098224a0e4f27b9b5a2b7685dbeb9`。首个
+2026-08-14提交的第六次队列invocation ID为`e84cc6d1cb204a08a0ffdb71b653b004`。首个
 480 MHz/160 MS/s raw窗口已健康进入60秒monitor：v36、center 420 MHz、SPEC_ONLY，采集机
 实测约41.80 Gbit/s和624.8 kpacket/s；QSFP UDP flag为`0x0085`，即bit7未校正警告有效、bit6
 未置。FPGA、NIC、ring、application drop及seq/frame/sample0 gap均为0，DAC mask为0，首份
-16端口PCAP已从receiver主PACKET_MMAP环导出。按长任务规则，确认首窗运行后不继续驻留轮询。
+16端口PCAP已从receiver主PACKET_MMAP环导出。raw完成后64份preview及CRC均通过，但停流状态下
+science AXIS反压使原子提交无法到达8192-sample边界，门禁以commit timeout终止；现场保存在
+`attempts/attempt_006`，并已安全恢复v34、STOP和DAC全零。
+
+修复提交`1f68c53`在停流时持续排空补偿器内部输出，使原子提交和corrected preview仍有raw beat，
+同时显式门控selector valid，保证校准beat不进入PFB、TIME或UDP；正式streaming时恢复原有无损
+ready/valid握手。补偿器单元和顶层PFB/FFT/CMAC smoke仿真均PASS，50项Python/Agent/watchdog
+回归PASS。新的Vivado GUI完整链已武装为`synth_1 → impl_1 → write_bitstream`；截至本次记录，
+新综合健康运行，须待新bitstream完成、重新导出后再续提开放输入队列。
 
 ## 尚未完成的硬门禁
 
