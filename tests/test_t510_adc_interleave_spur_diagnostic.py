@@ -1,9 +1,22 @@
 import unittest
+from argparse import Namespace
+from unittest import mock
 
 from scripts import t510_adc_interleave_spur_diagnostic as diagnostic
 
 
 class Stage34eDiagnosticTests(unittest.TestCase):
+    def test_agent_read_retries_transient_hardware_busy(self) -> None:
+        args = Namespace(agent_base="http://board.invalid")
+        with mock.patch.object(
+            diagnostic.fullband,
+            "_http_json",
+            side_effect=[RuntimeError("HARDWARE_BUSY"), {"core_version": "0x00010036"}],
+        ) as request, mock.patch.object(diagnostic.time, "sleep"):
+            result = diagnostic.agent_get(args, "/api/v2/status")
+        self.assertEqual(result["core_version"], "0x00010036")
+        self.assertEqual(request.call_count, 2)
+
     def test_six_windows_cover_three_spurs_and_both_rates(self) -> None:
         rows = diagnostic.diagnostic_windows()
         self.assertEqual(len(rows), 6)

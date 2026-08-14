@@ -39,6 +39,7 @@ SPUR_CENTERS_MHZ = {480.0: 420.0, 960.0: 900.0, 1440.0: 1380.0}
 FLAG_ACTIVE = 1 << 6
 FLAG_UNCORRECTED = 1 << 7
 PACKETS_PER_FLOW = 32
+HARDWARE_BUSY_RETRY_SECONDS = 15.0
 BOARD_EVIDENCE = Path("build/board/latest/evidence/adc_interleave_spur_correction")
 RECEIVER_EVIDENCE = Path("build/receiver/latest/evidence/adc_interleave_spur_correction")
 SYSTEMD_UNIT = "t510-stage34e-open-input.service"
@@ -136,18 +137,34 @@ def summarize_spur_monitor(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def agent_get(args: argparse.Namespace, path: str, timeout: float = 60.0) -> dict[str, Any]:
-    return fullband._http_json(args.agent_base.rstrip("/") + path, timeout=timeout)
+    deadline = time.monotonic() + HARDWARE_BUSY_RETRY_SECONDS
+    while True:
+        try:
+            return fullband._http_json(
+                args.agent_base.rstrip("/") + path, timeout=timeout
+            )
+        except RuntimeError as exc:
+            if "HARDWARE_BUSY" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
 
 
 def agent_post(
     args: argparse.Namespace, path: str, body: dict[str, Any], timeout: float = 240.0
 ) -> dict[str, Any]:
-    return fullband._http_json(
-        args.agent_base.rstrip("/") + path,
-        method="POST",
-        body=body,
-        timeout=timeout,
-    )
+    deadline = time.monotonic() + HARDWARE_BUSY_RETRY_SECONDS
+    while True:
+        try:
+            return fullband._http_json(
+                args.agent_base.rstrip("/") + path,
+                method="POST",
+                body=body,
+                timeout=timeout,
+            )
+        except RuntimeError as exc:
+            if "HARDWARE_BUSY" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
 
 
 def receiver_state(args: argparse.Namespace) -> dict[str, Any]:
@@ -178,7 +195,14 @@ def stop_and_safe(args: argparse.Namespace, center_mhz: float) -> list[str]:
         # The safe cleanup helper still attempts STOP and DAC mute using the
         # caller's last known configured center if status itself is unavailable.
         pass
-    errors = c34c.stop_and_mute(args, actual_center_mhz)
+    deadline = time.monotonic() + HARDWARE_BUSY_RETRY_SECONDS
+    while True:
+        errors = c34c.stop_and_mute(args, actual_center_mhz)
+        if not errors or not all("HARDWARE_BUSY" in error for error in errors):
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
     try:
         receiver_pause(args, True)
     except Exception as exc:
@@ -195,7 +219,19 @@ def configure(
     center_mhz: float,
 ) -> dict[str, Any]:
     args.bitstream_id = BITSTREAM_ID
-    result = c34c.configure(args, template, rate, mode, center_mhz)
+    c34c.receiver_prepare(args.receiver_base, rate, mode, center_mhz)
+    result = agent_post(
+        args,
+        "/api/v2/configure",
+        c34c.configure_body(
+            template,
+            rate,
+            mode,
+            center_mhz,
+            bitstream_id=BITSTREAM_ID,
+        ),
+        timeout=240.0,
+    )
     status = agent_get(args, "/api/v2/status")
     if str(status.get("core_version", "")).lower() != CORE_VERSION:
         raise RuntimeError(f"v36 core identity mismatch: {status.get('core_version')}")

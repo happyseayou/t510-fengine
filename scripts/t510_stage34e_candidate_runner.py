@@ -93,6 +93,44 @@ def wait_agent(agent_base: str, core_version: str | None = None) -> dict[str, An
     raise RuntimeError(f"Board Agent did not become ready: {last_error}")
 
 
+def wait_agent_api(agent_base: str) -> None:
+    """Wait for the Agent process without requiring the active PL identity."""
+    deadline = time.monotonic() + 60.0
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            fullband._http_json(
+                agent_base.rstrip("/") + "/api/v2/capabilities", timeout=4.0
+            )
+            return
+        except Exception as exc:
+            last_error = exc
+        time.sleep(1.0)
+    raise RuntimeError(f"Board Agent API did not become ready: {last_error}")
+
+
+def agent_post_with_busy_retry(
+    agent_base: str,
+    path: str,
+    body: dict[str, Any],
+    *,
+    timeout: float,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + 15.0
+    while True:
+        try:
+            return fullband._http_json(
+                agent_base.rstrip("/") + path,
+                method="POST",
+                body=body,
+                timeout=timeout,
+            )
+        except RuntimeError as exc:
+            if "HARDWARE_BUSY" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
+
+
 def candidate_config(bit_sha256: str) -> dict[str, Any]:
     return {
         "listen": "0.0.0.0:8010",
@@ -263,17 +301,23 @@ def restore_production(
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {"errors": []}
     try:
-        remote_sudo(args.board_ssh, f"systemctl stop {AGENT_UNIT} {WATCHDOG_UNIT} >/dev/null 2>&1 || true")
+        remote_sudo(
+            args.board_ssh,
+            f"systemctl stop {AGENT_UNIT} {WATCHDOG_UNIT} t510-ref-watchdog.service >/dev/null 2>&1 || true",
+        )
         remote_sudo(args.board_ssh, "systemctl start t510-agent.service")
-        wait_agent(args.agent_base)
+        wait_agent_api(args.agent_base)
         profile = (original_board or {}).get("profile") or {
             "sample_rate_msps": 160, "mode": "spec_only", "center_mhz": 1020.0,
         }
-        evidence["configure"] = fullband._http_json(
-            args.agent_base.rstrip("/") + "/api/v2/configure",
-            method="POST",
-            body=configure_body(template, PRODUCTION_ID, profile),
+        evidence["configure"] = agent_post_with_busy_retry(
+            args.agent_base,
+            "/api/v2/configure",
+            configure_body(template, PRODUCTION_ID, profile),
             timeout=240.0,
+        )
+        evidence["post_configure_status"] = wait_agent(
+            args.agent_base, PRODUCTION_CORE
         )
         remote_sudo(args.board_ssh, "systemctl start t510-ref-watchdog.service")
         if original_receiver is not None and isinstance(original_receiver.get("config"), dict):
@@ -363,10 +407,10 @@ def run(args: argparse.Namespace) -> int:
             "mode": "spec_only",
             "center_mhz": 420.0,
         }
-        state["candidate_bootstrap_configure"] = fullband._http_json(
-            args.agent_base.rstrip("/") + "/api/v2/configure",
-            method="POST",
-            body=configure_body(template, CANDIDATE_ID, bootstrap_profile),
+        state["candidate_bootstrap_configure"] = agent_post_with_busy_retry(
+            args.agent_base,
+            "/api/v2/configure",
+            configure_body(template, CANDIDATE_ID, bootstrap_profile),
             timeout=240.0,
         )
         state["candidate_bootstrap_status"] = wait_agent(
