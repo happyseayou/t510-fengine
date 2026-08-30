@@ -213,7 +213,11 @@ LMK04828_INIT_160M_10M_REQUEST_CLKIN0 = _replace_profile_registers(
     LMK04828_INIT_160M_10M_REQUEST_CLKIN2,
     {
         0x146: 0x28,
-        0x147: 0x0F,
+        # R0x147[6:4]=0 selects CLKin0 manually.  R0x147[1:0] must remain
+        # 2 so the CLKin0 buffer drives PLL1; the original TICS export used
+        # 3 (Off), which left PLL2 locked from the VCXO while PLL1 could not
+        # lock to the onboard 10 MHz reference.
+        0x147: 0x0E,
         0x154: 0x01,
     },
 )
@@ -535,7 +539,7 @@ class T510ClockController:
                 and int(registers.get("0x139", -1)) == 0x02
                 and int(registers.get("0x143", -1)) == 0x50
                 and int(registers.get("0x146", -1)) == 0x28
-                and int(registers.get("0x147", -1)) == 0x0F
+                and int(registers.get("0x147", -1)) == 0x0E
                 and int(registers.get("0x154", -1)) == 0x01
                 and int(registers.get("0x16a", -1)) == 0x60
             )

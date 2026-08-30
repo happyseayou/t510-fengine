@@ -81,6 +81,16 @@ def open_plan() -> list[dict[str, Any]]:
     ]
 
 
+def matched_plan() -> list[dict[str, Any]]:
+    """Independent 50 ohm loads, balanced against the preceding open phase."""
+    return [
+        {"name": "matched_320msps_600s_100ms", "rate": 320, "duration": 600, "bucket_ms": 100},
+        {"name": "matched_160msps_600s_100ms", "rate": 160, "duration": 600, "bucket_ms": 100},
+        {"name": "matched_160msps_3600s_1s", "rate": 160, "duration": 3600, "bucket_ms": 1000},
+        {"name": "matched_320msps_3600s_1s", "rate": 320, "duration": 3600, "bucket_ms": 1000},
+    ]
+
+
 def _read_exact(blob: bytes, offset: int, size: int) -> tuple[bytes, int]:
     end = offset + size
     if end > len(blob):
@@ -731,6 +741,62 @@ def classify_open(runs: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def classify_matched(runs: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Apply the open-input zero-correlation gates with matched-load semantics."""
+    result = classify_open(runs)
+    if result["pass"]:
+        classification = "INDEPENDENT_MATCHED_LOAD_ZERO_CORRELATION_QUALIFIED"
+    elif result["classification"] == "OPEN_INPUT_NARROWBAND_PICKUP":
+        classification = "INDEPENDENT_MATCHED_LOAD_NARROWBAND_PICKUP"
+    else:
+        classification = "INDEPENDENT_MATCHED_LOAD_CORRELATED_FLOOR_OBSERVED"
+    return {
+        **result,
+        "classification": classification,
+        "qualification_scope": (
+            "eight user-confirmed independent 50 ohm loads; return loss and load temperature "
+            "were not independently calibrated"
+        ),
+    }
+
+
+def compare_open_matched(
+    open_runs: Sequence[dict[str, Any]], matched_runs: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    def metrics(runs: Sequence[dict[str, Any]]) -> dict[str, float]:
+        rows = [row for run in runs for row in run["analysis"]["cross_metrics"]]
+        same = [
+            float(row["mean_coherence"])
+            for row in rows
+            if (row["channel_a"], row["channel_b"]) in SAME_TILE_PAIRS
+        ]
+        cross = [
+            float(row["mean_coherence"])
+            for row in rows
+            if (row["channel_a"], row["channel_b"]) not in SAME_TILE_PAIRS
+        ]
+        return {
+            "all_pair_median_coherence": statistics.median(float(row["mean_coherence"]) for row in rows),
+            "same_tile_median_coherence": statistics.median(same),
+            "cross_tile_median_coherence": statistics.median(cross),
+        }
+
+    opened = metrics(open_runs)
+    matched = metrics(matched_runs)
+    return {
+        "open": opened,
+        "matched": matched,
+        "matched_over_open": {
+            key: matched[key] / opened[key] if opened[key] > 0 else math.inf
+            for key in opened
+        },
+        "interpretation_limit": (
+            "S/O/M were not an A/B/A sequence; the comparison is diagnostic and the absolute "
+            "matched-load zero-correlation gates remain decisive"
+        ),
+    }
+
+
 def _font(size: int, bold: bool = False) -> ImageFont.ImageFont:
     candidates = [
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc" if bold else "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -1124,7 +1190,7 @@ def run_phase(args: argparse.Namespace, template: dict[str, Any], phase: str) ->
             "preflight": None, "phases": {}, "errors": [],
             "started_at_unix_ms": time.time_ns() // 1_000_000,
         }
-    else:
+    elif phase == "open":
         if not campaign_path.exists():
             raise RuntimeError("open phase requires completed shared campaign evidence")
         state = json.loads(campaign_path.read_text())
@@ -1132,6 +1198,18 @@ def run_phase(args: argparse.Namespace, template: dict[str, Any], phase: str) ->
             raise RuntimeError(f"shared phase is not ready for physical transition: {state.get('status')}")
         state["status"] = "OPEN_PHASE_IN_PROGRESS"; state["operational_ok"] = False
         state["physical_conditions"]["open"] = "all eight ADC inputs physically disconnected; all DAC physically disconnected"
+    else:
+        if not campaign_path.exists():
+            raise RuntimeError("matched phase requires completed open campaign evidence")
+        state = json.loads(campaign_path.read_text())
+        if state.get("status") != "COMPLETE" or not state.get("phases", {}).get("open", {}).get("operational_ok"):
+            raise RuntimeError(f"open phase is not ready for matched-load transition: {state.get('status')}")
+        state["status"] = "MATCHED_LOAD_PHASE_IN_PROGRESS"; state["operational_ok"] = False
+        state.setdefault("physical_conditions", {})["matched"] = (
+            "all eight ADC inputs connected to user-confirmed independent 50 ohm loads; "
+            "all DAC physically disconnected"
+        )
+        state.setdefault("plans", {})["matched"] = matched_plan()
     phase_state: dict[str, Any] = {
         "phase": phase, "operational_ok": False, "status": "IN_PROGRESS", "runs": [],
         "errors": [], "started_at_unix_ms": time.time_ns() // 1_000_000,
@@ -1142,12 +1220,18 @@ def run_phase(args: argparse.Namespace, template: dict[str, Any], phase: str) ->
         if phase == "shared":
             state["preflight"] = performance_preflight(args, template, args.receiver_output)
             write_json(campaign_path, state)
-        plan = shared_plan() if phase == "shared" else open_plan()
+        plan = shared_plan() if phase == "shared" else open_plan() if phase == "open" else matched_plan()
         for row in plan:
             result = execute_run(args, template, row, phase)
             phase_state["runs"].append(result)
             write_json(phase_result_path, phase_state); write_json(campaign_path, state)
-        phase_state["science"] = classify_shared(phase_state["runs"]) if phase == "shared" else classify_open(phase_state["runs"])
+        phase_state["science"] = (
+            classify_shared(phase_state["runs"])
+            if phase == "shared"
+            else classify_open(phase_state["runs"])
+            if phase == "open"
+            else classify_matched(phase_state["runs"])
+        )
         phase_state["pcap_manifest"] = pcap_manifest(phase_root)
         phase_state["tis1_manifest"] = tis1_manifest(phase_root)
         write_summary_csv(phase_root / "summary.csv", phase_state["runs"])
@@ -1161,6 +1245,24 @@ def run_phase(args: argparse.Namespace, template: dict[str, Any], phase: str) ->
                 "shared": state["phases"]["shared"]["science"],
                 "open": phase_state["science"],
                 "qualification_limit": "INDEPENDENT_MATCHED_LOAD_ZERO_CORRELATION_QUALIFICATION_PENDING",
+            }
+        elif phase == "matched":
+            qualified = bool(phase_state["science"]["pass"])
+            state["mandatory_pending"] = (
+                [] if qualified else ["INDEPENDENT_MATCHED_LOAD_ZERO_CORRELATION_QUALIFICATION_PENDING"]
+            )
+            state["final_classification"] = {
+                "shared": state["phases"]["shared"]["science"],
+                "open": state["phases"]["open"]["science"],
+                "matched": phase_state["science"],
+                "open_vs_matched": compare_open_matched(
+                    state["phases"]["open"]["runs"], phase_state["runs"]
+                ),
+                "qualification": (
+                    "INDEPENDENT_MATCHED_LOAD_ZERO_CORRELATION_QUALIFIED"
+                    if qualified
+                    else "INDEPENDENT_MATCHED_LOAD_ZERO_CORRELATION_QUALIFICATION_PENDING"
+                ),
             }
     except Exception as exc:
         error = f"{type(exc).__name__}:{exc}"
@@ -1185,9 +1287,10 @@ def run_phase(args: argparse.Namespace, template: dict[str, Any], phase: str) ->
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--phase", choices=("shared", "open"), required=True)
+    parser.add_argument("--phase", choices=("shared", "open", "matched"), required=True)
     parser.add_argument("--shared-ssa-confirmed", action="store_true")
     parser.add_argument("--all-open-confirmed", action="store_true")
+    parser.add_argument("--independent-50ohm-loads-confirmed", action="store_true")
     parser.add_argument("--agent-base", default="http://192.168.100.117:8010")
     parser.add_argument("--receiver-base", default="http://192.168.100.162:8089")
     parser.add_argument("--configure-template", type=Path, default=Path("config/t510/configure_320_time_only.example.json"))
@@ -1199,6 +1302,8 @@ def main() -> int:
         parser.error("shared phase requires --shared-ssa-confirmed")
     if args.phase == "open" and not args.all_open_confirmed:
         parser.error("open phase requires --all-open-confirmed")
+    if args.phase == "matched" and not args.independent_50ohm_loads_confirmed:
+        parser.error("matched phase requires --independent-50ohm-loads-confirmed")
     args.receiver_output = args.receiver_output.resolve(); args.board_output = args.board_output.resolve()
     args.receiver_output.mkdir(parents=True, exist_ok=True); args.board_output.mkdir(parents=True, exist_ok=True)
     template = json.loads(args.configure_template.read_text())

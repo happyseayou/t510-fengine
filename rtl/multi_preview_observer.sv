@@ -54,10 +54,7 @@ module multi_preview_observer #(
     (* ASYNC_REG = "TRUE" *) logic [31:0] capture_count_ctrl_meta;
     (* ASYNC_REG = "TRUE" *) logic [63:0] sample0_ctrl_meta;
 
-    // RFDC produces a continuous observation stream even while science output is
-    // stopped.  Calibration previews are deliberately captured in that quiescent
-    // state, so capture validity must not be gated by the science FSM.
-    wire preview_write_fire = (state == ST_RUN) && s_axis_adc_tvalid;
+    wire preview_write_fire = (state == ST_RUN) && streaming && s_axis_adc_tvalid;
     wire [ADDR_W-3:0] preview_wr_addr = sample_index[ADDR_W-1:2];
     wire [ADDR_W-3:0] preview_rd_addr = ctrl_rd_addr[ADDR_W-1:2];
     wire [1:0] preview_rd_lane = ctrl_rd_addr[1:0];

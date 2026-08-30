@@ -3,7 +3,6 @@ set repo_root [file normalize [file join $origin_dir ".."]]
 
 set rtl_files [list \
     [file join $repo_root rtl pl_mts_sync_clk.v] \
-    [file join $repo_root rtl pl_mts_axis_recapture.v] \
     [file join $repo_root rtl sync_fsm.sv] \
     [file join $repo_root rtl station_sync_scheduler.sv] \
     [file join $repo_root rtl axis_stream_duplicator.sv] \
@@ -11,8 +10,6 @@ set rtl_files [list \
     [file join $repo_root rtl science_rate_selector.sv] \
     [file join $repo_root rtl requantizer.sv] \
     [file join $repo_root rtl monitor_counters.sv] \
-    [file join $repo_root rtl adc_interleave_spur_corrector.sv] \
-    [file join $repo_root rtl adc_interleave_sine_q17_1024.mem] \
     [file join $repo_root rtl pfb_channelizer.sv] \
     [file join $repo_root rtl axis_sideband_async_fifo.sv] \
     [file join $repo_root rtl axis512_register_slice.sv] \
@@ -30,8 +27,6 @@ set rtl_files [list \
 ]
 
 set sim_files [list \
-    [file join $repo_root sim tb_adc_interleave_spur_corrector.sv] \
-    [file join $repo_root sim tb_pl_mts_sync_clk.sv] \
     [file join $repo_root sim tb_common.svh] \
     [file join $repo_root sim tb_feng_ctrl_axi.sv] \
     [file join $repo_root sim tb_axi4_to_axil_bridge.sv] \
@@ -53,8 +48,6 @@ set sim_files [list \
 ]
 
 set tb_tops [list \
-    tb_adc_interleave_spur_corrector \
-    tb_pl_mts_sync_clk \
     tb_feng_ctrl_axi \
     tb_axi4_to_axil_bridge \
     tb_sync_fsm \
@@ -87,8 +80,6 @@ foreach file $rtl_files {
         add_files -norecurse -fileset sources_1 $file
     }
 }
-set spur_sine_mem [file join $repo_root rtl adc_interleave_sine_q17_1024.mem]
-set_property file_type {Memory File} [get_files $spur_sine_mem]
 foreach file $sim_files {
     if {[llength [get_files -quiet $file]] == 0} {
         add_files -norecurse -fileset sim_1 $file

@@ -18,7 +18,7 @@
 </head>
 <body><main>
   <h1>T510 Board Agent API</h1>
-  <p class="muted">Stage 34b-2 · API v2 scheduled-sync Rust service · OpenAPI 3.1 · Agent version 0.3.4</p>
+  <p class="muted">Stage 35 · v34 F-engine control baseline · OpenAPI 3.1 · Agent version 0.3.6</p>
   <p class="warning"><strong>开发网络安全模式：</strong><code>security_mode=none</code>。服务不校验 token、allowlist 或 mTLS，不启用 CORS。请仅放在受控实验室局域网中。</p>
 
   <section>
@@ -45,12 +45,6 @@
     <h2>硬件接口</h2>
     <table><thead><tr><th>方法</th><th>路径</th><th>行为</th></tr></thead><tbody>
       <tr><td><span class="method get">GET</span></td><td><code>/api/v2/status</code></td><td>一次性读取 core、board ID、streaming、LMK profile/SYSREF、reference watchdog、ADC/DAC MTS target 与实测 latency、half-band coefficient ID、PPS/QSFP、数据通路健康和累计 counters。</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/adc/spur-correction</code></td><td>读取v36当前窗口固定项、一次性凭证、5 Hz只读OCB1 tracker、温差和硬件active/bypass/CRC/错误计数。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/adc/spur-correction/calibrate</code></td><td>停流、receiver不接收且DAC全零时异步抓64份raw preview，建立八路动态前馈模型。开放输入只产生<code>diagnostic_only</code>凭证；正式凭证要求八个独立50 Ω门禁。</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/adc/spur-correction/calibrate/status</code></td><td>读取异步校准进度。</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/adc/spur-correction/calibrate/result</code></td><td>读取模型SHA/CRC、phase origin和一次性<code>spur_correction_id</code>。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/adc/spur-correction/tracker-mode</code></td><td>仅用于开放输入工程诊断，在停流状态切换<code>static_c0</code>与只读OCB1驱动的<code>dynamic</code>模式；两者都持续刷新硬件心跳。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/adc/spur-correction/disable</code></td><td>安全停流、preview恢复raw、禁用补偿并使凭证失效。</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/v2/rfdc/calibration</code></td><td>读取八路 ADC 的 CalFreeze、OCB1/OCB2/GCB/TSCB 系数及固定顺序 SHA256。</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/v2/rfdc/calibration/monitor</code></td><td>从常驻reference watchdog读取每秒更新的freeze mask、四类系数、SHA256和温度，不启动一次性硬件helper。</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/v2/telemetry/power-thermal?since_seq=N</code></td><td>读取常驻watchdog有界JSONL环中的1秒AMS、stream、RFDC tile、校准哈希和OCB1 DFT记录；epoch变化或sequence缺口用于立即否决正式run。</td></tr>
@@ -68,9 +62,9 @@
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/train-freeze</code></td><td>校验声明的八路 center+60 MHz训练单音；依据AMD PG269的−40 dBFS最低输入要求，使用带4 dB余量的−36..−8 dBFS工程窗口，以5 Hz等待GCB/TSCB连续2秒稳定，原子freeze后静音DAC。</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/v2/clock/diagnostic</code></td><td>读取Stage 34c-2时钟事务、完整LMK profile SHA、SYSREF request GPIO、预期物理输出、PLL锁定和MTS实测值。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/clock/diagnostic/prepare</code></td><td>仅在停流、receiver不接收、DAC静音、freeze=0且OCB1动态时，写入冻结profile、reset RFDC、执行MTS并返回一次性<code>clock_transaction_id</code>。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/clock/diagnostic/restore</code></td><td>恢复生产external-GPSDO continuous-SYSREF profile，并重新reset RFDC和执行生产MTS。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/clock/diagnostic/restore</code></td><td>恢复最后一次CONFIGURE明确选择的外部10 MHz或板载TCXO生产时钟，并重新reset RFDC和执行MTS。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/configure</code></td><td>加载 catalog bitstream，配置 profile/source/24 endpoints/board ID；完成后保持停流。重复调用会真实重配。</td></tr>
-      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/start</code></td><td>校验 <code>expected_board_id</code> 后立即启动。v36受影响窗口提供匹配<code>spur_correction_id</code>时启用补偿和packet bit6；未提供仍允许启动但bit7及Web显示红色科学警告；错误ID拒绝。</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/v2/start</code></td><td>校验 <code>expected_board_id</code> 后立即启动。</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/v2/sync/status</code></td><td>读取 scheduled-sync prepare/arm/commit、generation、sample0 和错误状态。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/sync/prepare</code></td><td>写入并冻结 generation、目标 PPS、TAI epoch、first_sample0、观测/信号链标签及 MTS 结果 ID。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/sync/arm</code></td><td>仅在所有板 prepare 成功后 arm；板端再次检查时钟、RFDC、PPS 和提前量。</td></tr>
@@ -109,7 +103,7 @@ curl -sS -X POST http://192.168.100.117:8010/api/v2/clock/diagnostic/restore \
 
   <section>
     <h2>配置请求</h2>
-    <p><code>endpoints</code> 必须恰好 24 项，ID 0..23 各一次；0..7 为 <code>TIME</code>，8..23 为 <code>SPEC</code>。字段 <code>sample_rate_msps</code> 表示复采样率档位：<code>160</code> 是 160 MS/s，中心范围 80..1840 MHz；<code>320</code> 是 320 MS/s，中心范围 160..1760 MHz。160 支持三种 mode；320 明确拒绝 <code>time_spec</code>。ADC/DAC 模拟采样率为 3.84 GS/s，分别使用 12× 抽取/插值；UDP 数据格式保持不变。</p>
+    <p><code>endpoints</code> 必须恰好 24 项，ID 0..23 各一次；0..7 为 <code>TIME</code>，8..23 为 <code>SPEC</code>。<code>clock_reference</code> 可显式选择 <code>external_10mhz</code> 或 <code>onboard_tcxo</code>；Stage 35 无 WR 观测使用后者，它在 MTS 后关闭 request-mode SYSREF，并以 free-run 相对采样时间工作，不需要外部 10 MHz 或 PPS。字段 <code>sample_rate_msps</code> 表示复采样率档位：<code>160</code> 是 160 MS/s，中心范围 80..1840 MHz；<code>320</code> 是 320 MS/s，中心范围 160..1760 MHz。160 支持三种 mode；320 明确拒绝 <code>time_spec</code>。ADC/DAC 模拟采样率为 3.84 GS/s，分别使用 12× 抽取/插值；UDP 数据格式保持不变。</p>
 <pre>curl -sS -X POST http://192.168.100.117:8010/api/v2/configure \
   -H 'Content-Type: application/json' \
   --data @config/t510/configure_160_time_only.example.json | jq</pre>

@@ -32,10 +32,6 @@ module feng_ctrl_axi #(
     input  wire                         waiting_for_epoch,
     input  wire                         pps_seen,
     input  wire [63:0]                  pps_count,
-    input  wire [2:0]                   sysref_capture_levels,
-    input  wire [31:0]                  sysref_pl_edge_count,
-    input  wire [31:0]                  sysref_adc_edge_count,
-    input  wire [31:0]                  sysref_dac_edge_count,
     input  wire                         ref_locked,
     input  wire [31:0]                  error_flags,
     input  wire [31:0]                  scheduled_sync_status,
@@ -121,18 +117,6 @@ module feng_ctrl_axi #(
     input  wire [31:0]                  preview_capture_count,
     input  wire [63:0]                  preview_sample0,
     input  wire [31:0]                  preview_rd_data,
-    input  wire [31:0]                  spur_corr_status,
-    input  wire [1:0]                   spur_corr_active_spur_id,
-    input  wire [47:0]                  spur_corr_active_phase_step,
-    input  wire [31:0]                  spur_corr_active_profile_id,
-    input  wire [31:0]                  spur_corr_active_model_crc32,
-    input  wire [31:0]                  spur_corr_active_generation,
-    input  wire [63:0]                  spur_corr_last_commit_sample0,
-    input  wire [31:0]                  spur_corr_saturation_count,
-    input  wire [31:0]                  spur_corr_sample0_discontinuity_count,
-    input  wire [31:0]                  spur_corr_crc_error_count,
-    input  wire [31:0]                  spur_corr_tracker_stale_count,
-    input  wire [31:0]                  spur_corr_commit_count,
     output logic [15:0]                 board_id,
     output logic [1:0]                  mode,
     output logic                        arm_latched,
@@ -218,23 +202,6 @@ module feng_ctrl_axi #(
     output logic [NINPUT-1:0]           preview_input_mask,
     output logic [2:0]                  preview_rd_input,
     output logic [9:0]                  preview_rd_addr,
-    output logic                        preview_corrected_select,
-    output logic                        spur_corr_shadow_enable,
-    output logic                        spur_corr_shadow_in_band,
-    output logic                        spur_corr_shadow_bypass,
-    output logic                        spur_corr_shadow_phase_reload,
-    output logic [1:0]                  spur_corr_shadow_spur_id,
-    output logic [47:0]                 spur_corr_shadow_phase_step,
-    output logic [47:0]                 spur_corr_shadow_phase_seed,
-    output logic [NINPUT*48-1:0]        spur_corr_shadow_coefficients,
-    output logic [31:0]                 spur_corr_shadow_profile_id,
-    output logic [31:0]                 spur_corr_shadow_model_crc32,
-    output logic [31:0]                 spur_corr_shadow_generation,
-    output wire                         spur_corr_shadow_crc_valid,
-    output logic                        spur_corr_commit_pulse,
-    output logic                        spur_corr_tracker_heartbeat_pulse,
-    output logic                        spur_corr_disable_pulse,
-    output logic                        spur_corr_clear_errors_pulse,
     output logic [63:0]                 unix_seconds,
     output logic [31:0]                 time_live_interval_beats,
     output logic                        time_ddr_ring_enable,
@@ -248,7 +215,7 @@ module feng_ctrl_axi #(
     output wire [2:0]                   science_output_mode_cfg
 );
 
-    localparam [31:0] CORE_VERSION = 32'h0001_0036;
+    localparam [31:0] CORE_VERSION = 32'h0001_0034;
     localparam [31:0] PREVIEW_SAMPLE_RATE_HZ = 32'd320_000_000;
     localparam [31:0] PREVIEW_AXIS_BEAT_RATE_HZ = 32'd80_000_000;
     localparam [31:0] PREVIEW_MODE_FULLRATE_IQ = 32'd1;
@@ -297,45 +264,6 @@ module feng_ctrl_axi #(
     logic [6:0]            tx_endpoint_indirect_index;
     logic [5:0]            tx_spec_route_indirect_index;
     logic [2:0]            tx_time_route_indirect_index;
-    logic [4:0]            spur_corr_coeff_next_index;
-    logic [31:0]           spur_corr_coeff_crc_state;
-    logic [31:0]           spur_corr_expected_crc32;
-    logic                  spur_corr_coeff_load_error;
-
-    function automatic [31:0] crc32_ieee_byte(
-        input [31:0] crc_in,
-        input [7:0] data_in
-    );
-        integer crc_bit;
-        reg [31:0] crc_value;
-        begin
-            crc_value = crc_in ^ {24'd0, data_in};
-            for (crc_bit = 0; crc_bit < 8; crc_bit = crc_bit + 1) begin
-                crc_value = crc_value[0] ?
-                    ((crc_value >> 1) ^ 32'hedb8_8320) : (crc_value >> 1);
-            end
-            crc32_ieee_byte = crc_value;
-        end
-    endfunction
-
-    function automatic [31:0] crc32_ieee_le32(
-        input [31:0] crc_in,
-        input [31:0] data_in
-    );
-        reg [31:0] crc_value;
-        begin
-            crc_value = crc32_ieee_byte(crc_in, data_in[7:0]);
-            crc_value = crc32_ieee_byte(crc_value, data_in[15:8]);
-            crc_value = crc32_ieee_byte(crc_value, data_in[23:16]);
-            crc32_ieee_le32 = crc32_ieee_byte(crc_value, data_in[31:24]);
-        end
-    endfunction
-
-    wire [31:0] spur_corr_computed_crc32 = ~spur_corr_coeff_crc_state;
-    assign spur_corr_shadow_crc_valid =
-        (spur_corr_coeff_next_index == 5'd16) &&
-        !spur_corr_coeff_load_error &&
-        (spur_corr_computed_crc32 == spur_corr_expected_crc32);
 
     function automatic [31:0] lane_word(
         input [NINPUT*32-1:0] bus,
@@ -385,7 +313,6 @@ module feng_ctrl_axi #(
     localparam [3:0] READ_BANK_TX_INDIRECT   = 4'd6;
     localparam [3:0] READ_BANK_SCIENCE       = 4'd7;
     localparam [3:0] READ_BANK_PREVIEW_BUF   = 4'd8;
-    localparam [3:0] READ_BANK_SPUR_CORR     = 4'd9;
     localparam [3:0] READ_BANK_LANE_MON      = 4'd10;
     localparam [3:0] READ_BANK_SYNC   = 4'd12;
     localparam [3:0] READ_BANK_ZERO          = 4'd15;
@@ -503,8 +430,6 @@ module feng_ctrl_axi #(
                 read_bank_for_addr = READ_BANK_PREVIEW_BUF;
             end else if ((addr >= 18'h0ac00) && (addr < 18'h0ad00)) begin
                 read_bank_for_addr = READ_BANK_SYNC;
-            end else if ((addr >= 18'h0ae00) && (addr < 18'h0af00)) begin
-                read_bank_for_addr = READ_BANK_SPUR_CORR;
             end else if ((addr >= 18'h00900) && (addr < 18'h00980)) begin
                 read_bank_for_addr = READ_BANK_FENGINE;
             end else if (((addr >= 18'h0b000) && (addr < 18'h0b030)) ||
@@ -746,26 +671,6 @@ module feng_ctrl_axi #(
             read_data_stage    <= 32'd0;
             preview_rd_input <= 3'd0;
             preview_rd_addr <= 10'd0;
-            preview_corrected_select <= 1'b0;
-            spur_corr_shadow_enable <= 1'b0;
-            spur_corr_shadow_in_band <= 1'b0;
-            spur_corr_shadow_bypass <= 1'b1;
-            spur_corr_shadow_phase_reload <= 1'b0;
-            spur_corr_shadow_spur_id <= 2'd0;
-            spur_corr_shadow_phase_step <= 48'd0;
-            spur_corr_shadow_phase_seed <= 48'd0;
-            spur_corr_shadow_coefficients <= {(NINPUT*48){1'b0}};
-            spur_corr_shadow_profile_id <= 32'd0;
-            spur_corr_shadow_model_crc32 <= 32'd0;
-            spur_corr_shadow_generation <= 32'd0;
-            spur_corr_coeff_next_index <= 5'd0;
-            spur_corr_coeff_crc_state <= 32'hffff_ffff;
-            spur_corr_expected_crc32 <= 32'd0;
-            spur_corr_coeff_load_error <= 1'b0;
-            spur_corr_commit_pulse <= 1'b0;
-            spur_corr_tracker_heartbeat_pulse <= 1'b0;
-            spur_corr_disable_pulse <= 1'b0;
-            spur_corr_clear_errors_pulse <= 1'b0;
             write_exec_valid   <= 1'b0;
             write_exec_addr    <= 18'd0;
             write_exec_data    <= 32'd0;
@@ -790,10 +695,6 @@ module feng_ctrl_axi #(
             mts_result_id <= 32'd0;
             preview_capture_start_pulse <= 1'b0;
             preview_capture_clear_pulse <= 1'b0;
-            spur_corr_commit_pulse <= 1'b0;
-            spur_corr_tracker_heartbeat_pulse <= 1'b0;
-            spur_corr_disable_pulse <= 1'b0;
-            spur_corr_clear_errors_pulse <= 1'b0;
             tx_clear_pulse     <= 1'b0;
             pfb_clear_pulse    <= 1'b0;
             pfb_coeff_load_start_pulse <= 1'b0;
@@ -900,10 +801,6 @@ module feng_ctrl_axi #(
             scheduled_sync_clear_status_pulse <= 1'b0;
             preview_capture_start_pulse <= 1'b0;
             preview_capture_clear_pulse <= 1'b0;
-            spur_corr_commit_pulse <= 1'b0;
-            spur_corr_tracker_heartbeat_pulse <= 1'b0;
-            spur_corr_disable_pulse <= 1'b0;
-            spur_corr_clear_errors_pulse <= 1'b0;
             tx_clear_pulse <= 1'b0;
             time_ddr_ring_clear_pulse <= 1'b0;
             pfb_clear_pulse <= 1'b0;
@@ -1230,39 +1127,6 @@ module feng_ctrl_axi #(
                             preview_input_mask <= write_exec_data[NINPUT-1:0];
                         end
                     end
-                    16'hae00: begin
-                        spur_corr_shadow_enable <= write_exec_data[0];
-                        spur_corr_shadow_in_band <= write_exec_data[1];
-                        spur_corr_shadow_bypass <= write_exec_data[2];
-                        spur_corr_shadow_phase_reload <= write_exec_data[3];
-                        preview_corrected_select <= write_exec_data[4];
-                        if (write_exec_data[8]) begin
-                            spur_corr_commit_pulse <= 1'b1;
-                        end
-                        if (write_exec_data[9]) begin
-                            spur_corr_tracker_heartbeat_pulse <= 1'b1;
-                        end
-                        if (write_exec_data[10]) begin
-                            spur_corr_disable_pulse <= 1'b1;
-                        end
-                        if (write_exec_data[11]) begin
-                            spur_corr_clear_errors_pulse <= 1'b1;
-                        end
-                        if (write_exec_data[12]) begin
-                            spur_corr_coeff_next_index <= 5'd0;
-                            spur_corr_coeff_crc_state <= 32'hffff_ffff;
-                            spur_corr_coeff_load_error <= 1'b0;
-                        end
-                    end
-                    16'hae08: spur_corr_shadow_spur_id <= write_exec_data[1:0];
-                    16'hae0c: spur_corr_shadow_phase_step[31:0] <= write_exec_data;
-                    16'hae10: spur_corr_shadow_phase_step[47:32] <= write_exec_data[15:0];
-                    16'hae14: spur_corr_shadow_phase_seed[31:0] <= write_exec_data;
-                    16'hae18: spur_corr_shadow_phase_seed[47:32] <= write_exec_data[15:0];
-                    16'hae1c: spur_corr_shadow_profile_id <= write_exec_data;
-                    16'hae20: spur_corr_shadow_model_crc32 <= write_exec_data;
-                    16'hae24: spur_corr_shadow_generation <= write_exec_data;
-                    16'hae28: spur_corr_expected_crc32 <= write_exec_data;
                     16'h0900: begin
                         if (write_exec_strb[0]) begin
                             pfb_enable <= write_exec_data[0];
@@ -1396,23 +1260,6 @@ module feng_ctrl_axi #(
                         end
                     end
                     default: begin
-                        if ((write_exec_addr >= 18'hae30) &&
-                            (write_exec_addr < 18'hae70) &&
-                            (write_exec_addr[1:0] == 2'b00)) begin
-                            write_idx = (write_exec_addr - 18'hae30) >> 2;
-                            if ((write_idx < (NINPUT * 2)) &&
-                                (spur_corr_coeff_next_index == write_idx[4:0])) begin
-                                spur_corr_shadow_coefficients[write_idx*24 +: 24] <=
-                                    write_exec_data[23:0];
-                                spur_corr_coeff_crc_state <= crc32_ieee_le32(
-                                    spur_corr_coeff_crc_state,
-                                    {8'd0, write_exec_data[23:0]}
-                                );
-                                spur_corr_coeff_next_index <= spur_corr_coeff_next_index + 5'd1;
-                            end else begin
-                                spur_corr_coeff_load_error <= 1'b1;
-                            end
-                        end
                     end
                     endcase
                 end
@@ -1475,10 +1322,6 @@ module feng_ctrl_axi #(
                         16'h0020: read_data_next = {14'd0, clock_ref, 14'd0, sync_mode};
                         16'h0024: read_data_next = pps_count[31:0];
                         16'h0028: read_data_next = pps_count[63:32];
-                        16'h002c: read_data_next = {29'd0, sysref_capture_levels};
-                        16'h0030: read_data_next = sysref_pl_edge_count;
-                        16'h0034: read_data_next = sysref_adc_edge_count;
-                        16'h0038: read_data_next = sysref_dac_edge_count;
                         16'h00f0: read_data_next = araddr_latched[31:0];
                         16'h00f4: read_data_next = awaddr_latched[31:0];
                         16'h0100: read_data_next = 32'd8;
@@ -1656,65 +1499,6 @@ module feng_ctrl_axi #(
                         16'hac6c: read_data_next = pps_count[31:0];
                         16'hac70: read_data_next = pps_count[63:32];
                         default: read_data_next = 32'd0;
-                    endcase
-                end
-                READ_BANK_SPUR_CORR: begin
-                    case (read_addr)
-                        16'hae00: read_data_next = {
-                            19'd0,
-                            1'b0,
-                            4'd0,
-                            3'd0,
-                            preview_corrected_select,
-                            spur_corr_shadow_phase_reload,
-                            spur_corr_shadow_bypass,
-                            spur_corr_shadow_in_band,
-                            spur_corr_shadow_enable
-                        };
-                        16'hae04: read_data_next = spur_corr_status;
-                        16'hae08: read_data_next = {30'd0, spur_corr_shadow_spur_id};
-                        16'hae0c: read_data_next = spur_corr_shadow_phase_step[31:0];
-                        16'hae10: read_data_next = {16'd0, spur_corr_shadow_phase_step[47:32]};
-                        16'hae14: read_data_next = spur_corr_shadow_phase_seed[31:0];
-                        16'hae18: read_data_next = {16'd0, spur_corr_shadow_phase_seed[47:32]};
-                        16'hae1c: read_data_next = spur_corr_shadow_profile_id;
-                        16'hae20: read_data_next = spur_corr_shadow_model_crc32;
-                        16'hae24: read_data_next = spur_corr_shadow_generation;
-                        16'hae28: read_data_next = spur_corr_expected_crc32;
-                        16'hae2c: read_data_next = spur_corr_computed_crc32;
-                        16'hae70: read_data_next = spur_corr_last_commit_sample0[31:0];
-                        16'hae74: read_data_next = spur_corr_last_commit_sample0[63:32];
-                        16'hae78: read_data_next = spur_corr_saturation_count;
-                        16'hae7c: read_data_next = spur_corr_sample0_discontinuity_count;
-                        16'hae80: read_data_next = spur_corr_crc_error_count;
-                        16'hae84: read_data_next = spur_corr_tracker_stale_count;
-                        16'hae88: read_data_next = spur_corr_commit_count;
-                        16'hae8c: read_data_next = {30'd0, spur_corr_active_spur_id};
-                        16'hae90: read_data_next = spur_corr_active_phase_step[31:0];
-                        16'hae94: read_data_next = {16'd0, spur_corr_active_phase_step[47:32]};
-                        16'hae98: read_data_next = spur_corr_active_profile_id;
-                        16'hae9c: read_data_next = spur_corr_active_model_crc32;
-                        16'haea0: read_data_next = spur_corr_active_generation;
-                        16'haea4: read_data_next = {
-                            24'd0,
-                            spur_corr_coeff_load_error,
-                            spur_corr_shadow_crc_valid,
-                            1'b0,
-                            spur_corr_coeff_next_index
-                        };
-                        default: begin
-                            if ((read_addr >= 18'hae30) &&
-                                (read_addr < 18'hae70) &&
-                                (read_addr[1:0] == 2'b00)) begin
-                                lane_idx = (read_addr - 18'hae30) >> 2;
-                                if (lane_idx < (NINPUT * 2)) begin
-                                    read_data_next = {
-                                        8'd0,
-                                        spur_corr_shadow_coefficients[lane_idx*24 +: 24]
-                                    };
-                                end
-                            end
-                        end
                     endcase
                 end
                 READ_BANK_FENGINE: begin

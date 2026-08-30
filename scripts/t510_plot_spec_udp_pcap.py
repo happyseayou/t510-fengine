@@ -99,8 +99,6 @@ def parse_spec_header(payload: bytes) -> dict[str, int]:
         "header_bytes": word0 & 0xFFFF,
         "board_id": (word1 >> 48) & 0xFFFF,
         "stream_type": (word1 >> 32) & 0xFFFF,
-        "epoch_mode": (word1 >> 16) & 0xFFFF,
-        "flags": word1 & 0xFFFF,
         "sample0": words[4],
         "frame_id": words[5],
         "seq_no": word6 >> 32,
@@ -152,7 +150,6 @@ def collect_spectra(paths: list[Path]) -> dict[str, object]:
     board_ids: set[int] = set()
     sample_rates: set[int] = set()
     pfb_taps: set[int] = set()
-    packet_flags: set[int] = set()
     sha256 = {}
     first_sample0 = None
     last_sample0 = None
@@ -208,7 +205,6 @@ def collect_spectra(paths: list[Path]) -> dict[str, object]:
             board_ids.add(header["board_id"])
             sample_rates.add(header["spec_sample_rate_hz"])
             pfb_taps.add(header["pfb_taps"])
-            packet_flags.add(header["flags"])
             first_sample0 = (
                 header["sample0"]
                 if first_sample0 is None
@@ -222,15 +218,9 @@ def collect_spectra(paths: list[Path]) -> dict[str, object]:
 
     if block_packets != [block_packets[0]] * SPEC_BLOCK_COUNT or block_packets[0] == 0:
         raise ValueError(f"unbalanced or incomplete SPEC blocks: {block_packets}")
-    if (
-        len(board_ids) != 1
-        or len(sample_rates) != 1
-        or len(pfb_taps) != 1
-        or len(packet_flags) != 1
-    ):
+    if len(board_ids) != 1 or len(sample_rates) != 1 or len(pfb_taps) != 1:
         raise ValueError(
-            "capture geometry/flags changed: "
-            f"board={board_ids}, rates={sample_rates}, taps={pfb_taps}, flags={packet_flags}"
+            f"capture geometry changed: board={board_ids}, rates={sample_rates}, taps={pfb_taps}"
         )
     power_db = []
     for lane in range(SPEC_NINPUT):
@@ -247,7 +237,6 @@ def collect_spectra(paths: list[Path]) -> dict[str, object]:
         "board_id": next(iter(board_ids)),
         "sample_rate_hz": next(iter(sample_rates)),
         "pfb_taps": next(iter(pfb_taps)),
-        "packet_flags": next(iter(packet_flags)),
         "first_sample0": first_sample0,
         "last_sample0": last_sample0,
         "pcap_sha256": sha256,

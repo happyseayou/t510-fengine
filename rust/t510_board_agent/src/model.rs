@@ -21,6 +21,15 @@ pub enum ProfileMode {
     TimeSpec,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum ClockReference {
+    #[default]
+    #[serde(rename = "external_10mhz")]
+    External10Mhz,
+    #[serde(rename = "onboard_tcxo")]
+    OnboardTcxo,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
@@ -60,6 +69,8 @@ pub struct Endpoint {
 pub struct ConfigureRequest {
     pub bitstream_id: String,
     pub board_id: u16,
+    #[serde(default)]
+    pub clock_reference: ClockReference,
     pub profile: Profile,
     pub source: SourceIdentity,
     pub endpoints: Vec<Endpoint>,
@@ -77,40 +88,6 @@ pub struct ExpectedBoardRequest {
     pub output_load_transaction_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rfdc_power_transaction_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spur_correction_id: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SpurCorrectionInputState {
-    AllOpenDiagnostic,
-    AllAdcIndependent50ohm,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpurCorrectionCalibrateRequest {
-    pub expected_board_id: u16,
-    pub receiver_stream_accepting: bool,
-    pub configuration_fingerprint: String,
-    pub input_state: SpurCorrectionInputState,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SpurCorrectionTrackerMode {
-    StaticC0,
-    Dynamic,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpurCorrectionTrackerModeRequest {
-    pub expected_board_id: u16,
-    pub receiver_stream_accepting: bool,
-    pub spur_correction_id: String,
-    pub mode: SpurCorrectionTrackerMode,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -232,8 +209,6 @@ pub struct ScheduledSyncPrepareRequest {
     pub output_load_transaction_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rfdc_power_transaction_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spur_correction_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

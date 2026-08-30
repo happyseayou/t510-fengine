@@ -2,7 +2,12 @@
 
 ## 当前状态
 
-`V36_COMMAND_PULSE_FIX_VERIFIED / REBUILD_PENDING / 50OHM_QUALIFICATION_PENDING`
+`V36_DIAGNOSTIC_REJECTED / V36_UNPUBLISHED / USER_PAUSED`
+
+2026-08-16用户要求暂停Stage 34e并切回其他会话。当前没有任何Stage 34e systemd长任务或v36
+候选服务运行；正式v34已在线，science stream和receiver接收均停止，DAC mask及八路幅度全0，
+双PLL锁定且MTS有效。后续不得自动重提相同前馈实验；若恢复本阶段，应从`attempt_013`的八路
+独立50 Ω否定结果和下述重新设计结论继续，不能把本次暂停解释为待补跑。
 
 Stage 34e 是隔离的工程候选，不是当前产品发布。当前正式入口仍是 v34；候选身份固定为：
 
@@ -86,20 +91,21 @@ START合同为：不含固定项时正常bypass；含固定项但不带ID时允�
 - receiver v34兼容、v36 bit6/bit7和TIME_ONLY Web状态；
 - 静态C0与动态OCB1工程诊断模式。
 
-当前最终提交前回归记录：Python 219项、Board Agent 8项、receiver 50项和XSim 19/19均通过；
-最后一次清流边界修复后，补偿器定向仿真和完整顶层冒烟仿真也已重新通过。Board Agent已用项目
+当前最终提交前回归记录：Python 225项、Board Agent 8项、receiver 50项和XSim 19/19均通过；
+最后一次全速启动弹性修复后，新增的16周期强制下游停顿回归、补偿器定向仿真和完整顶层冒烟
+仿真也已重新通过。Board Agent已用项目
 冻结的`cargo zigbuild`流程生成ARM64静态候选产物。已连接Vivado GUI完成
 `synth → impl/phys_opt/route → write_bitstream → current-project export`：
 
-- 最近一次已导出的bitstream SHA256：`1a9f78155d30ffb6d444111199ae5584ecf9ab43a5c9c693a992f6f0feb67d78`；
-- routed WNS `+0.048 ns`、WHS `+0.010 ns`，setup/hold失败端点均为0；
-- 324,855条可布线网络全部完成，route error为0；
+- 最新全速启动弹性修复bitstream SHA256：`bf5e47c88ddfcbf21187329d1d743b1c0cb5bfc451b3e0be85d782d30d015f02`；
+- current-project导出门禁WNS/WHS为`+0.043/+0.010 ns`，setup/hold失败端点均为0；
+- 326,639条可布线网络全部完成，route error为0；
 - 全设计DSP48E2为888，补偿器层级恰为128个DSP48E2；
-- 全设计LUT 142,721、FF 186,994、RAMB36 553、RAMB18 194；
+- `u_core`层级LUT 106,138、FF 174,391、RAMB36 553、RAMB18 194；
 - 未新增阻断发布的DRC/methodology问题；保留的critical warning为既有CMAC Evaluation License。
 
-该bit随后被下述command-pulse故障拒绝，不能继续作为候选使用；这些结果只证明修复前设计的构建
-和布线门禁，不替代新RTL重建、开放输入及50 Ω板级资格。
+上述最新bit包含下述command-pulse和全速启动弹性修复，并已通过完整重建与current-project导出；
+这些结果闭合当前v36工程候选的RTL构建和布线门禁，但不替代开放输入及50 Ω板级资格。
 
 ## 开放输入诊断队列
 
@@ -145,14 +151,95 @@ commit阶段停止。现场寄存器显示commit count约599万且pending保持1
 的commit、tracker heartbeat、disable和clear-errors四个命令输出，正常运行分支漏掉每拍默认清零，
 使write-one命令错误地变为永久电平。修复后同一回归精确观测到1个pulse、1次commit、pending清零，
 再跨两个边界也不重触发；完整顶层smoke、corrector和AXI XSim均PASS，Stage 34e定向Python 59项、
-Board Agent 8项、receiver 50项均PASS。须使用该RTL重新完成完整Vivado链并导出新bit后，才能续提
-开放输入队列。
+Board Agent 8项、receiver 50项均PASS。该RTL随后进入完整Vivado重建和导出门禁。
 
-## 尚未完成的硬门禁
+修复提交`af0e548`随后已在同一Vivado GUI完成完整`synth_1 → impl_1/phys_opt/route →
+write_bitstream`长任务，并通过latest-only current-project导出。新bit SHA256为
+`33d0b5270a722fbc5998e8df88511078e7c9a11aaeb5115ac45547d77cc30194`；导出门禁WNS/WHS均为
+`+0.009 ns`，325,085条可布线网络全部完成且route error为0，补偿器仍恰好使用128个DSP48E2。
+SYSREF首级保持在`BITSLICE_RX_TX_X0Y78`，输入及PL到ADC/DAC重捕获时序均通过。上一轮重复commit
+失败证据已完整归档为`attempt_007`，不与新队列混用。
 
-1. 当前八路开放输入六窗、60分钟tracker和全速矩阵；
-2. 八个独立50 Ω负载到货后的144组合、三条60分钟跟踪、SSA同频信号保持、积分A/B、MTS 40/40、
+该bit的开放输入队列随后完成`480 MHz / 160 MS/s`的raw/static/dynamic比较并通过，但在进入
+`480 MHz / 320 MS/s`静态补偿START时安全停止。现场证明不是receiver陈旧状态：补偿器硬件
+`sample0_discontinuity_count=1`且watchdog记录`SPUR_TRACKER`故障。根因是RFDC adapter不能反压，
+而320 MS/s没有抽取余量；START瞬间SPEC异步FIFO/CDC短暂拉低ready，旧直连路径因此漏掉一个
+1024-bit raw beat。修复在补偿器与science rate selector之间加入32-beat同钟弹性FIFO；停流时
+补偿器继续直接排空，正式流时FIFO吸收有界启动瞬态，不改变sample0或UDP语义，也不放宽连续性
+检测。顶层回归强制下游停顿16周期，ADC ready始终为1且最终不连续计数为0；完整XSim 19/19通过。
+
+失败现场已归档为`attempt_010`。新bit按上述SHA和时序结果导出后，开放输入长任务以systemd
+invocation `863deae0d0444024b00783047a4b797b`重新提交。首个160 MS/s SPEC_ONLY raw窗口已健康进入
+60秒采集：receiver约`41.83 Gbit/s`，QSFP flag保持未校正诊断标记，kernel/ring/application
+drop及seq/frame/sample0 gap均为0。该队列最终完整取得六个raw/static/dynamic窗口，18个60秒run
+的数字完整性全部通过，但在汇总科学门禁主动停止：六窗dynamic仅有`3、5、4、6、5、3 / 8`路
+相对raw改善，最坏残余仍高于局部噪底`25.79～33.24 dB`，不能进入60分钟tracker和全速矩阵。
+原始现场、CSV和PNG已归档为`attempt_011`，分类为开放输入科学拒绝，而不是补偿有效。
+
+事后审计发现明确的软件估计器缺陷：初始C0正确使用64份1024点raw preview平均，但随后两次残差
+细化及最终复核各只使用单份1024点preview。开放输入下单份复相关的不确定度约为`1～3 ADU`，把
+它直接累加到C0等价于把随机噪声重新合成为一个固定数字单音；这正好解释了FFT后仍有十几至三十多
+dB突出峰以及各路改善方向不一致。现已把每次残差细化和独立复核都改为64份、按绝对sample0相干
+平均，同时记录复均值标准误差；完整Python回归228项通过。科学否定现在正常结束而不伪装成service
+崩溃，否定结果也会先生成图表；生产恢复对一次RFDC reset state-6超时增加了唯一一次安全静音后
+fresh CONFIGURE重试。
+
+修复后的开放输入R2队列使用同一已布线v36 bitstream，无需重新综合。systemd invocation为
+`8edaf3aff9454527bc2d04f2d34bc0f0`；首个`480 MHz / 160 MS/s` raw run已于2026-08-15 18:20 CST
+健康进入60秒monitor，实测约`41.82 Gbit/s`、v36身份正确、DAC mask为0且接收端drop为0。
+
+R2完成480 MHz的160/320 MS/s两组raw/static/dynamic比较后，在下一窗口的tracker-mode事务发生
+运行故障：API与5 Hz resident tracker并发写同一个16-word shadow bank，硬件正确锁存乱序状态
+`0x90`；此时expected与computed CRC同为`0x3b599a26`，证明不是系数内容损坏，而是两个完整事务
+交错。tracker-mode和disable现已纳入`/run/t510-configure.lock`独占区，完整Python回归229项通过。
+生产恢复本次一次成功，最终在线回读为v34、board 1、STOP、receiver不接收、DAC mask及八路幅度
+全0、PFB 4096/8-tap、双PLL锁定和有效MTS。
+
+该运行故障不改变已经取得的科学结果。64份残差相干平均确实生效，但480 MHz结果仍为：
+
+| 采样率 | dynamic改善路数 | static改善路数 | raw最坏突出度 | static最坏突出度 | dynamic最坏突出度 |
+|---:|---:|---:|---:|---:|---:|
+| 160 MS/s | 4/8 | 6/8 | 27.38 dB | 27.21 dB | 27.57 dB |
+| 320 MS/s | 2/8 | 3/8 | 25.96 dB | 25.54 dB | 24.86 dB |
+
+两种速率都没有八路同方向改善，且距离`噪底+6 dB`目标约19～22 dB。160/320的独立64份
+corrected-preview复核也分别仍有4路和3路高于`-90 dBFS`。因此“单preview噪声过拟合”是已修复
+的真实缺陷，却不是当前方案失败的全部根因；停流短preview矢量和OCB1 2×2模型不能稳定预测
+一分钟科学PFB中的固定项。由于任一正式窗口失败就必须停止，且480 MHz两种速率已经使全六窗
+方向门禁数学上不可能通过，本阶段不再为了补齐表格重跑其余四窗，也不进入60分钟tracker、全速
+矩阵或50 Ω发布资格。v36保留为未发布工程证据，正式产品继续使用v34并保留三个科学坏频点。
+
+### 八路独立50 Ω负载复测
+
+2026-08-16用户确认八路ADC全部接入独立50 Ω负载后，使用同一v36 bitstream、同一算法和同一
+raw/static/dynamic 60秒比较重新采集完整六窗。该次运行标记为
+`ALL_ADC_INDEPENDENT_50OHM_DIAGNOSTIC`，只比较负载条件是否改变方向性；它仍使用
+diagnostic-only凭证，不冒充144组合正式发布资格。systemd invocation
+`50d4b080ffa44ea08cebc018b0b0e7a3`在50分15秒内完成全部18段60秒采集，运行错误为空，所有
+PCAP/monitor数据完整性门禁通过，随后正常恢复v34、STOP、DAC全零和双PLL锁定。
+
+| 固定项 | 采样率 | dynamic改善路数 | static改善路数 | raw最坏突出度 | static最坏突出度 | dynamic最坏突出度 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 480 MHz | 160 MS/s | 3/8 | 3/8 | 30.33 dB | 30.40 dB | 30.42 dB |
+| 480 MHz | 320 MS/s | 4/8 | 6/8 | 23.68 dB | 25.99 dB | 24.66 dB |
+| 960 MHz | 160 MS/s | 4/8 | 4/8 | 29.36 dB | 28.84 dB | 29.27 dB |
+| 960 MHz | 320 MS/s | 3/8 | 4/8 | 29.09 dB | 28.32 dB | 28.49 dB |
+| 1440 MHz | 160 MS/s | 5/8 | 4/8 | 31.41 dB | 31.12 dB | 30.28 dB |
+| 1440 MHz | 320 MS/s | 6/8 | 4/8 | 29.00 dB | 28.69 dB | 27.88 dB |
+
+六窗均未达到八路同方向改善，最坏突出度仍为`23.68～31.41 dB`，远高于`+6 dB`目标；480 MHz
+甚至在部分条件下恶化。最终分类为`INDEPENDENT_50OHM_DIAGNOSTIC_REJECTED_DIRECTION`。这说明
+开放输入不是前次失败的决定因素，当前“停流短preview固定矢量＋OCB1 2×2跟踪模型”本身不足以
+预测一分钟科学PFB中的固定项。重复运行同一算法已经没有增量价值，v36继续不发布。
+
+## 未进入的硬门禁
+
+1. 其余四个开放输入窗口、60分钟tracker和全速矩阵；
+2. 八个独立50 Ω负载下的144组合、三条60分钟跟踪、SSA同频信号保持、积分A/B、MTS 40/40、
    20次循环和全速soak。
+
+上述项目不是普通待办，而是因开放输入前置门禁失败而按计划取消。若后续重新设计补偿观测量、
+相位基准或模型，必须另立阶段并重新通过开放输入前置门禁，不能直接从50 Ω资格接续。
 
 正式目标仍是每个60秒平均固定项不高于局部噪底+6 dB，raw-preview固定矢量不差于-90 dBFS；
 SSA同频真实信号补偿前后幅度误差不超过2%、相位误差不超过2°。只有上述50 Ω资格全部通过，

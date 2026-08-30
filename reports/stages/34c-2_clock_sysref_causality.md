@@ -64,7 +64,7 @@ GPSDO/板载TCXO参考源”。
 |---|---|---|---|
 |`160m_10m_cont_manual_clkin2`|外部GPSDO 10 MHz|continuous|`370e0dfcb1dd9d8d931e62c6f479022d9dd8d361d3e4619465d432db784fb046`|
 |`160m_10m_request_manual_clkin2`|外部GPSDO 10 MHz|MTS-only|`6a358918b63aeec870f7c2b7f56a9fc344604bcc94e9763f3a27f38bce94c3d4`|
-|`160m_10m_request_manual_clkin0`|板载TCXO 10 MHz|MTS-only|`ecc2e2c803056a5650bb5347e51bca7de887a96bd99e5e157bc41432d4155496`|
+|`160m_10m_request_manual_clkin0`|板载TCXO 10 MHz|MTS-only|`a8504d384354610f8f130b1cda1a446bcdfb25bf8c4bb689fbb58adefe5e88e2`|
 
 TICS原始产物冻结在：
 
@@ -85,10 +85,18 @@ pulser）、`0x16a:20→60`（启用外部request）。TICS Pro的“SYSREF Requ
 完整导出；该值与production相同。快捷按钮还把七个SDCLK local delay从bypass改为2 cycles，
 实机隔离证明这会使RFDC reset停在state 6，因此按审计要求在TICS中恢复production的全部
 输出mux、delay、格式和频率。外部profile的CLKin0 enable也保持关闭。TCXO profile在此基础
-上只增加`0x146=0x28`的CLKin0 enable、`0x147=0x0f`的manual CLKin0选择和
+上只增加`0x146=0x28`的CLKin0 enable、`0x147=0x0e`的manual CLKin0选择与
+CLKin0→PLL1路由，以及
 `0x154=0x01`的PLL1输入R分频。TICS显示若只选择CLKin0
 而不设R=1，PLL1 PFD只有0.08 MHz并失锁；设为R=1后恢复10 MHz并锁定。三个profile的
 VCO0 2400 MHz、VCXO 122.88 MHz、RFDC/PL 160 MHz输出和10 MHz SYSREF分频保持不变。
+
+2026-08-22实机资格测试发现原TICS导出的`0x147=0x0f`导致`PLL1=0, PLL2=1`。
+按TI LMK04828数据手册解码，`R0x147[1:0]=3`表示CLKin0 Off，与TICS文件FLEX段
+声称的“CLKin0 drives PLL1”矛盾；运行时profile因此修正为`0x0e`，即
+`CLKin_SEL_MODE=0` manual CLKin0、`CLKin1_OUT_MUX=3` Off、`CLKin0_OUT_MUX=2` PLL1。
+原始TICS产物保留不改，用于追溯该导出差异；修正后运行时写表SHA以代码和
+新资格测试证据为准。
 
 ## 控制面与失效语义
 

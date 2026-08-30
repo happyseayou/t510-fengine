@@ -559,6 +559,13 @@ class FEngineController:
     ) -> dict[str, Any]:
         """Apply a production configuration while leaving science streaming stopped."""
         config = config if isinstance(config, FEngineConfig) else FEngineConfig(**dict(config))
+        clock_ref = str(clock_ref)
+        clock_profile = str(clock_profile)
+        sync_mode = (
+            "free_run"
+            if clock_ref == "tcxo_10mhz"
+            else T510FEngine.PRODUCTION_SYNC_MODE
+        )
         if fresh_download or self.core is None:
             self.connect(download=True)
         core = self.require_core()
@@ -579,9 +586,9 @@ class FEngineController:
             require_mts=True,
             force_clock_reconfigure=bool(force_clock_reconfigure),
             input_source_mode="dac_loopback",
-            clock_ref=str(clock_ref),
-            clock_profile=str(clock_profile),
-            sync_mode=T510FEngine.PRODUCTION_SYNC_MODE,
+            clock_ref=clock_ref,
+            clock_profile=clock_profile,
+            sync_mode=sync_mode,
             mts_adc_target_latency=config.mts_adc_target_latency,
             mts_dac_target_latency=config.mts_dac_target_latency,
         )

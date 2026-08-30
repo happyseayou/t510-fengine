@@ -1624,7 +1624,6 @@ struct WorkerStats {
     ring_fill_percent: f64,
     ring_freeze_q_count: u64,
     last_board_id: Option<u16>,
-    last_packet_flags: Option<u16>,
     last_seq_no: Option<u32>,
     last_frame_id: Option<u64>,
     last_sample0: Option<u64>,
@@ -1673,7 +1672,6 @@ impl WorkerStats {
             ring_fill_percent: 0.0,
             ring_freeze_q_count: 0,
             last_board_id: None,
-            last_packet_flags: None,
             last_seq_no: None,
             last_frame_id: None,
             last_sample0: None,
@@ -1758,9 +1756,6 @@ struct ReceiverStats {
     nic_rx_crc_errors_delta: u64,
     worker_ring_drops: u64,
     last_board_id: Option<u16>,
-    last_packet_flags: Option<u16>,
-    adc_interleave_spur_correction_active: bool,
-    adc_interleave_spur_uncorrected: bool,
     last_seq_no: Option<u32>,
     last_frame_id: Option<u64>,
     last_sample0: Option<u64>,
@@ -1855,9 +1850,6 @@ impl ReceiverStats {
             nic_rx_crc_errors_delta: 0,
             worker_ring_drops: 0,
             last_board_id: None,
-            last_packet_flags: None,
-            adc_interleave_spur_correction_active: false,
-            adc_interleave_spur_uncorrected: false,
             last_seq_no: None,
             last_frame_id: None,
             last_sample0: None,
@@ -1938,9 +1930,6 @@ struct SpecPreviewStatus {
     last_chan0: Option<u32>,
     last_chan_count: Option<u16>,
     last_dst_port: Option<u16>,
-    packet_flags: u16,
-    adc_interleave_spur_correction_active: bool,
-    adc_interleave_spur_uncorrected: bool,
     last_error: Option<String>,
 }
 
@@ -1958,9 +1947,6 @@ impl Default for SpecPreviewStatus {
             last_chan0: None,
             last_chan_count: None,
             last_dst_port: None,
-            packet_flags: 0,
-            adc_interleave_spur_correction_active: false,
-            adc_interleave_spur_uncorrected: false,
             last_error: None,
         }
     }
@@ -1980,7 +1966,6 @@ struct FullSpectrumAssembler {
     spec_sample_rate_hz: u32,
     src_port: u16,
     dst_port: u16,
-    packet_flags: u16,
     gap_before: bool,
     coverage_mask_lo: u64,
     coverage_mask_hi: u64,
@@ -2002,7 +1987,6 @@ impl Default for FullSpectrumAssembler {
             spec_sample_rate_hz: 0,
             src_port: 0,
             dst_port: 0,
-            packet_flags: 0,
             gap_before: false,
             coverage_mask_lo: 0,
             coverage_mask_hi: 0,
@@ -2078,7 +2062,6 @@ impl FullSpectrumAssembler {
         self.spec_sample_rate_hz = header.spec_sample_rate_hz;
         self.src_port = src_port;
         self.dst_port = dst_port;
-        self.packet_flags = header.flags;
         self.coverage_mask_lo = 0;
         self.coverage_mask_hi = 0;
         self.gap_before = false;
@@ -2331,9 +2314,6 @@ impl SpecPreviewCapture {
             last_block_index: Some(header.block_index),
             last_chan0: Some(header.chan0),
             last_chan_count: Some(header.chan_count),
-            packet_flags: header.flags,
-            adc_interleave_spur_correction_active: header.adc_interleave_spur_correction_active(),
-            adc_interleave_spur_uncorrected: header.adc_interleave_spur_uncorrected(),
             ..SpecPreviewStatus::default()
         };
     }
@@ -2404,13 +2384,6 @@ impl SpecPreviewCapture {
             last_chan0: Some(block.chan0),
             last_chan_count: Some(block.chan_count),
             last_dst_port: Some(block.dst_port),
-            packet_flags: self.assembler.packet_flags,
-            adc_interleave_spur_correction_active: self.assembler.packet_flags
-                & t510_time_rx::FLAG_ADC_INTERLEAVE_SPUR_CORRECTION_ACTIVE
-                != 0,
-            adc_interleave_spur_uncorrected: self.assembler.packet_flags
-                & t510_time_rx::FLAG_ADC_INTERLEAVE_SPUR_UNCORRECTED
-                != 0,
             last_error: None,
         };
         if complete
@@ -2461,13 +2434,6 @@ impl SpecPreviewCapture {
             last_chan0: Some(header.chan0),
             last_chan_count: Some(header.chan_count),
             last_dst_port: Some(dst_port),
-            packet_flags: self.assembler.packet_flags,
-            adc_interleave_spur_correction_active: self.assembler.packet_flags
-                & t510_time_rx::FLAG_ADC_INTERLEAVE_SPUR_CORRECTION_ACTIVE
-                != 0,
-            adc_interleave_spur_uncorrected: self.assembler.packet_flags
-                & t510_time_rx::FLAG_ADC_INTERLEAVE_SPUR_UNCORRECTED
-                != 0,
             last_error: None,
         };
         if complete
@@ -4732,10 +4698,6 @@ impl ReceiverRuntime {
             .rate_time_bytes
             .saturating_add(udp_payload.len() as u64);
         self.stats.last_board_id = Some(header.board_id);
-        self.stats.last_packet_flags = Some(header.flags);
-        self.stats.adc_interleave_spur_correction_active =
-            header.adc_interleave_spur_correction_active();
-        self.stats.adc_interleave_spur_uncorrected = header.adc_interleave_spur_uncorrected();
         self.stats.last_time_count = Some(header.time_count);
 
         let selected = self.config.sample_rate_mode();
@@ -4824,10 +4786,6 @@ impl ReceiverRuntime {
             .rate_spec_bytes
             .saturating_add(udp_payload.len() as u64);
         self.stats.last_board_id = Some(header.board_id);
-        self.stats.last_packet_flags = Some(header.flags);
-        self.stats.adc_interleave_spur_correction_active =
-            header.adc_interleave_spur_correction_active();
-        self.stats.adc_interleave_spur_uncorrected = header.adc_interleave_spur_uncorrected();
         self.stats.last_spec_seq_no = Some(header.seq_no);
         self.stats.last_spec_frame_id = Some(header.frame_id);
         self.stats.last_spec_sample0 = Some(header.sample0);
@@ -5408,7 +5366,6 @@ impl FanoutWorkerRuntime {
             .rate_time_bytes
             .saturating_add(udp_payload.len() as u64);
         self.stats.last_board_id = Some(header.board_id);
-        self.stats.last_packet_flags = Some(header.flags);
         self.stats.last_seq_no = Some(header.seq_no);
         self.stats.last_frame_id = Some(header.frame_id);
         self.stats.last_sample0 = Some(header.sample0);
@@ -5496,7 +5453,6 @@ impl FanoutWorkerRuntime {
             .rate_spec_bytes
             .saturating_add(udp_payload.len() as u64);
         self.stats.last_board_id = Some(header.board_id);
-        self.stats.last_packet_flags = Some(header.flags);
         self.stats.last_spec_seq_no = Some(header.seq_no);
         self.stats.last_spec_frame_id = Some(header.frame_id);
         self.stats.last_spec_sample0 = Some(header.sample0);
@@ -5926,9 +5882,6 @@ fn aggregate_fanout_stats(
     stats.worker_ring_drops = 0;
     stats.active_worker_count = 0;
     stats.last_board_id = None;
-    stats.last_packet_flags = None;
-    stats.adc_interleave_spur_correction_active = false;
-    stats.adc_interleave_spur_uncorrected = false;
     stats.last_seq_no = None;
     stats.last_frame_id = None;
     stats.last_sample0 = None;
@@ -6026,9 +5979,6 @@ fn aggregate_fanout_stats(
         if worker.last_board_id.is_some() {
             stats.last_board_id = worker.last_board_id;
         }
-        if worker.last_packet_flags.is_some() {
-            stats.last_packet_flags = worker.last_packet_flags;
-        }
         if worker.last_seq_no.is_some() {
             stats.last_seq_no = worker.last_seq_no;
             stats.last_frame_id = worker.last_frame_id;
@@ -6055,12 +6005,6 @@ fn aggregate_fanout_stats(
         }
     }
     stats.detected_sample_rate_msps = per_flow_detected_consensus(&stats.per_flow);
-    if let Some(flags) = stats.last_packet_flags {
-        stats.adc_interleave_spur_correction_active =
-            flags & t510_time_rx::FLAG_ADC_INTERLEAVE_SPUR_CORRECTION_ACTIVE != 0;
-        stats.adc_interleave_spur_uncorrected =
-            flags & t510_time_rx::FLAG_ADC_INTERLEAVE_SPUR_UNCORRECTED != 0;
-    }
     stats.selected_detected_mismatch = stats
         .detected_sample_rate_msps
         .map(|mhz| mhz != stats.selected_sample_rate_msps)

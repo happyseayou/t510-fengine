@@ -185,39 +185,21 @@ impl RuntimeConfig {
                 ));
             }
             let core_value = u32::from_str_radix(core, 16).expect("validated core version");
-            let stage34c2r_diagnostic =
-                core_value == 0x0001_0035 && item.id == "fengine-0x00010035";
-            let stage34e_candidate = core_value == 0x0001_0036 && item.id == "fengine-0x00010036";
-            if core_value != 0x0001_0034 && !stage34c2r_diagnostic && !stage34e_candidate {
+            if core_value != 0x0001_0034 {
                 return Err(format!(
-                    "bitstream {} must use production CORE_VERSION 0x00010034, isolated Stage 34c-2R diagnostic 0x00010035, or Stage 34e candidate 0x00010036",
+                    "bitstream {} must use the Stage 35 baseline CORE_VERSION 0x00010034",
                     item.id
                 ));
             }
-            let discovery_candidate = stage34c2r_diagnostic
-                || (stage34e_candidate
-                    && item.mts_adc_target_latency == Some(-1)
-                    && item.mts_dac_target_latency == Some(-1));
             if item.mts_adc_target_latency.is_none()
                 || item.mts_dac_target_latency.is_none()
-                || (!discovery_candidate
-                    && (item.mts_adc_target_latency.is_some_and(|value| value < 0)
-                        || item.mts_dac_target_latency.is_some_and(|value| value < 0)))
-                || (discovery_candidate
-                    && (item.mts_adc_target_latency != Some(-1)
-                        || item.mts_dac_target_latency != Some(-1)))
+                || item.mts_adc_target_latency.is_some_and(|value| value < 0)
+                || item.mts_dac_target_latency.is_some_and(|value| value < 0)
             {
-                return Err(if discovery_candidate {
-                    format!(
-                        "diagnostic candidate bitstream {} requires discovery ADC/DAC targets -1/-1",
-                        item.id
-                    )
-                } else {
-                    format!(
-                        "Stage 34 bitstream {} requires frozen non-negative ADC/DAC MTS target latencies",
-                        item.id
-                    )
-                });
+                return Err(format!(
+                    "Stage 35 baseline bitstream {} requires frozen non-negative ADC/DAC MTS target latencies",
+                    item.id
+                ));
             }
             if item.mts_adc_target_latency == Some(230) || item.mts_dac_target_latency == Some(336)
             {
@@ -226,10 +208,10 @@ impl RuntimeConfig {
                     item.id
                 ));
             }
-            if !discovery_candidate {
+            {
                 let campaign = item.mts_campaign.as_ref().ok_or_else(|| {
                     format!(
-                        "Stage 34 bitstream {} requires an MTS discovery/fixed campaign proof",
+                        "Stage 35 baseline bitstream {} requires the v34 MTS discovery/fixed campaign proof",
                         item.id
                     )
                 })?;

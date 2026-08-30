@@ -71,10 +71,6 @@ module t510_fengine_board_top (
     wire ctrl_clk;
     wire data_rst_n;
     wire ctrl_rst_n;
-    wire [31:0] sysref_pl_edge_count_gray;
-    wire [31:0] sysref_adc_edge_count_gray;
-    wire [31:0] sysref_dac_edge_count_gray;
-    wire [2:0]  sysref_capture_levels;
 
     wire [63:0] m00_axis_tdata;
     wire        m00_axis_tready;
@@ -645,10 +641,6 @@ module t510_fengine_board_top (
         .s32_axis_tvalid(s32_axis_tvalid),
         .sysref_in_diff_n(sysref_in_diff_n),
         .sysref_in_diff_p(sysref_in_diff_p),
-        .sysref_pl_edge_count_gray(sysref_pl_edge_count_gray),
-        .sysref_adc_edge_count_gray(sysref_adc_edge_count_gray),
-        .sysref_dac_edge_count_gray(sysref_dac_edge_count_gray),
-        .sysref_capture_levels(sysref_capture_levels),
         .vin0_01_v_n(vin0_01_v_n),
         .vin0_01_v_p(vin0_01_v_p),
         .vin0_23_v_n(vin0_23_v_n),
@@ -902,10 +894,6 @@ module t510_fengine_board_top (
         .pps_in(pps_in),
         .ref_lock_in(ref_chain_locked),
         .rfdc_ready_in(all_adc_valid),
-        .sysref_pl_edge_count_gray(sysref_pl_edge_count_gray),
-        .sysref_adc_edge_count_gray(sysref_adc_edge_count_gray),
-        .sysref_dac_edge_count_gray(sysref_dac_edge_count_gray),
-        .sysref_capture_levels(sysref_capture_levels),
         .s_axi_awaddr(core_axil_awaddr),
         .s_axi_awvalid(core_axil_awvalid),
         .s_axi_awready(core_axil_awready),

@@ -1,12 +1,19 @@
 # T510 F-engine 阶段报告
 
+## 强制操作规则
+
+长任务、Vivado 构建链及 T510 实验室板默认运维账号的唯一权威规则见
+[T510 仓库宪法](../../AGENTS.md)。执行相关操作前必须先阅读该文件；阶段索引不再维护规则
+副本。
+
+
 本目录根部只保留 Stage 32 及以后报告；Stage 31 及更早内容统一归档在 `arch/`，不再作为
 当前接续入口。运行产物、配置、部署和脚本均遵循 latest-only，只有本目录报告使用 Stage
 名称。
 
 ## 最新状态
 
-- 当前正式版本为 Stage 34：`CORE_VERSION=0x00010034`、固定 4096 通道 8-tap PFB、
+- Stage 35 当前硬件基线仍为已验证的 Stage 34 v34：`CORE_VERSION=0x00010034`、固定 4096 通道 8-tap PFB、
   bitstream SHA-256
   `c21d93f5ea71e9ac17a4448cff138a8faaf9c7347d879be919b680d196b8a5be`、MTS target
   ADC/DAC `416/112`。综合、实现、bitstream、MTS 40/40、八路回环与全速稳定性均已闭合。
@@ -115,6 +122,24 @@
   层按注册规则冻结为`INTERVENTION_UNQUALIFIED`，不能把未执行的DAC层写成无因果。最终
   分类为`OUTPUT_LOAD_NOT_CAUSAL_DAC_TILE_INTERVENTION_UNQUALIFIED`；模拟轨亚毫伏纹波和
   主动热因果资格仍待后续仪器/实验。
+- Stage 34d共享SSA、八路开放输入及八路独立50 Ω负载三个物理条件均已闭合。匹配负载unit
+  `t510-stage34d-allan-matched.service`、invocation`fee1459cbb054ae687cea0089915569e`
+  于2026-08-16 22:10 CST正常完成，四个run、8份PCAP和4份TIS1全部通过工程及SHA门禁，
+  drop/gap/饱和/overflow为0，安全收尾通过。但科学分类为
+  `INDEPENDENT_MATCHED_LOAD_CORRELATED_FLOOR_OBSERVED`：两个长run均为28/28 pair在至少
+  4/6离栅格频点重复显著非零，128秒复相关散布分别达到短尺度白噪声外推的2.60/3.55倍；
+  自相关中位斜率为-0.118/-0.032。50 Ω使同tile中位`|gamma|`下降约26%，却没有恢复
+  `1/sqrt(tau)`；因此已排除“只因输入悬空”的解释，但仍未取得天文零互相关资格。历史
+  “合格率”只用于自动campaign分流，不再作为科学摘要；干涉评价必须逐ADC、逐pair、逐频率、
+  逐积分尺度检查，任何一路或基线都不能被总体比例掩盖。
+- Stage 34f 已于2026-08-30结题。D0数字正反控制和D1位级映射均闭合；production TIME/PFB
+  同步切片及D2最前端切片把两类现象定位到RFDC AXIS之前或之内，排除adapter、rate selector、
+  PFB、packetizer、UDP和采集机作为最早来源。无外部10 MHz/PPS时，八路时间记忆仍存在；
+  跨通道复相关与功率慢起伏不是一个简单公共增益项。960 MHz固定分量相关可达0.92..0.94，
+  精确移除后宽带最大滞后相关中位降至0.0040..0.0045，证明固定时间交织杂散与宽带慢时间
+  记忆是不同问题。OCB1、DAC-only、外部/板内参考和ADC tile干预均没有形成可重复根因或修复。
+  34f诊断v37–v42均未发布并已退出活动仓库，正式产品仍为v34；后续改为Stage 35逐ADC、逐bin、
+  2/4/15秒积分的射电天文科学表征。
 - Stage 33a 已终止，状态为
   `TERMINATED / ACCEPTED_WITH_KNOWN_LIMITATIONS / NO_PRODUCTION_MITIGATION`，只作为来源
   分类和坏频点的冻结历史基线。
@@ -165,42 +190,13 @@
 - [34c-3 板内负载、供电与热稳定性调查](34c-3_power_thermal_causality.md)
 - [34c 后续根因调查总计划](34c_adc_correlated_noise_root_cause_plan.md)
 - [34d Allan稳定性与八路复互相关评估](34d_allan_cross_correlation.md)
-- [34e ADC时间交织固定杂散动态前馈补偿（已修复重复commit命令，v36重建中，待开放输入及50 Ω资格）](34e_adc_interleave_spur_correction.md)
+- [34e ADC时间交织固定杂散动态前馈补偿（两种输入条件均失败，v36未发布，用户暂停）](34e_adc_interleave_spur_correction.md)
+- [34f 相关噪声前端定位结题（两类问题均已到达RFDC AXIS，工程切片停止）](34f_closure.md)
 
-## 长任务规则
+## Stage 35 及以后
 
-- 用户点名为长任务的构建链、MTS campaign、全速稳定性矩阵、长时间 soak 和循环门禁，
-  必须一次性提交完整任务或完整队列。一个阶段成功后自动进入下一个阶段，不得在阶段之间
-  等待用户再次下令；任一阶段失败才停止并保留现场与证据。
-- 长任务完整提交并确认健康启动后立即停止等待、停止轮询并把控制权交回用户；不取消、
-  不重复提交、不由另一进程接管，也不把中间进度当作完成。跨会话恢复或用户通知完成后，
-  先检查原任务/队列的最终状态和证据，再按用户指令继续后续工作。
-
-### T510 实验室板默认运维账号
-
-- 当前实验室 PYNQ 默认镜像使用用户 `xilinx`，默认 sudo 密码与用户名相同，即
-  `xilinx`。这是该实验室默认镜像的公开默认凭据，可供自动化发布通过
-  `PYNQ_SUDO_PASSWORD` 使用；不得把这一规则外推到已修改密码、生产或非实验室设备。
-
-### Vivado 构建链
-
-- Vivado 综合、实现、物理优化、布线、`write_bitstream` 和报告生成只通过已 attach 的
-  Vivado GUI MCP 执行；不启动 shell 后台 Vivado，不使用阻塞式 Tcl `wait_on_run`。
-- “提交 Vivado 长任务”固定表示一次性武装完整的
-  `synth_1 -> impl_1 (opt/place/phys_opt/route) -> write_bitstream` 链。综合成功后必须由
-  同一 GUI 会话自动启动实现，实现成功后自动进入 `write_bitstream`；不得把只启动
-  `synth_1`称为完成长任务提交，也不得在两个阶段之间等待用户再次下令。任一阶段失败则
-  停止链并保留现场，不得继续使用旧结果。
-- run 启动或阶段变化后按 `10s -> 20s -> 30s -> 60s` 轮询；确认健康且继续等待有价值时
-  可逐级延长，单次最长 `600s`。
-- 完整链健康启动并确认自动接续已武装后停止等待；不取消、不重复提交，也不由另一
-  Vivado 进程接管。即使跨会话恢复，也必须先确认三段链是否已全部武装，不能只看到
-  综合在跑就遗漏实现或 bitstream。
-- 只有用户确认 GUI 已显示新 `write_bitstream Complete!` 或要求继续后，才检查最终 run
-  状态、routed 时序、route status、DRC/methodology、bitstream 和报告，然后执行导出及
-  后续工作。
-
-## Stage 34 及以后
+- [35 v34硬件、Agent与无WR模式基线统一](35_v34_baseline.md)
+- [Stage 35 射电天文噪声科学研究方案](../../STAGE35_RADIO_ASTRONOMY_NOISE_STUDY_PLAN.md)
 
 - `config/t510/`、`deploy/t510/`、顶层 `overlay/` 和稳定 `t510_*` 脚本原位更新。
 - 构建、临时证据和发布包只使用固定 `build/*/latest` 路径并覆盖旧内容。

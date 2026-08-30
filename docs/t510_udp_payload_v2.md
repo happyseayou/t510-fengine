@@ -61,12 +61,7 @@ word 12..15 的调度同步扩展。当前接收机接受版本2和3。早期解
 - `epoch_mode=0/1/2`：外部 PPS、仅内部时间、scheduled TAI。
 - `payload_format=0`：每个复数值为 little-endian `i16 I` + `i16 Q`。
 - `flags[0..5]`：依次为 time valid、internal epoch、QSFP link up、UDP dry-run、
-  ADC clip、FIFO overflow。
-- `flags[6]=ADC_INTERLEAVE_SPUR_CORRECTION_ACTIVE`：v36当前窗口的动态前馈补偿
-  已使用匹配凭证启用，tracker与硬件状态均有效。
-- `flags[7]=ADC_INTERLEAVE_SPUR_UNCORRECTED`：当前窗口包含480/960/1440 MHz之一，
-  但未使用有效补偿。START仍允许，接收机和Web必须把它显示为科学数据质量警告。
-- v34/v35以及不含三处固定项的v36窗口会把bit6/7保持为0；bit8..15保留。
+  ADC clip、FIFO overflow；其余位保留。
 - `seq_no` 和 `frame_id` 均按各自产品的已发送 UDP 包逐包递增。
 
 ## TIME payload

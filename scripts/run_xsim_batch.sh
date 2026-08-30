@@ -14,7 +14,6 @@ fi
 export LOCPATH="${LOCAL_LOCALE}"
 export LD_LIBRARY_PATH="${VIVADO_ROOT}/lib/lnx64.o/SuSE${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 mkdir -p "${WORK_DIR}"
-cp "${REPO_ROOT}/rtl/adc_interleave_sine_q17_1024.mem" "${WORK_DIR}/adc_interleave_sine_q17_1024.mem"
 
 extra_xvlog_args=()
 for define in ${EXTRA_XVLOG_DEFINES:-}; do
@@ -32,7 +31,6 @@ rtl_files=(
   rtl/science_rate_selector.sv
   rtl/requantizer.sv
   rtl/monitor_counters.sv
-  rtl/adc_interleave_spur_corrector.sv
   rtl/pfb_channelizer.sv
   rtl/axis_sideband_async_fifo.sv
   rtl/axis512_register_slice.sv
@@ -50,7 +48,6 @@ rtl_files=(
 )
 
 tb_files=(
-  sim/tb_adc_interleave_spur_corrector.sv
   sim/tb_feng_ctrl_axi.sv
   sim/tb_axi4_to_axil_bridge.sv
   sim/tb_sync_fsm.sv
@@ -74,7 +71,6 @@ tb_files=(
 tb_tops=("$@")
 if [[ ${#tb_tops[@]} -eq 0 ]]; then
   tb_tops=(
-    tb_adc_interleave_spur_corrector
     tb_feng_ctrl_axi
     tb_axi4_to_axil_bridge
     tb_sync_fsm

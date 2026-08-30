@@ -487,6 +487,22 @@ class FEngineConfigTests(unittest.TestCase):
         self.assertTrue(core.started)
         self.assertEqual(core.events.count(("start",)), 1)
 
+    def test_prepare_onboard_tcxo_uses_request_sysref_and_free_run(self) -> None:
+        core = FakeCore()
+        controller = FEngineController("overlay/t510_fengine.bit", core=core)  # type: ignore[arg-type]
+        controller.prepare(
+            FEngineConfig(),
+            fresh_download=False,
+            clock_ref="tcxo_10mhz",
+            clock_profile="160m_10m_request_manual_clkin0",
+        )
+        self.assertEqual(core.observation_kwargs["clock_ref"], "tcxo_10mhz")
+        self.assertEqual(
+            core.observation_kwargs["clock_profile"],
+            "160m_10m_request_manual_clkin0",
+        )
+        self.assertEqual(core.observation_kwargs["sync_mode"], "free_run")
+
     def test_identity_or_endpoint_readback_failure_never_starts(self) -> None:
         for failure in ("board", "source", "endpoint"):
             with self.subTest(failure=failure):
@@ -645,6 +661,14 @@ class FEngineConfigTests(unittest.TestCase):
         )
         self.assertEqual(core.live_kwargs["src_ip"], "10.20.30.40")
         self.assertEqual(core.live_kwargs["src_mac"], "02:aa:bb:cc:dd:ee")
+
+    def test_low_level_science_keeps_selected_tcxo_and_free_run(self) -> None:
+        core = FakeFEngineFEngine()
+        core.clock_reference = "tcxo_10mhz"
+        core.sync_mode = "free_run"
+        core.configure_science(output_mode="spec_only", start=False)
+        self.assertEqual(core.live_kwargs["clock_ref"], "tcxo_10mhz")
+        self.assertEqual(core.live_kwargs["sync_mode"], "free_run")
 
     def test_inactive_endpoint_with_full_config_programs_every_field(self) -> None:
         core = FakeFEngineFEngine()

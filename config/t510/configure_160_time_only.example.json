@@ -1,6 +1,7 @@
 {
   "bitstream_id": "fengine-0x00010034",
   "board_id": 1,
+  "clock_reference": "onboard_tcxo",
   "profile": {
     "sample_rate_msps": 160,
     "mode": "time_only",

@@ -26,7 +26,12 @@ SKIP_DIR_NAMES = {
     "target",
 }
 SKIP_DIR_PREFIXES = (".xsim",)
-SKIP_FILES = {"for_me.md", "gridstack-all.js", "echarts-all.js"}
+SKIP_FILES = {
+    "for_me.md",
+    "STAGE35_RADIO_ASTRONOMY_NOISE_STUDY_PLAN.md",
+    "gridstack-all.js",
+    "echarts-all.js",
+}
 TEXT_SUFFIXES = {
     ".cfg",
     ".css",
@@ -60,6 +65,10 @@ def _retired_stage_pattern(*, path: bool) -> re.Pattern[str]:
 
 CONTENT_RULES = (
     ("retired stage identifier", _retired_stage_pattern(path=False)),
+    (
+        "closed Stage " + "34f identifier",
+        re.compile(r"(?i)\bstage[ _-]?" + "34" + r"f\b|\b34" + "f-"),
+    ),
     ("retired sample-rate field", re.compile("bandwidth" + "_mhz")),
     ("retired RFDC-rate field", re.compile(r"\b" + "fs_" + r"adc\b")),
     ("retired REST route", re.compile("/api/" + "v1")),
@@ -83,6 +92,9 @@ def _text_candidate(path: Path) -> bool:
 def find_violations(root: Path) -> list[str]:
     root = root.resolve()
     path_rule = _retired_stage_pattern(path=True)
+    closed_stage_path_rule = re.compile(
+        r"(?i)(?:^|/)[^/]*stage[ _-]?" + "34" + r"f[^/]*(?:/|$)"
+    )
     violations: list[str] = []
     for path in sorted(root.rglob("*")):
         if not path.is_file():
@@ -93,6 +105,8 @@ def find_violations(root: Path) -> list[str]:
         relative_text = relative.as_posix()
         if path_rule.search(relative_text):
             violations.append(f"{relative_text}: retired stage path")
+        if closed_stage_path_rule.search(relative_text):
+            violations.append(f"{relative_text}: closed Stage " + "34f path")
         if not _text_candidate(path):
             continue
         try:

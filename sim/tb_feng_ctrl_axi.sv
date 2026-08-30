@@ -98,18 +98,6 @@ module tb_feng_ctrl_axi;
     logic [31:0]  time_ddr_ring_read_count = 32'd0;
     logic [31:0]  time_ddr_ring_drop_count = 32'd0;
     logic [31:0]  time_ddr_ring_error_count = 32'd0;
-    logic [31:0]  spur_corr_status = 32'ha5a5_1234;
-    logic [1:0]   spur_corr_active_spur_id = 2'd2;
-    logic [47:0]  spur_corr_active_phase_step = 48'hfedc_ba98_7654;
-    logic [31:0]  spur_corr_active_profile_id = 32'h36e8_0001;
-    logic [31:0]  spur_corr_active_model_crc32 = 32'h89ab_cdef;
-    logic [31:0]  spur_corr_active_generation = 32'd37;
-    logic [63:0]  spur_corr_last_commit_sample0 = 64'h0123_4567_89ab_c000;
-    logic [31:0]  spur_corr_saturation_count = 32'd3;
-    logic [31:0]  spur_corr_sample0_discontinuity_count = 32'd4;
-    logic [31:0]  spur_corr_crc_error_count = 32'd5;
-    logic [31:0]  spur_corr_tracker_stale_count = 32'd6;
-    logic [31:0]  spur_corr_commit_count = 32'd7;
 
     wire [15:0] board_id;
     wire [1:0]  mode;
@@ -182,23 +170,6 @@ module tb_feng_ctrl_axi;
     wire        time_multiflow_enable;
     wire [2:0]  time_multiflow_base_endpoint;
     wire [3:0]  time_multiflow_count;
-    wire        preview_corrected_select;
-    wire        spur_corr_shadow_enable;
-    wire        spur_corr_shadow_in_band;
-    wire        spur_corr_shadow_bypass;
-    wire        spur_corr_shadow_phase_reload;
-    wire [1:0]  spur_corr_shadow_spur_id;
-    wire [47:0] spur_corr_shadow_phase_step;
-    wire [47:0] spur_corr_shadow_phase_seed;
-    wire [383:0] spur_corr_shadow_coefficients;
-    wire [31:0] spur_corr_shadow_profile_id;
-    wire [31:0] spur_corr_shadow_model_crc32;
-    wire [31:0] spur_corr_shadow_generation;
-    wire        spur_corr_shadow_crc_valid;
-    wire        spur_corr_commit_pulse;
-    wire        spur_corr_tracker_heartbeat_pulse;
-    wire        spur_corr_disable_pulse;
-    wire        spur_corr_clear_errors_pulse;
 
 
     localparam integer TB_SPEC_HIT_PAD = TB_SPEC_ROUTES - 2;
@@ -235,10 +206,6 @@ module tb_feng_ctrl_axi;
         .waiting_for_epoch(waiting_for_epoch),
         .pps_seen(pps_seen),
         .pps_count(pps_count),
-        .sysref_capture_levels(3'b101),
-        .sysref_pl_edge_count(32'd101),
-        .sysref_adc_edge_count(32'd100),
-        .sysref_dac_edge_count(32'd99),
         .ref_locked(ref_locked),
         .error_flags(error_flags),
         .monitor_sample_count(monitor_sample_count),
@@ -317,18 +284,6 @@ module tb_feng_ctrl_axi;
         .preview_capture_count(32'd1024),
         .preview_sample0(64'h0000_0001_0000_0200),
         .preview_rd_data(32'hfeed_cafe),
-        .spur_corr_status(spur_corr_status),
-        .spur_corr_active_spur_id(spur_corr_active_spur_id),
-        .spur_corr_active_phase_step(spur_corr_active_phase_step),
-        .spur_corr_active_profile_id(spur_corr_active_profile_id),
-        .spur_corr_active_model_crc32(spur_corr_active_model_crc32),
-        .spur_corr_active_generation(spur_corr_active_generation),
-        .spur_corr_last_commit_sample0(spur_corr_last_commit_sample0),
-        .spur_corr_saturation_count(spur_corr_saturation_count),
-        .spur_corr_sample0_discontinuity_count(spur_corr_sample0_discontinuity_count),
-        .spur_corr_crc_error_count(spur_corr_crc_error_count),
-        .spur_corr_tracker_stale_count(spur_corr_tracker_stale_count),
-        .spur_corr_commit_count(spur_corr_commit_count),
         .board_id(board_id),
         .mode(mode),
         .arm_latched(arm_latched),
@@ -401,23 +356,6 @@ module tb_feng_ctrl_axi;
         .preview_input_mask(),
         .preview_rd_input(),
         .preview_rd_addr(),
-        .preview_corrected_select(preview_corrected_select),
-        .spur_corr_shadow_enable(spur_corr_shadow_enable),
-        .spur_corr_shadow_in_band(spur_corr_shadow_in_band),
-        .spur_corr_shadow_bypass(spur_corr_shadow_bypass),
-        .spur_corr_shadow_phase_reload(spur_corr_shadow_phase_reload),
-        .spur_corr_shadow_spur_id(spur_corr_shadow_spur_id),
-        .spur_corr_shadow_phase_step(spur_corr_shadow_phase_step),
-        .spur_corr_shadow_phase_seed(spur_corr_shadow_phase_seed),
-        .spur_corr_shadow_coefficients(spur_corr_shadow_coefficients),
-        .spur_corr_shadow_profile_id(spur_corr_shadow_profile_id),
-        .spur_corr_shadow_model_crc32(spur_corr_shadow_model_crc32),
-        .spur_corr_shadow_generation(spur_corr_shadow_generation),
-        .spur_corr_shadow_crc_valid(spur_corr_shadow_crc_valid),
-        .spur_corr_commit_pulse(spur_corr_commit_pulse),
-        .spur_corr_tracker_heartbeat_pulse(spur_corr_tracker_heartbeat_pulse),
-        .spur_corr_disable_pulse(spur_corr_disable_pulse),
-        .spur_corr_clear_errors_pulse(spur_corr_clear_errors_pulse),
         .unix_seconds(unix_seconds),
         .time_live_interval_beats(time_live_interval_beats),
         .time_ddr_ring_enable(time_ddr_ring_enable),
@@ -588,69 +526,7 @@ module tb_feng_ctrl_axi;
         reset_dut();
 
         axi_read(16'h0000, rd);
-        `TB_CHECK_EQ(rd, 32'h0001_0036, "CORE_VERSION Stage 34e candidate")
-        axi_read(16'hae00, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0004, "default spur corrector bypass and raw preview")
-        axi_write(16'hae00, 32'h0000_100f);
-        axi_write(16'hae08, 32'd2);
-        axi_write(16'hae0c, 32'h7654_3210);
-        axi_write(16'hae10, 32'h0000_fedc);
-        axi_write(16'hae14, 32'h1111_2222);
-        axi_write(16'hae18, 32'h0000_3333);
-        axi_write(16'hae1c, 32'h36e8_0001);
-        axi_write(16'hae20, 32'h0123_4567);
-        axi_write(16'hae24, 32'd11);
-        for (mode_idx = 0; mode_idx < 16; mode_idx = mode_idx + 1) begin
-            axi_write(16'hae30 + mode_idx * 4, 32'd0);
-        end
-        axi_write(16'hae28, 32'h758d_6336);
-        axi_read(16'hae2c, rd);
-        `TB_CHECK_EQ(rd, 32'h758d_6336, "spur coefficient IEEE CRC32")
-        axi_read(16'haea4, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0050, "strict 16-word spur coefficient load complete")
-        `TB_CHECK(spur_corr_shadow_crc_valid, "spur coefficient CRC valid output")
-        `TB_CHECK_EQ(spur_corr_shadow_spur_id, 2'd2, "spur ID output")
-        `TB_CHECK_EQ(spur_corr_shadow_phase_step, 48'hfedc_7654_3210, "negative phase-step bit pattern")
-        `TB_CHECK_EQ(spur_corr_shadow_phase_seed, 48'h3333_1111_2222, "phase seed bits")
-        `TB_CHECK_EQ(spur_corr_shadow_profile_id, 32'h36e8_0001, "spur profile output")
-        `TB_CHECK_EQ(spur_corr_shadow_model_crc32, 32'h0123_4567, "spur model CRC output")
-        `TB_CHECK_EQ(spur_corr_shadow_generation, 32'd11, "spur generation output")
-        axi_read(16'hae04, rd);
-        `TB_CHECK_EQ(rd, spur_corr_status, "spur hardware status readback")
-        axi_read(16'hae70, rd);
-        `TB_CHECK_EQ(rd, 32'h89ab_c000, "last commit sample0 low")
-        axi_read(16'hae74, rd);
-        `TB_CHECK_EQ(rd, 32'h0123_4567, "last commit sample0 high")
-        axi_read(16'hae90, rd);
-        `TB_CHECK_EQ(rd, 32'hba98_7654, "active phase step low")
-        axi_read(16'hae94, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_fedc, "active phase step high")
-
-        // All Stage 34e command bits are write-one pulses.  They must return
-        // low after the AXI transaction instead of becoming level controls;
-        // otherwise the top-level toggle CDC repeatedly reissues commands.
-        axi_write(16'hae00, 32'h0000_0f04);
-        `TB_CHECK_EQ(spur_corr_commit_pulse, 1'b0, "spur commit command is one-shot")
-        `TB_CHECK_EQ(spur_corr_tracker_heartbeat_pulse, 1'b0,
-                     "spur tracker heartbeat command is one-shot")
-        `TB_CHECK_EQ(spur_corr_disable_pulse, 1'b0, "spur disable command is one-shot")
-        `TB_CHECK_EQ(spur_corr_clear_errors_pulse, 1'b0,
-                     "spur clear-errors command is one-shot")
-
-        // A missing or repeated index permanently rejects a load until the
-        // explicit restart pulse. This prevents a partial bank from committing.
-        axi_write(16'hae00, 32'h0000_1004);
-        axi_write(16'hae34, 32'd0);
-        axi_read(16'haea4, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0080, "out-of-order spur coefficient rejected")
-        axi_read(32'h0000_002c, rd);
-        `TB_CHECK_EQ(rd, 32'h0000_0005, "SYSREF capture levels")
-        axi_read(32'h0000_0030, rd);
-        `TB_CHECK_EQ(rd, 32'd101, "PL SYSREF edge count")
-        axi_read(32'h0000_0034, rd);
-        `TB_CHECK_EQ(rd, 32'd100, "ADC SYSREF edge count")
-        axi_read(32'h0000_0038, rd);
-        `TB_CHECK_EQ(rd, 32'd99, "DAC SYSREF edge count")
+        `TB_CHECK_EQ(rd, 32'h0001_0034, "CORE_VERSION Stage 34")
         axi_read(16'h0008, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default MODE")
         axi_read(16'h0114, rd);

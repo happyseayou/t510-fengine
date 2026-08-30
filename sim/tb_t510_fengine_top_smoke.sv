@@ -81,10 +81,6 @@ module tb_t510_fengine_top_smoke;
         .pps_in(pps_in),
         .ref_lock_in(ref_lock_in),
         .rfdc_ready_in(rfdc_ready_in),
-        .sysref_pl_edge_count_gray(32'd0),
-        .sysref_adc_edge_count_gray(32'd0),
-        .sysref_dac_edge_count_gray(32'd0),
-        .sysref_capture_levels(3'd0),
         .s_axi_awaddr(s_axi_awaddr),
         .s_axi_awvalid(s_axi_awvalid),
         .s_axi_awready(s_axi_awready),
@@ -661,98 +657,7 @@ module tb_t510_fengine_top_smoke;
         end
     endtask
 
-    task automatic check_stopped_corrector_drain;
-        integer beat;
-        begin
-            reset_dut();
-            `TB_CHECK_EQ(dut.streaming, 1'b0, "corrector drain test starts stopped")
-            s_axis_adc_tvalid = 1'b1;
-            for (beat = 0; beat < 32; beat = beat + 1) begin
-                @(posedge clk);
-                `TB_CHECK_EQ(dut.spur_corr_output_ready, 1'b1,
-                             "stopped corrector always drains live ADC beats")
-                `TB_CHECK_EQ(dut.spur_corr_science_valid, 1'b0,
-                             "stopped calibration beats are gated from science")
-                `TB_CHECK_EQ(s_axis_adc_tready, 1'b1,
-                             "stopped corrector does not backpressure RFDC")
-            end
-            s_axis_adc_tvalid = 1'b0;
-        end
-    endtask
-
-    task automatic check_stopped_spur_commit_is_one_shot;
-        integer coeff_word;
-        integer cycle;
-        integer commit_pulse_count;
-        integer commit_now_count;
-        integer boundary_fire_count;
-        reg [31:0] rd;
-        reg [31:0] status_after_wait;
-        reg [31:0] commit_count_after_wait;
-        begin
-            reset_dut();
-            s_axis_adc_tvalid = 1'b1;
-
-            // Load sixteen zero Q8.16 I/Q words.  IEEE/zlib CRC32 over the
-            // sixteen little-endian 32-bit words is 0x758d6336.
-            axi_write(16'hae00, 32'h0000_100b);
-            axi_write(16'hae08, 32'd1);
-            axi_write(16'hae0c, 32'h3000_0000);
-            axi_write(16'hae10, 32'h0000_3000);
-            axi_write(16'hae14, 32'd0);
-            axi_write(16'hae18, 32'd0);
-            axi_write(16'hae1c, 32'h36e8_0001);
-            axi_write(16'hae20, 32'h1234_5678);
-            axi_write(16'hae24, 32'h89ab_cdef);
-            for (coeff_word = 0; coeff_word < 16; coeff_word = coeff_word + 1) begin
-                axi_write(16'hae30 + coeff_word*4, 32'd0);
-            end
-            axi_write(16'hae28, 32'h758d_6336);
-            axi_read(16'haea4, rd);
-            `TB_CHECK(rd[6], "top stopped commit shadow CRC valid")
-            axi_read(16'hae88, rd);
-            `TB_CHECK_EQ(rd, 32'd0, "top stopped commit begins at zero")
-
-            axi_write(16'hae00, 32'h0000_010b);
-            commit_pulse_count = 0;
-            commit_now_count = 0;
-            boundary_fire_count = 0;
-            for (cycle = 0; cycle < 4200; cycle = cycle + 1) begin
-                @(posedge clk);
-                if (dut.spur_corr_commit_pulse) begin
-                    commit_pulse_count = commit_pulse_count + 1;
-                end
-                if (dut.u_adc_interleave_spur_corrector.commit_now) begin
-                    commit_now_count = commit_now_count + 1;
-                end
-                if (dut.u_adc_interleave_spur_corrector.input_fire &&
-                    dut.u_adc_interleave_spur_corrector.commit_boundary) begin
-                    boundary_fire_count = boundary_fire_count + 1;
-                end
-            end
-            axi_read(16'hae04, status_after_wait);
-            axi_read(16'hae88, commit_count_after_wait);
-            $display("[TB_TRACE] stopped commit pulses=%0d commit_now=%0d boundaries=%0d status=0x%08x count=%0d raw_sample0=0x%016x pending=%0b",
-                     commit_pulse_count, commit_now_count, boundary_fire_count,
-                     status_after_wait, commit_count_after_wait,
-                     s_axis_adc_sample0,
-                     dut.u_adc_interleave_spur_corrector.commit_pending);
-            `TB_CHECK_EQ(status_after_wait[13], 1'b0, "top stopped commit pending clears")
-            `TB_CHECK_EQ(status_after_wait[10:7], 4'b1011, "top stopped commit activates phase/control")
-            `TB_CHECK_EQ(commit_count_after_wait, 32'd1, "top stopped commit executes exactly once")
-
-            for (cycle = 0; cycle < 4200; cycle = cycle + 1) begin
-                @(posedge clk);
-            end
-            axi_read(16'hae88, rd);
-            `TB_CHECK_EQ(rd, 32'd1, "top stopped commit pulse does not retrigger")
-            s_axis_adc_tvalid = 1'b0;
-        end
-    endtask
-
     initial begin
-        check_stopped_corrector_drain();
-        check_stopped_spur_commit_is_one_shot();
         check_stop_and_abort_flush_both_domains();
         check_default_waits_without_pps();
         run_production_spec_cmac();

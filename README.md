@@ -1,6 +1,6 @@
 # T510 F-engine
 
-本仓库维护 T510 当前唯一版本。当前 FPGA 合同为
+本仓库维护 T510 当前唯一版本。Stage 35 以已验证的 v34 作为唯一 FPGA 基线；当前合同为
 `CORE_VERSION=0x00010034`：ADC/DAC 均为 `3.84 GS/s`、12×抽取/插值，复基带为
 `320 MS/s`，ADC/DAC AXIS 时钟为 `80 MHz`。SPEC 使用固定 4096 通道、8-tap
 Hamming-windowed sinc PFB；TIME/SPEC 协议、UDP 端口和 `/api/v2` 保持稳定。
@@ -21,6 +21,9 @@ Hamming-windowed sinc PFB；TIME/SPEC 协议、UDP 端口和 `/api/v2` 保持稳
 - 当前正式产品已经升级为 Stage 34 固定 8-tap PFB；bitstream SHA-256 为
   `c21d93f5ea71e9ac17a4448cff138a8faaf9c7347d879be919b680d196b8a5be`，MTS target
   为 ADC/DAC `416/112`。Stage 34a 只评估天文性能，不修改这份数字产品。
+- Board Agent 的 CONFIGURE 可显式选择 `onboard_tcxo` 或 `external_10mhz`。Stage 35
+  单板噪声研究使用板载 TCXO、free-run 相对采样时间，不需要外部 WR 的 10 MHz 或 PPS；
+  后续多天线干涉再恢复共同参考和 PPS。
 
 完整结论见 [Stage 33a 报告](reports/stages/33a_adc_fixed_spur_characterization_and_mitigation.md)。
 
@@ -64,7 +67,7 @@ Hamming-windowed sinc PFB；TIME/SPEC 协议、UDP 端口和 `/api/v2` 保持稳
 
 ## Latest-only 规则
 
-Stage 34 及以后继续原位更新当前版本，不创建带 Stage 号的配置、部署目录、构建脚本、
+Stage 35 及以后继续原位更新当前版本，不创建带 Stage 号的配置、部署目录、构建脚本、
 发布脚本或临时目录。只有 `reports/stages/*.md` 使用 Stage 名称记录工程结论。
 
 - 顶层 `overlay/` 是运行和发布使用的唯一当前 bitstream；验证后的 Vivado 导出原子覆盖它。
@@ -76,32 +79,13 @@ Stage 34 及以后继续原位更新当前版本，不创建带 Stage 号的配�
 - 板端和接收机固定安装到 `/opt/t510-agent/current` 与
   `/opt/t510-time-rx/current`。安装使用 `.current.next` 完成校验和事务切换，成功后删除
   临时旧目录及 `releases/`。
-- `config/t510/`、`deploy/t510/` 和稳定 `t510_*` 脚本始终表示当前版本；推进 Stage 34
+- `config/t510/`、`deploy/t510/` 和稳定 `t510_*` 脚本始终表示当前版本；推进 Stage 35
   时直接更新这些入口，不复制或改名。
 
-## 长任务规则
+## 强制操作规则
 
-- 用户点名为长任务的构建链、MTS campaign、全速稳定性矩阵、长时间 soak 和循环门禁，
-  必须一次性提交完整任务或完整队列。一个阶段成功后自动进入下一个阶段，不在阶段之间
-  等待用户再次下令；任一阶段失败才停止并保留现场与证据。
-- 长任务完整提交并确认健康启动后立即停止等待、停止轮询并把控制权交回用户；不取消、
-  不重复提交、不用另一进程接管，也不把中间进度当作完成。跨会话恢复或用户通知完成后，
-  先检查原任务/队列的最终状态和证据，再按用户指令继续后续工作。
-
-### Vivado 构建链
-
-- 综合、实现、物理优化、布线、`write_bitstream` 和报告生成只通过已 attach 的 Vivado
-  GUI MCP 执行；不启动 shell 后台 Vivado，不使用阻塞式 Tcl `wait_on_run`。
-- “提交 Vivado 长任务”固定表示一次性武装完整的
-  `synth_1 -> impl_1 (opt/place/phys_opt/route) -> write_bitstream` 链。综合成功后由同一
-  GUI 会话自动启动实现，实现成功后自动进入 `write_bitstream`；不得只提交综合，也不得
-  在阶段之间等待用户再次下令。任一阶段失败则停止链并保留现场。
-- run 启动或阶段变化后按 `10s -> 20s -> 30s -> 60s` 轮询；确认持续健康且等待仍有价值时，
-  可逐级延长，单次最长 `600s`。
-- 完整链健康启动且自动接续已武装后停止等待；不取消、不重复提交，也不由另一个 Vivado
-  进程接管。跨会话恢复时必须确认三段链已完整武装，不能因综合正在运行而遗漏后两段。
-- 只有用户确认 GUI 已显示新 `write_bitstream Complete!` 或要求继续时，才通过同一 GUI
-  MCP 检查最终 run 状态、routed 时序、route status、DRC/methodology、bitstream 和报告。
+长任务、Vivado 构建链及 T510 实验室板默认运维账号的唯一权威规则见
+[T510 仓库宪法](AGENTS.md)。执行相关操作前必须先阅读该文件；README 不再维护规则副本。
 
 ## 验证
 
@@ -113,7 +97,8 @@ scripts/run_xsim_batch.sh
 python3 scripts/check_repository_hygiene.py
 ```
 
-Vivado 运行由上述长任务规则单独管理；本地回归不得隐式启动 Vivado。
+Vivado 运行由 [T510 仓库宪法](AGENTS.md) 的长任务规则单独管理；本地回归不得隐式启动
+Vivado。
 
 ## 阶段报告
 
@@ -125,5 +110,7 @@ Vivado 运行由上述长任务规则单独管理；本地回归不得隐式启�
 - [Stage 33a ADC 固定杂散终止归档](reports/stages/33a_adc_fixed_spur_characterization_and_mitigation.md)
 - [Stage 34 全速固定 8-tap PFB](reports/stages/34_fullrate_pfb8_release.md)
 - [Stage 34c-2 时钟参考与SYSREF因果调查](reports/stages/34c-2_clock_sysref_causality.md)
+- [Stage 35 v34 基线统一](reports/stages/35_v34_baseline.md)
+- [Stage 35 射电天文噪声研究方案](STAGE35_RADIO_ASTRONOMY_NOISE_STUDY_PLAN.md)
 
 更早报告统一位于 `reports/stages/arch/`，不再列入顶层活动索引。

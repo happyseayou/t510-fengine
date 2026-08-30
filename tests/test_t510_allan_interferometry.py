@@ -92,15 +92,34 @@ class Stage34dTests(unittest.TestCase):
         self.assertTrue(adjusted[0] <= adjusted[1] <= adjusted[2])
 
     def test_physical_phase_plans_are_balanced_and_fixed(self):
-        shared = stage34d.shared_plan(); opened = stage34d.open_plan()
+        shared = stage34d.shared_plan(); opened = stage34d.open_plan(); matched = stage34d.matched_plan()
         self.assertEqual([(row["rate"], row["duration"], row["bucket_ms"]) for row in shared], [
             (160, 600, 100), (320, 600, 100), (320, 3600, 1000), (160, 3600, 1000)
         ])
         self.assertEqual([(row["rate"], row["duration"], row["bucket_ms"]) for row in opened], [
             (320, 600, 100), (160, 600, 100), (160, 3600, 1000), (320, 3600, 1000)
         ])
+        self.assertEqual([(row["rate"], row["duration"], row["bucket_ms"]) for row in matched], [
+            (320, 600, 100), (160, 600, 100), (160, 3600, 1000), (320, 3600, 1000)
+        ])
         self.assertEqual(len(stage34d.ADC_PAIRS), 28)
         self.assertTrue(set(stage34d.SAME_TILE_PAIRS).issubset(stage34d.ADC_PAIRS))
+
+    def test_matched_classification_renames_open_gate_without_weakening_it(self):
+        rows = []
+        for pair in stage34d.ADC_PAIRS:
+            for rf_mhz in stage34d.OFFGRID_RF_MHZ:
+                rows.append({
+                    "channel_a": pair[0], "channel_b": pair[1], "rf_mhz": rf_mhz,
+                    "re_slope_pass": True, "im_slope_pass": True,
+                    "re_lag1_1s": 0.01, "im_lag1_1s": -0.02,
+                    "re_white_128_ratio": 1.1, "im_white_128_ratio": 1.2,
+                    "zero_mean_significant_q0p01": False, "mean_coherence": 1e-4,
+                })
+        runs = [{"name": "matched", "rate": 320, "bucket_ms": 1000, "analysis": {"cross_metrics": rows}}]
+        result = stage34d.classify_matched(runs)
+        self.assertTrue(result["pass"])
+        self.assertEqual(result["classification"], "INDEPENDENT_MATCHED_LOAD_ZERO_CORRELATION_QUALIFIED")
 
 
 if __name__ == "__main__":

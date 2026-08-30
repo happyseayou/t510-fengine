@@ -39,6 +39,13 @@ def test_tics_profiles_are_full_tables_with_frozen_explainable_diffs() -> None:
     assert {address for address in request if request[address] != tcxo[address]} == {
         0x146, 0x147, 0x154,
     }
+    # TI LMK04828 R0x147: manual CLKin0 (SEL_MODE=0), CLKin1 off
+    # (OUT_MUX=3), and CLKin0 routed to PLL1 (OUT_MUX=2).  The last field
+    # must not be 3/Off: that produces the observed PLL1-unlocked failure.
+    assert tcxo[0x147] == 0x0E
+    assert (tcxo[0x147] >> 4) & 0x7 == 0
+    assert (tcxo[0x147] >> 2) & 0x3 == 3
+    assert tcxo[0x147] & 0x3 == 2
     assert LMK04828_PROFILE_SHA256 == {
         "160m_10m_cont_manual_clkin2": _sha(LMK04828_INIT_160M_10M_CONTINUOUS),
         "160m_10m_request_manual_clkin2": _sha(LMK04828_INIT_160M_10M_REQUEST_CLKIN2),

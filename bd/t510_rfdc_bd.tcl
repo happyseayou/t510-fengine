@@ -21,26 +21,17 @@ proc create_t510_rfdc_bd {} {
         }
     }
     set mts_src [file join $repo_root rtl pl_mts_sync_clk.v]
-    set recapture_src [file join $repo_root rtl pl_mts_axis_recapture.v]
+    if {[llength [get_files -quiet $mts_src]] == 0} {
+        add_files -norecurse -fileset sources_1 $mts_src
+    }
+    update_compile_order -fileset sources_1
+
     if {[llength [get_bd_designs -quiet t510_rfdc_bd]]} {
         close_bd_design [get_bd_designs t510_rfdc_bd]
     }
     if {[llength [get_files -quiet */t510_rfdc_bd.bd]]} {
         remove_files [get_files -quiet */t510_rfdc_bd.bd]
     }
-
-    # Force Vivado to reread the first-stage RTL and its IOB/DONT_TOUCH
-    # attributes. Persistent GUI sessions otherwise retain a stale module-ref
-    # synthesis product even though the source timestamp has changed.
-    set cached_mts [get_files -quiet $mts_src]
-    if {[llength $cached_mts] != 0} {
-        remove_files $cached_mts
-    }
-    add_files -norecurse -fileset sources_1 $mts_src
-    if {[llength [get_files -quiet $recapture_src]] == 0} {
-        add_files -norecurse -fileset sources_1 $recapture_src
-    }
-    update_compile_order -fileset sources_1
 
     create_bd_design t510_rfdc_bd
 
@@ -145,7 +136,6 @@ proc create_t510_rfdc_bd {} {
 
     set mts [create_bd_cell -type module -reference pl_mts_sync_clk pl_mts_sync_clk_0]
     set_property CONFIG.FREQ_HZ 160000000 [get_bd_pins pl_mts_sync_clk_0/pl_clk]
-    set recapture [create_bd_cell -type module -reference pl_mts_axis_recapture pl_mts_axis_recapture_0]
 
     set rfdc [create_bd_cell -type ip -vlnv xilinx.com:ip:usp_rf_data_converter:2.6 usp_rf_data_converter_0]
     # DAC_Data_Type describes the analog converter output: Stage 33 uses a
@@ -396,17 +386,9 @@ proc create_t510_rfdc_bd {} {
     # rate is 320 MS/s while the 1024-bit ADC aggregate and 128-bit DAC ports
     # remain unchanged.
     # PS pl_clk0 stays on AXI/control and RFDC s_axi only.
-    connect_bd_net [get_bd_pins pl_mts_sync_clk_0/pl_clk] \
-        [get_bd_pins clk_wiz_0/clk_in1] \
-        [get_bd_pins pl_mts_axis_recapture_0/pl_clk]
-    connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins pl_mts_axis_recapture_0/adc_axis_clk]
-    connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins pl_mts_axis_recapture_0/dac_axis_clk]
-    connect_bd_net [get_bd_pins pl_mts_sync_clk_0/user_sysref_adc] \
-        [get_bd_pins pl_mts_axis_recapture_0/pl_sysref_capture]
-    connect_bd_net [get_bd_pins pl_mts_axis_recapture_0/user_sysref_adc] \
-        [get_bd_pins usp_rf_data_converter_0/user_sysref_adc]
-    connect_bd_net [get_bd_pins pl_mts_axis_recapture_0/user_sysref_dac] \
-        [get_bd_pins usp_rf_data_converter_0/user_sysref_dac]
+    connect_bd_net [get_bd_pins pl_mts_sync_clk_0/pl_clk] [get_bd_pins clk_wiz_0/clk_in1]
+    connect_bd_net [get_bd_pins pl_mts_sync_clk_0/user_sysref_adc] [get_bd_pins usp_rf_data_converter_0/user_sysref_adc]
+    connect_bd_net [get_bd_pins pl_mts_sync_clk_0/user_sysref_dac] [get_bd_pins usp_rf_data_converter_0/user_sysref_dac]
     connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] \
         [get_bd_pins usp_rf_data_converter_0/m0_axis_aclk] \
         [get_bd_pins usp_rf_data_converter_0/m1_axis_aclk] \
@@ -430,10 +412,6 @@ proc create_t510_rfdc_bd {} {
     set dac_axis_freq_hz [_pin_freq_or_default [get_bd_pins clk_wiz_0/clk_out2] 80000000]
     create_bd_port -dir O -type clk adc_m_axis_clk
     create_bd_port -dir O -type clk dac_s_axis_clk
-    create_bd_port -dir O -from 31 -to 0 sysref_pl_edge_count_gray
-    create_bd_port -dir O -from 31 -to 0 sysref_adc_edge_count_gray
-    create_bd_port -dir O -from 31 -to 0 sysref_dac_edge_count_gray
-    create_bd_port -dir O -from 2 -to 0 sysref_capture_levels
     create_bd_port -dir O -type clk ctrl_clk
     create_bd_port -dir O data_rst_n
     create_bd_port -dir O ctrl_rst_n
@@ -447,10 +425,6 @@ proc create_t510_rfdc_bd {} {
     set_property CONFIG.ASSOCIATED_BUSIF {time_ddr_s_axi} [get_bd_ports time_ddr_s_axi_aclk]
     connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_ports adc_m_axis_clk]
     connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_ports dac_s_axis_clk]
-    connect_bd_net [get_bd_pins pl_mts_axis_recapture_0/sysref_pl_edge_count_gray] [get_bd_ports sysref_pl_edge_count_gray]
-    connect_bd_net [get_bd_pins pl_mts_axis_recapture_0/sysref_adc_edge_count_gray] [get_bd_ports sysref_adc_edge_count_gray]
-    connect_bd_net [get_bd_pins pl_mts_axis_recapture_0/sysref_dac_edge_count_gray] [get_bd_ports sysref_dac_edge_count_gray]
-    connect_bd_net [get_bd_pins pl_mts_axis_recapture_0/sysref_capture_levels] [get_bd_ports sysref_capture_levels]
     connect_bd_net [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] [get_bd_ports ctrl_clk]
     connect_bd_net [get_bd_pins clk_wiz_0/locked] [get_bd_ports data_rst_n]
     connect_bd_net [get_bd_pins rst_ps8_0_100M/peripheral_aresetn] [get_bd_ports ctrl_rst_n]

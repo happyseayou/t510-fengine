@@ -483,13 +483,8 @@ module feng_channelizer_4096_streaming #(
     logic              feed_active;
     logic [12:0]       feed_read_addr;
     logic [63:0]       feed_sample0;
-    // These registered controls fan into 8 frame memories and 16 coefficient
-    // memories.  A 64-load replication threshold left the placer with long
-    // 322.265625 MHz routes into RAMB36 address/enable pins after the SYSREF
-    // observability logic perturbed placement.  Replicate locally per small
-    // BRAM cluster; this changes only physical fanout, not pipeline latency.
-    (* max_fanout = 16 *) logic read_cmd_valid;
-    (* max_fanout = 16 *) logic [11:0] read_cmd_idx;
+    (* max_fanout = 64 *) logic read_cmd_valid;
+    (* max_fanout = 64 *) logic [11:0] read_cmd_idx;
     logic              read_valid;
     logic [11:0]       read_idx;
     logic              read_dout_valid;
@@ -634,7 +629,7 @@ module feng_channelizer_4096_streaming #(
     wire xfft_output_fire = xfft_m_axis_tvalid;
     wire xfft_q_empty = (xfft_q_count == 2'd0);
     wire xfft_q_full = (xfft_q_count == 2'd2);
-    (* max_fanout = 16 *) wire pfb_pipe_advance = !xfft_q_full;
+    (* max_fanout = 64 *) wire pfb_pipe_advance = !xfft_q_full;
     wire xfft_data_valid = !xfft_q_empty;
     wire [CELL_W-1:0] xfft_data = xfft_q_head_data;
     wire [11:0] xfft_data_idx = xfft_q_head_idx;

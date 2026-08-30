@@ -13,8 +13,7 @@ use config::{HelperBitstream, RuntimeConfig};
 use model::{
     CalibrationRequest, ClockDiagnosticPrepareRequest, ClockDiagnosticRestoreRequest,
     ConfigureRequest, DacRequest, DiagnosticMutationRequest, ExpectedBoardRequest, Ocb1Request,
-    OutputLoadRequest, ScheduledSyncPrepareRequest, SpurCorrectionCalibrateRequest,
-    SpurCorrectionTrackerModeRequest,
+    OutputLoadRequest, ScheduledSyncPrepareRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -34,7 +33,6 @@ const CLOCK_DIAGNOSTIC_STATE_PATH: &str = "/run/t510-clock-diagnostic.json";
 const OUTPUT_LOAD_STATE_PATH: &str = "/run/t510-output-load.json";
 const RFDC_POWER_STATE_PATH: &str = "/run/t510-rfdc-power.json";
 const POWER_THERMAL_TELEMETRY_PATH: &str = "/run/t510-power-thermal.jsonl";
-const SPUR_CORRECTION_STATE_PATH: &str = "/run/t510-spur-correction.json";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -53,7 +51,6 @@ impl AppState {
             "ACTIVE",
             "output_load_transaction_id",
         );
-        invalidate_spur_correction_on_agent_start();
         invalidate_diagnostic_transaction_on_agent_start(
             RFDC_POWER_STATE_PATH,
             "state",
@@ -75,59 +72,6 @@ impl AppState {
         let counter = self.request_counter.fetch_add(1, Ordering::Relaxed);
         format!("t510-{millis:x}-{counter:x}")
     }
-}
-
-fn write_spur_correction_state(value: &Value) -> std::io::Result<()> {
-    let temporary = format!("{SPUR_CORRECTION_STATE_PATH}.tmp");
-    std::fs::write(&temporary, serde_json::to_vec(value)?)?;
-    std::fs::rename(temporary, SPUR_CORRECTION_STATE_PATH)
-}
-
-fn read_spur_correction_state() -> Value {
-    std::fs::read_to_string(SPUR_CORRECTION_STATE_PATH)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_else(|| {
-            json!({
-                "schema_version": 1,
-                "calibration_state": "UNCALIBRATED",
-                "spur_correction_id": null,
-                "credential_valid": false,
-                "diagnostic_only": true,
-                "invalid_reason": "NOT_CALIBRATED",
-                "result": null,
-            })
-        })
-}
-
-fn invalidate_spur_correction_on_agent_start() {
-    let mut value = read_spur_correction_state();
-    let Some(state) = value.as_object_mut() else {
-        return;
-    };
-    let was_live = state.get("credential_valid").and_then(Value::as_bool) == Some(true)
-        || state.get("calibration_state").and_then(Value::as_str) == Some("RUNNING");
-    if !was_live {
-        return;
-    }
-    state.insert("calibration_state".into(), Value::String("INVALID".into()));
-    state.insert("spur_correction_id".into(), Value::Null);
-    state.insert("credential_valid".into(), Value::Bool(false));
-    state.insert(
-        "invalid_reason".into(),
-        Value::String("BOARD_AGENT_RESTART".into()),
-    );
-    state.insert(
-        "updated_at_unix_ms".into(),
-        Value::from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-                .min(u64::MAX as u128) as u64,
-        ),
-    );
-    let _ = write_spur_correction_state(&value);
 }
 
 fn invalidate_diagnostic_transaction_on_agent_start(
@@ -423,6 +367,11 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
             "hardware_serialization": "agent_local_try_lock",
             "board_id_assignment": "configure_request",
             "start_modes": ["IMMEDIATE", "SCHEDULED_PPS"],
+            "clock_references": {
+                "external_10mhz": {"sync_mode": "external_pps"},
+                "onboard_tcxo": {"sync_mode": "free_run", "external_10mhz_required": false, "external_pps_required": false}
+            },
+            "scheduled_pps_requires_clock_reference": "external_10mhz",
             "status": {
                 "single_register_snapshot": true,
                 "background_polling": false,
@@ -442,9 +391,6 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
                 "rfdc_calibration_stopped_preview": true,
                 "rfdc_ocb1_snapshot_override": true,
                 "rfdc_ocb1_transaction_bound_start": true,
-                "adc_interleave_spur_correction": true,
-                "adc_interleave_spur_ocb1_read_only_tracker": true,
-                "adc_interleave_spur_transaction_bound_start": true,
                 "clock_diagnostic_profiles": true,
                 "clock_transaction_bound_start": true,
                 "sysref_mts_only_diagnostic": true,
@@ -904,191 +850,6 @@ async fn rfdc_power_restore(
     .await
 }
 
-async fn spur_correction_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    run_hardware(
-        &state,
-        "spur-correction-status",
-        &state.runtime.default_bitstream().helper,
-        json!({}),
-        state.runtime.config.operation_timeout_seconds,
-    )
-    .await
-}
-
-async fn spur_correction_calibrate_status(State(state): State<AppState>) -> Json<Value> {
-    success(&state, json!({"state": read_spur_correction_state()}))
-}
-
-async fn spur_correction_calibrate_result(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, ApiError> {
-    let value = read_spur_correction_state();
-    if value.get("calibration_state").and_then(Value::as_str) != Some("CALIBRATED") {
-        return Err(ApiError::new(
-            &state,
-            StatusCode::CONFLICT,
-            "SPUR_CORRECTION_RESULT_NOT_READY",
-            "spur correction calibration has not completed successfully",
-            Some(json!({"state": value})),
-        ));
-    }
-    Ok(success(
-        &state,
-        json!({"state": value, "result": value.get("result")}),
-    ))
-}
-
-async fn spur_correction_calibrate(
-    State(state): State<AppState>,
-    payload: Result<Json<SpurCorrectionCalibrateRequest>, JsonRejection>,
-) -> Result<Json<Value>, ApiError> {
-    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
-    if request.receiver_stream_accepting {
-        return Err(ApiError::new(
-            &state,
-            StatusCode::CONFLICT,
-            "SPUR_CORRECTION_RECEIVER_QUIESCENCE_REQUIRED",
-            "receiver_stream_accepting must be false",
-            None,
-        ));
-    }
-    if request.configuration_fingerprint.len() != 64
-        || !request
-            .configuration_fingerprint
-            .chars()
-            .all(|value| value.is_ascii_hexdigit())
-    {
-        return Err(ApiError::new(
-            &state,
-            StatusCode::BAD_REQUEST,
-            "SCHEMA_VALIDATION_FAILED",
-            "configuration_fingerprint must be a 64-character SHA256 hex string",
-            None,
-        ));
-    }
-    let current = read_spur_correction_state();
-    if current.get("calibration_state").and_then(Value::as_str) == Some("RUNNING") {
-        return Err(ApiError::new(
-            &state,
-            StatusCode::CONFLICT,
-            "SPUR_CORRECTION_CALIBRATION_BUSY",
-            "a spur correction calibration task is already running",
-            Some(json!({"state": current})),
-        ));
-    }
-    let task_id = format!("spur-cal-{}", state.request_id());
-    let running = json!({
-        "schema_version": 1,
-        "calibration_state": "RUNNING",
-        "task_id": task_id,
-        "spur_correction_id": null,
-        "credential_valid": false,
-        "diagnostic_only": true,
-        "invalid_reason": null,
-        "result": null,
-        "progress": {"step": "queued", "completed": 0, "total": 64},
-    });
-    write_spur_correction_state(&running).map_err(|error| {
-        ApiError::new(
-            &state,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "SPUR_CORRECTION_STATE_WRITE_FAILED",
-            format!("cannot persist calibration task state: {error}"),
-            None,
-        )
-    })?;
-    let task_state = state.clone();
-    let bitstream = state.runtime.default_bitstream().helper.clone();
-    let expected_board_id = request.expected_board_id;
-    let request_value = serde_json::to_value(request).expect("serializable spur request");
-    let task_id_for_spawn = task_id.clone();
-    tokio::spawn(async move {
-        let result = run_hardware(
-            &task_state,
-            "spur-correction-calibrate",
-            &bitstream,
-            request_value,
-            task_state
-                .runtime
-                .config
-                .configure_timeout_seconds
-                .saturating_add(900),
-        )
-        .await;
-        if let Err(error) = result {
-            // Calibration may have reached preview selection or a shadow
-            // commit before failing.  Force the helper's verified STOP/raw
-            // preview/disable path before exposing FAILED to clients.
-            let _ = run_hardware(
-                &task_state,
-                "spur-correction-disable",
-                &bitstream,
-                json!({
-                    "expected_board_id": expected_board_id,
-                    "receiver_stream_accepting": false,
-                }),
-                task_state.runtime.config.operation_timeout_seconds,
-            )
-            .await;
-            let failed = json!({
-                "schema_version": 1,
-                "calibration_state": "FAILED",
-                "task_id": task_id_for_spawn,
-                "spur_correction_id": null,
-                "credential_valid": false,
-                "diagnostic_only": true,
-                "invalid_reason": error.body.code,
-                "error": error.body,
-                "result": null,
-            });
-            let _ = write_spur_correction_state(&failed);
-        }
-    });
-    Ok(success(
-        &state,
-        json!({"accepted": true, "task_id": task_id, "state": running}),
-    ))
-}
-
-async fn spur_correction_disable(
-    State(state): State<AppState>,
-    payload: Result<Json<DiagnosticMutationRequest>, JsonRejection>,
-) -> Result<Json<Value>, ApiError> {
-    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
-    run_hardware(
-        &state,
-        "spur-correction-disable",
-        &state.runtime.default_bitstream().helper,
-        serde_json::to_value(request).expect("serializable spur disable request"),
-        state.runtime.config.operation_timeout_seconds,
-    )
-    .await
-}
-
-async fn spur_correction_tracker_mode(
-    State(state): State<AppState>,
-    payload: Result<Json<SpurCorrectionTrackerModeRequest>, JsonRejection>,
-) -> Result<Json<Value>, ApiError> {
-    let Json(request) = payload.map_err(|error| json_rejection(&state, error))?;
-    if request.receiver_stream_accepting {
-        return Err(ApiError::new(
-            &state,
-            StatusCode::CONFLICT,
-            "SPUR_CORRECTION_RECEIVER_QUIESCENCE_REQUIRED",
-            "receiver_stream_accepting must be false",
-            None,
-        ));
-    }
-    run_hardware(
-        &state,
-        "spur-correction-tracker-mode",
-        &state.runtime.default_bitstream().helper,
-        serde_json::to_value(request).expect("serializable spur tracker mode request"),
-        state.runtime.config.operation_timeout_seconds,
-    )
-    .await
-}
-
 async fn ocb1_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     run_hardware(
         &state,
@@ -1508,27 +1269,6 @@ pub fn app(state: AppState) -> Router {
             post(rfdc_power_dac_shutdown),
         )
         .route("/api/v2/rfdc/power/restore", post(rfdc_power_restore))
-        .route("/api/v2/adc/spur-correction", get(spur_correction_status))
-        .route(
-            "/api/v2/adc/spur-correction/calibrate",
-            post(spur_correction_calibrate),
-        )
-        .route(
-            "/api/v2/adc/spur-correction/calibrate/status",
-            get(spur_correction_calibrate_status),
-        )
-        .route(
-            "/api/v2/adc/spur-correction/calibrate/result",
-            get(spur_correction_calibrate_result),
-        )
-        .route(
-            "/api/v2/adc/spur-correction/disable",
-            post(spur_correction_disable),
-        )
-        .route(
-            "/api/v2/adc/spur-correction/tracker-mode",
-            post(spur_correction_tracker_mode),
-        )
         .route("/api/v2/rfdc/calibration/ocb1", get(ocb1_status))
         .route(
             "/api/v2/rfdc/calibration/ocb1/snapshot-override",
@@ -1580,8 +1320,8 @@ mod tests {
     use super::*;
     use crate::config::{AgentConfig, BitstreamSpec, ProfileSpec, RuntimeConfig};
     use crate::model::{
-        ClockDiagnosticPrepareRequest, Endpoint, MtsTargetMode, Profile, ProfileMode,
-        SourceIdentity, StreamKind,
+        ClockDiagnosticPrepareRequest, ClockReference, Endpoint, MtsTargetMode, Profile,
+        ProfileMode, SourceIdentity, StreamKind,
     };
     use http_body_util::BodyExt;
     use sha2::{Digest, Sha256};
@@ -1619,6 +1359,7 @@ mod tests {
         ConfigureRequest {
             bitstream_id: "test".into(),
             board_id: 1,
+            clock_reference: ClockReference::External10Mhz,
             profile: Profile {
                 sample_rate_msps: 160,
                 mode,
@@ -1845,19 +1586,6 @@ mod tests {
                 .unwrap_err()
                 .contains("absolute")
         );
-
-        let mut v36 = state.runtime.config.clone();
-        v36.default_bitstream_id = "fengine-0x00010036".into();
-        v36.bitstreams[0].id = "fengine-0x00010036".into();
-        v36.bitstreams[0].core_version = "0x00010036".into();
-        v36.bitstreams[0].mts_adc_target_latency = Some(-1);
-        v36.bitstreams[0].mts_dac_target_latency = Some(-1);
-        v36.bitstreams[0].mts_campaign = None;
-        assert!(RuntimeConfig::validate(Path::new("/x").into(), v36.clone(), false).is_ok());
-        v36.bitstreams[0].id = "not-the-v36-candidate".into();
-        assert!(RuntimeConfig::validate(Path::new("/x").into(), v36, false)
-            .unwrap_err()
-            .contains("Stage 34e candidate"));
     }
 
     #[tokio::test]

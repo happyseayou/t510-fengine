@@ -44,6 +44,8 @@ class FakeHardwareCore:
         self.sync_prepare_kwargs = None
         self.calibration_frozen = False
         self.ocb1_override = False
+        self.clock_ref = "external_10mhz"
+        self.clock_profile = "160m_10m_cont_manual_clkin2"
 
     def read_status(self):
         return {
@@ -56,8 +58,8 @@ class FakeHardwareCore:
             "pps_status_input_high": 1,
             "pps_status_count_nonzero": 1,
             "ref_status_locked": 1,
-            "configured_sync_mode": 0,
-            "configured_clock_ref": 0,
+            "configured_sync_mode": 2 if self.clock_ref == "tcxo_10mhz" else 0,
+            "configured_clock_ref": 1 if self.clock_ref == "tcxo_10mhz" else 0,
             "tx_link_status_flags": 3,
             "time_packet_count": 100,
             "time_dropped_count": 2,
@@ -116,14 +118,15 @@ class FakeHardwareCore:
         }
 
     def read_lmk_status(self, *, include_registers=False):
+        onboard = self.clock_ref == "tcxo_10mhz"
         return {
-            "profile_id": "160m_10m_cont_manual_clkin2",
+            "profile_id": self.clock_profile,
             "profile_sha256": "1" * 64,
-            "sysref_mode": "continuous",
-            "sysref_policy": "continuous",
-            "selected_ref": "external_10mhz",
-            "clock_reference": "external_gpsdo",
-            "lmk_clkin": "CLKin2 (manual)",
+            "sysref_mode": "request" if onboard else "continuous",
+            "sysref_policy": "mts_only" if onboard else "continuous",
+            "selected_ref": self.clock_ref,
+            "clock_reference": "onboard_tcxo" if onboard else "external_gpsdo",
+            "lmk_clkin": "CLKin0 (manual)" if onboard else "CLKin2 (manual)",
             "sysref_request_gpio": 0,
             "sysref_output_expected_on": True,
             "pll1_lock": 1,
@@ -256,8 +259,22 @@ class FakeController:
     def require_core(self):
         return self.core
 
-    def prepare(self, config, *, fresh_download=True, program_dac=False):
+    def prepare(
+        self,
+        config,
+        *,
+        fresh_download=True,
+        program_dac=False,
+        clock_ref="external_10mhz",
+        clock_profile="160m_10m_cont_manual_clkin2",
+    ):
         self.prepared = config
+        self.prepare_clock = {
+            "clock_ref": clock_ref,
+            "clock_profile": clock_profile,
+        }
+        self.core.clock_ref = clock_ref
+        self.core.clock_profile = clock_profile
         self.core.board_id = config.board_id
         return {
             "status": self.core.read_status(),
@@ -465,32 +482,11 @@ class T510HelperTests(unittest.TestCase):
             "RFDC_POWER_STATE_PATH",
             Path(self.temp.name) / "rfdc-power.json",
         )
-        self.spur_state = mock.patch.object(
-            t510_hw,
-            "SPUR_CORRECTION_STATE_PATH",
-            Path(self.temp.name) / "spur-correction.json",
-        )
-        self.spur_model_root = mock.patch.object(
-            t510_hw,
-            "SPUR_CORRECTION_MODEL_ROOT",
-            Path(self.temp.name) / "spur-models",
-        )
-        self.spur_gate = mock.patch.object(
-            t510_hw,
-            "SPUR_CORRECTION_50OHM_GATE_PATH",
-            Path(self.temp.name) / "spur-models" / "independent-50ohm-qualified.json",
-        )
         self.output_load_state.start()
         self.rfdc_power_state.start()
-        self.spur_state.start()
-        self.spur_model_root.start()
-        self.spur_gate.start()
         self._write_watchdog_state()
 
     def tearDown(self) -> None:
-        self.spur_gate.stop()
-        self.spur_model_root.stop()
-        self.spur_state.stop()
         self.rfdc_power_state.stop()
         self.output_load_state.stop()
         self.clock_state.stop()
@@ -543,6 +539,44 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(len(result["endpoints"]), 24)
         self.assertFalse(result["streaming"])
         record_active_bitstream_state.assert_called_once_with(self.bitstream)
+
+    @mock.patch.object(t510_hw, "_record_active_bitstream_state")
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
+    def test_configure_promotes_onboard_tcxo_to_production_state(
+        self,
+        _record_active_bitstream_state,
+    ) -> None:
+        body = configure_body()
+        body["clock_reference"] = "onboard_tcxo"
+        result = t510_hw._configure(
+            {"bitstream": self.proof, "request": body}
+        )
+        controller = FakeController.instances[-1]
+        self.assertEqual(
+            controller.prepare_clock,
+            {
+                "clock_ref": "tcxo_10mhz",
+                "clock_profile": "160m_10m_request_manual_clkin0",
+            },
+        )
+        self.assertEqual(result["clock_reference"], "onboard_tcxo")
+        self.assertEqual(result["clock_diagnostic"]["state"], "PRODUCTION")
+        self.assertEqual(
+            result["clock_diagnostic"]["profile_id"],
+            "160m_10m_request_manual_clkin0",
+        )
+        self.assertEqual(
+            result["clock_diagnostic"]["clock_reference"], "onboard_tcxo"
+        )
+        self.assertEqual(result["clock_diagnostic"]["sysref_policy"], "mts_only")
+        saved = json.loads(t510_hw.LAST_CONFIGURE_REQUEST_PATH.read_text())
+        self.assertEqual(saved["request"]["clock_reference"], "onboard_tcxo")
+
+    def test_production_clock_selection_rejects_unknown_reference(self) -> None:
+        with self.assertRaisesRegex(t510_hw.HelperError, "clock_reference"):
+            t510_hw._production_clock_selection(
+                {"clock_reference": "mystery_reference"}
+            )
 
     @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_status_is_one_snapshot_of_cumulative_registers(self) -> None:
@@ -806,6 +840,32 @@ class T510HelperTests(unittest.TestCase):
             )["aborted"]
         )
 
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
+    def test_scheduled_sync_rejects_onboard_tcxo_free_run(self) -> None:
+        controller = t510_hw._controller(
+            {"bitstream": self.proof, "request": {}}
+        )
+        controller.core.clock_ref = "tcxo_10mhz"
+        with mock.patch.object(t510_hw, "_controller", return_value=controller):
+            with self.assertRaises(t510_hw.HelperError) as caught:
+                t510_hw._sync_prepare(
+                    {
+                        "bitstream": self.proof,
+                        "request": {
+                            "expected_board_id": 1,
+                            "generation": 7,
+                            "target_pps_count": 50,
+                            "epoch_tai_seconds": 1784256005,
+                            "signal_chain_tag": 1,
+                            "mts_result_id": 1,
+                        },
+                    }
+                )
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULED_SYNC_REQUIRES_EXTERNAL_REFERENCE",
+        )
+
     def test_stdout_protocol_is_exactly_one_json_object(self) -> None:
         original = t510_hw.COMMANDS["status"]
         t510_hw.COMMANDS["status"] = lambda request: {"streaming": False}
@@ -926,114 +986,6 @@ class T510HelperTests(unittest.TestCase):
         self.assertEqual(state["shutdown_ips"]["keep"]["base_addr"], 4096)
         self.assertEqual(state["psddr"]["size"], 1234)
         self.assertFalse(state_path.with_name(".global_pl_state.json.tmp").exists())
-
-    def test_v36_start_rejects_active_hardware_model_identity_mismatch(self) -> None:
-        core = mock.Mock()
-        core.read_status.return_value = {"core_version": 0x00010036}
-        core.heartbeat_spur_correction.return_value = {
-            "active": True,
-            "active_spur_id": 2,
-            "active_phase_step": 123,
-            "active_profile_id": 0x36E80001,
-            "active_model_crc32": 0x11112222,
-            "active_generation": 7,
-        }
-        controller = mock.Mock()
-        controller.require_core.return_value = core
-        state = {
-            "credential_valid": True,
-            "spur_correction_id": "spur-test",
-            "result": {
-                "configuration_fingerprint": "f" * 64,
-                "bitstream_sha256": "a" * 64,
-                "spur": {"spur_id": 2},
-                "window": {"sample_rate_msps": 320, "center_mhz": 900.0},
-                "phase_step": 1 << 46,
-                "profile_id": "0x36e80001",
-                "model_crc32": 0x11112222,
-                "generation": 7,
-                "temperature_c": 40.0,
-            },
-        }
-        with (
-            mock.patch.object(
-                t510_hw,
-                "_spur_current_window",
-                return_value=(
-                    {"sample_rate_msps": 320, "center_mhz": 900.0},
-                    {"spur_id": 2, "offset_hz": 60_000_000.0},
-                ),
-            ),
-            mock.patch.object(t510_hw, "_load_spur_correction_state", return_value=state),
-            mock.patch.object(t510_hw, "_spur_configuration_fingerprint", return_value="f" * 64),
-            mock.patch.object(t510_hw, "_spur_temperature_c", return_value=40.0),
-        ):
-            with self.assertRaises(t510_hw.HelperError) as caught:
-                t510_hw._require_spur_correction_start_authorization(
-                    controller,
-                    {"spur_correction_id": "spur-test"},
-                    {"sha256": "a" * 64},
-                )
-        self.assertEqual(caught.exception.code, "SPUR_CORRECTION_HARDWARE_INACTIVE")
-        self.assertIn("active_phase_step", caught.exception.details["identity_mismatch"])
-
-    def test_spur_window_converts_adc_mixer_sign_to_physical_rf_center(self) -> None:
-        core = mock.Mock()
-        core.read_status.return_value = {"science_sample_rate_msps": 160}
-        core.read_rfdc_mixer_frequencies.return_value = {
-            "available": True,
-            "errors": [],
-            "mixers": [
-                {
-                    "kind": "adc",
-                    "tile": adc // 2,
-                    "block": adc % 2,
-                    "frequency_mhz": -420.0,
-                }
-                for adc in range(8)
-            ],
-        }
-        controller = mock.Mock()
-        controller.require_core.return_value = core
-
-        window, spur = t510_hw._spur_current_window(controller)
-
-        self.assertEqual(window["center_mhz"], 420.0)
-        self.assertEqual(window["adc_mixer_readback_mhz"], [-420.0] * 8)
-        self.assertEqual(spur["spur_id"], 1)
-        self.assertEqual(spur["offset_hz"], 60_000_000.0)
-
-    def test_spur_model_crc32_has_frozen_zlib_identity(self) -> None:
-        self.assertEqual(t510_hw._spur_model_crc32("a" * 64), 0x89B46555)
-        with self.assertRaises(ValueError):
-            t510_hw._spur_model_crc32("not-a-sha256")
-
-    def test_static_tracker_mode_is_restricted_to_diagnostic_credential(self) -> None:
-        state = {
-            "credential_valid": True,
-            "diagnostic_only": False,
-            "spur_correction_id": "formal-spur",
-            "result": {"board_id": 1},
-        }
-        with (
-            mock.patch.object(t510_hw, "_controller", return_value=mock.Mock()),
-            mock.patch.object(t510_hw, "_expected_board", return_value=1),
-            mock.patch.object(t510_hw, "_load_spur_correction_state", return_value=state),
-        ):
-            with self.assertRaises(t510_hw.HelperError) as caught:
-                t510_hw._spur_correction_tracker_mode(
-                    {
-                        "request": {
-                            "expected_board_id": 1,
-                            "receiver_stream_accepting": False,
-                            "spur_correction_id": "formal-spur",
-                            "mode": "static_c0",
-                        }
-                    }
-                )
-        self.assertEqual(
-            caught.exception.code, "SPUR_CORRECTION_TRACKER_MODE_DIAGNOSTIC_ONLY"
-        )
 
 
 if __name__ == "__main__":
