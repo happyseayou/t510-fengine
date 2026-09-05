@@ -48,6 +48,9 @@ stage 34d，Allan 负责判断系统稳定时间尺度，互相关负责判断�
 科学评测
 
 # stage 36
+做一些微调，重复stage 35
+
+# stage 37
 多板同步，把stage 32i搞过来
 
 

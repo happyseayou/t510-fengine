@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import random
 import tempfile
 import unittest
 
-from scripts import t510_astronomy_performance as performance
-from scripts import t510_astronomy_tg as tg
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/stage-34'))
+import t510_astronomy_performance as performance
+import t510_astronomy_tg as tg
 
 
 class Stage34aCampaignTests(unittest.TestCase):

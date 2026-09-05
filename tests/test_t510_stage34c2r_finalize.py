@@ -4,9 +4,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+import sys
 
-from scripts import t510_clock_sysref_causality as campaign
-from scripts import t510_stage34c2r_finalize as finalize
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/stage-34'))
+import t510_clock_sysref_causality as campaign
+import t510_stage34c2r_finalize as finalize
 
 
 class Stage34c2rFinalizeTest(unittest.TestCase):

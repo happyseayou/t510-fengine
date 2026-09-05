@@ -108,7 +108,7 @@ manifest SHA256为`c5c250f8e186d1cc7e819ca59e1e6317f827aeadde4d8666dffb136a4e423
    滑动平均。
 
 每张图包含坐标、单位、理想参考、门限、图例及通俗解释；`SHA256SUMS`冻结七张PNG。
-重绘脚本为`scripts/t510_plot_allan_interferometry_explained.py`，不重新采集、不改写原始证据。
+重绘脚本为`scripts/stage-34/t510_plot_allan_interferometry_explained.py`，不重新采集、不改写原始证据。
 
 条件M完成后另生成五张匹配负载易读图，位于
 `build/receiver/latest/evidence/allan_interferometry/plots_matched_explained`：
@@ -147,7 +147,7 @@ receiver的既有`/api/measure/spec-stability`原位扩展：
 - TIS1保存每个bucket/target的sample0边界、样本数、八路I/Q及功率矩、28对复相关和JSON映射；结果接口同时冻结字节数与SHA256；
 - 数据仍来自现有PACKET_MMAP主接收环，不创建第二个packet socket。
 
-Python分析入口为`scripts/t510_allan_interferometry.py`，实现普通积分散布、overlapping Allan deviation、sampled-total-power、扣除公共标量模态后的spectroscopic Allan、ADC0/2对数功率共/差模、八路PCA、ACF、FFT temporal PSD、block-shuffle、移动块bootstrap和BH `q=0.01`。互相关始终分别检验`Re(V)`和`Im(V)`，不使用天然为正的`|V|`冒充零相关检验。
+Python分析入口为`scripts/stage-34/t510_allan_interferometry.py`，实现普通积分散布、overlapping Allan deviation、sampled-total-power、扣除公共标量模态后的spectroscopic Allan、ADC0/2对数功率共/差模、八路PCA、ACF、FFT temporal PSD、block-shuffle、移动块bootstrap和BH `q=0.01`。互相关始终分别检验`Re(V)`和`Im(V)`，不使用天然为正的`|V|`冒充零相关检验。
 
 ## 冻结采集矩阵
 

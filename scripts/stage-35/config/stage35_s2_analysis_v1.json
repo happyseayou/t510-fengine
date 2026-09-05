@@ -1,0 +1,61 @@
+{
+  "format": "T510_STAGE35_S2_ANALYSIS_CONFIG_V1",
+  "schema_version": 1,
+  "queue_id": "stage35-s2-50ohm-baseline-r4-20260831-1915",
+  "queue_root": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-queue",
+  "queue_manifest_sha256": "bb88abf0ae63b70d5bae33f2a21f8308fe1bceabc829ce0c3104c1b62ce6a6ef",
+  "output_root": "/var/lib/t510/stage35/analysis/stage35-s2-r4-analysis-v1-20260831-2059",
+  "center_hz": 1020000000.0,
+  "channel_width_hz": 78125.0,
+  "enbw_hz": 70879.578125,
+  "native_bucket_s": 0.01,
+  "integration_seconds": [2.0, 4.0, 15.0, 30.0],
+  "allan_seconds": [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 4.0, 8.0, 15.0, 30.0],
+  "acf_lag_seconds": [
+    0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09,
+    0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19,
+    0.2, 0.5, 1.0, 2.0, 4.0, 8.0, 15.0
+  ],
+  "bootstrap_replicates": 128,
+  "bootstrap_seed": 3507,
+  "psd": {
+    "sample_rate_hz": 100.0,
+    "nperseg": 2048,
+    "noverlap": 1024,
+    "window": "hann",
+    "variants": ["raw", "constant_removed", "temperature_regressed"]
+  },
+  "temperature_predictor": "pl_temp",
+  "parallel_workers": 2,
+  "scans": [
+    {
+      "label": "A",
+      "phase_index": 1,
+      "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-a-spec-scan-900s",
+      "manifest_sha256": "e109b5bcc5cee4ebdaf031b1575e917b9efa8a30dedad14b1844cb4628bebf45",
+      "telemetry": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-queue/evidence/phase_01_telemetry.json"
+    },
+    {
+      "label": "B",
+      "phase_index": 4,
+      "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-b-spec-scan-900s",
+      "manifest_sha256": "eed571bf5258ebfde973fe08270394af78650bed5644cca981327c2bf9fc0a49",
+      "telemetry": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-queue/evidence/phase_04_telemetry.json"
+    },
+    {
+      "label": "C",
+      "phase_index": 7,
+      "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-c-spec-scan-900s",
+      "manifest_sha256": "f522c60b1904b76c59c2c36410c8cf8f53b30c504cb30b236bd8bd687ee795bf",
+      "telemetry": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-queue/evidence/phase_07_telemetry.json"
+    }
+  ],
+  "time_controls": [
+    {"label": "A-pre", "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-a-time-pre-30s", "manifest_sha256": "aa56d8ef3f2887a62d73f619f0dfa543176dcbda6cc6d32e517f555bacbd30f0"},
+    {"label": "A-post", "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-a-time-post-30s", "manifest_sha256": "62e038abb6f645cd0212dc18d821995ccbd4b6d231aa3c2eed5e587555d04797"},
+    {"label": "B-pre", "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-b-time-pre-30s", "manifest_sha256": "7754e089bc10d5ab79a3d951d560b9d123ea32c389eb983a9004cffe417f3081"},
+    {"label": "B-post", "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-b-time-post-30s", "manifest_sha256": "19835ce941a334d311fcb8c936beaa1f3cfb1dbec81896a4c49ec5c744939b0e"},
+    {"label": "C-pre", "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-c-time-pre-30s", "manifest_sha256": "c6b5ed3c942cbb819ea053fa89a7aa218cf0a2b8d5d6a0beff712b954fa16b8f"},
+    {"label": "C-post", "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-c-time-post-30s", "manifest_sha256": "f35f579a584c4a2525b9f870e202ea28cc25b76422915f8f5632227a4207b0e8"}
+  ]
+}

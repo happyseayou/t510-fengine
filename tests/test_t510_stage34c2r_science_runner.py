@@ -1,10 +1,13 @@
 from __future__ import annotations
+import sys
+from pathlib import Path
 
 import unittest
 from unittest import mock
 
-from scripts import t510_adc_correlated_noise_campaign as c34c
-from scripts import t510_stage34c2r_science_runner as runner
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/stage-34'))
+import t510_adc_correlated_noise_campaign as c34c
+import t510_stage34c2r_science_runner as runner
 
 
 class Stage34c2rScienceRunnerTest(unittest.TestCase):

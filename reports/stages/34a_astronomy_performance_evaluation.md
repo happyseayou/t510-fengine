@@ -108,7 +108,7 @@ socket。即使某个 block 没有选中 bin，仍检查它的 seq/frame/sample0
 所需的充分统计量。接口不替代 Board Agent 门禁；campaign 同时检查 v34、PFB profile、
 MTS、DAC 静音、FIR saturation、XFFT overflow、backpressure和全部 drop/gap计数。
 
-自动入口为`scripts/t510_astronomy_performance.py`，依次执行：
+自动入口为`scripts/stage-34/t510_astronomy_performance.py`，依次执行：
 
 1. 按 bitstream SHA 审计 Stage 34 的 MTS 40/40、八路回环、PFB 频响、五模式及 soak；
 2. 复用已经通过的 320 MS/s 63 窗、32,256 包、63 PCAP 全带扫描；
@@ -117,7 +117,7 @@ MTS、DAC 静音、FIR saturation、XFFT overflow、backpressure和全部 drop/g
 5. 生成全带、160−320 差值、来源分类 SFDR、时间线、积分斜率和 Allan 图；
 6. 任一失败立即 STOP、动态读取 board_id 后静音八路 DAC，并保留现场，不自动重试。
 
-人工入口为`scripts/t510_astronomy_tg.py`。由于 SSA TG 没有 SCPI 自动控制，每次采集
+人工入口为`scripts/stage-34/t510_astronomy_tg.py`。由于 SSA TG 没有 SCPI 自动控制，每次采集
 必须由操作员先设置并用`--confirm-source`明确确认；脚本随后自动完成数据门禁和安全
 收尾。计划包含：
 

@@ -1,0 +1,11 @@
+{
+  "analysis_root": "/var/lib/t510/stage35/analysis/stage35-s2-r4-analysis-v1-20260831-2059",
+  "report_config": "/var/lib/t510/stage35/control/s2-report-v2-human-20260901-1652/stage35_s2_report_v2.json",
+  "raw_index_manifest": "/var/lib/t510/stage35/explorer/dev-r4-prepare-test-v3/raw_index_manifest.json",
+  "spec_scans": {
+    "A": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-a-spec-scan-900s",
+    "B": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-b-spec-scan-900s",
+    "C": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-c-spec-scan-900s"
+  },
+  "xcorr_scans": {}
+}

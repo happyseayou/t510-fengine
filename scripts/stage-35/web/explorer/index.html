@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stage 35：TIME_ONLY、F-engine 与 Allan 方差</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231769aa'/%3E%3Cpath d='M14 42V22h7l11 12 11-12h7v20h-7V32L32 44 21 32v10z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/katex/katex.min.css">
+  <link rel="stylesheet" href="/static/stage35-app.css" integrity="sha256-s/Z596O7EkhOVzuk0dWL5bf1KaTRKluMvDBGhU08QPs=">
+  <script defer src="/static/stage35-plotly-strict.min.js" integrity="sha256-yocV5+NI4dVvtdMVdceFC1zdJ39gG/BHwP78QXLilXs="></script>
+  <script defer src="/static/katex/katex.min.js"></script>
+  <script defer src="/static/stage35-app.js"></script>
+</head>
+<body>
+  <button id="openSidebar" class="sidebar-open" type="button" aria-controls="sidebar" aria-expanded="false">打开数据选择</button>
+  <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
+  <div class="app-shell">
+    <aside id="sidebar" class="sidebar" aria-label="数据与图表控制">
+      <div class="sidebar-head">
+        <div><b>数据选择</b><small>控件按实际影响的章节分组</small></div>
+        <button id="collapseSidebar" type="button" aria-label="收起左侧栏">‹</button>
+        <button id="closeSidebar" type="button" aria-label="关闭数据选择">×</button>
+      </div>
+
+      <section class="sidebar-group">
+        <h2>查看对象</h2>
+        <nav class="mode-tabs" aria-label="报告入口">
+          <button id="singleTab" class="active" data-mode="single">单个 ADC</button>
+          <button id="pairTab" data-mode="pair">ADC 对</button>
+        </nav>
+        <fieldset id="adcChoices" class="subject-choices"><legend>选择一个或多个 ADC</legend></fieldset>
+        <details id="pairChoicesWrap" class="subject-choices" hidden open><summary>选择一个或多个 ADC 对</summary><fieldset id="pairChoices"><legend class="sr-only">ADC 对</legend></fieldset></details>
+        <p class="control-scope">影响当前入口的全部章节；每页最多4个对象，同类曲线画在同一幅图。</p>
+      </section>
+
+      <section id="frequencyGroup" class="sidebar-group">
+        <h2>F-engine 频率</h2>
+        <label for="frequencies">最多4个，可写 MHz 或 global_bin</label>
+        <input id="frequencies" value="124.843750MHz,128.593750MHz,140.000000MHz">
+        <p class="control-scope">只影响F-engine、Allan和单路软件FFT参照；不影响TIME_ONLY直接读数。</p>
+      </section>
+
+      <section id="timeControls" class="sidebar-group chapter-controls" data-group="time">
+        <h2><span>1</span> TIME_ONLY</h2>
+        <label for="timeCapture">50 ms原始片段来源</label><select id="timeCapture"></select>
+        <label for="timeStart">4096点原始窗口起点</label>
+        <input id="timeStart" type="number" min="0" max="15995904" step="4096" value="0">
+        <small>样点编号；只影响未经平均的原样点图。</small>
+        <label for="timeShortBucket">TIME_ONLY短平均：每点时长</label>
+        <select id="timeShortBucket"><option value="4">51.2 µs</option><option value="16" selected>204.8 µs</option><option value="64">819.2 µs</option><option value="256">3.2768 ms</option></select>
+        <label for="timeLongCadence">TIME_ONLY 900秒：每点平均时长</label>
+        <select id="timeLongCadence"><option value="10">10 ms</option><option value="100" selected>100 ms</option><option value="1000">1 s</option></select>
+        <p class="control-scope">以上选项只刷新第1章；900秒曲线没有频率bin。</p>
+        <button id="reloadTime" class="reload-group" type="button">重新加载第1章</button>
+        <p id="timeGroupStatus" class="group-status">等待加载</p>
+      </section>
+
+      <section id="fengineControls" class="sidebar-group chapter-controls" data-group="fengine">
+        <h2><span id="fengineChapterNumber">2</span> F-engine</h2>
+        <label for="fengineShortBucket">短时F-engine：每点平均帧数</label>
+        <select id="fengineShortBucket"><option value="1">不平均（每帧12.8 µs）</option><option value="4">4帧（51.2 µs）</option><option value="16" selected>16帧（204.8 µs）</option><option value="64">64帧（819.2 µs）</option><option value="256">256帧（3.2768 ms）</option></select>
+        <div id="singleFengineControls">
+          <label for="selfScan">F-engine 900秒自功率：数据段</label><select id="selfScan"><option>A</option><option>B</option><option>C</option></select>
+          <label for="singleCadence">F-engine 900秒自功率：每点平均时长</label><select id="singleCadence"><option value="10">10 ms</option><option value="100" selected>100 ms</option><option value="1000">1 s</option></select>
+          <label for="fftCapture">单路TIME_ONLY软件FFT：参照片段</label><select id="fftCapture"></select>
+        </div>
+        <div id="pairFengineControls" hidden>
+          <label for="pairVisibilityCadence">F-engine 900秒复可见度：每点平均时长</label>
+          <select id="pairVisibilityCadence"><option value="100">100 ms</option><option value="1000">1 s</option></select>
+        </div>
+        <p id="fengineScope" class="control-scope">只刷新第2章。</p>
+        <button id="reloadFengine" class="reload-group" type="button">重新加载第2章</button>
+        <p id="fengineGroupStatus" class="group-status">等待加载</p>
+      </section>
+
+      <section id="allanControls" class="sidebar-group chapter-controls" data-group="allan">
+        <h2><span id="allanChapterNumber">3</span> Allan 方差</h2>
+        <div id="singleAllanControls">
+          <label for="allanScan">Allan使用的F-engine 900秒数据段</label><select id="allanScan"><option>A</option><option>B</option><option>C</option></select>
+          <p class="fixed-control">基础数据固定为10 ms；这里只说明，不提供无效开关。</p>
+        </div>
+        <div id="pairAllanControls" hidden>
+          <label for="pairAllanCadence">复可见度Allan：基础数据</label><select id="pairAllanCadence"><option value="100">100 ms</option><option value="1000">1 s</option></select>
+        </div>
+        <label for="allanForm">纵轴形式</label><select id="allanForm"><option value="variance">Allan 方差</option><option value="square_root">Allan 方差的平方根</option></select>
+        <label for="allanScale">数值尺度</label><select id="allanScale"><option value="relative">相对百分比</option><option value="absolute">原始 count 单位</option></select>
+        <p id="allanScope" class="control-scope">只刷新第3章。</p>
+        <button id="reloadAllan" class="reload-group" type="button">重新加载第3章</button>
+        <p id="allanGroupStatus" class="group-status">等待加载</p>
+      </section>
+
+      <section class="sidebar-group status-group"><h2>页面状态</h2><p id="health" class="health">正在读取数据…</p><p id="gpuStatus" class="health">正在检查GPU WebGL…</p></section>
+    </aside>
+
+    <div class="page-column">
+      <header class="page-header">
+        <p class="eyebrow">T510 · 八路独立50 Ω · 40–359.921875 MHz</p>
+        <h1>只看 I/Q 数字、F-engine 和 Allan 方差</h1>
+        <p class="lead">每个点都说明“它是什么、从哪里来、怎样算、当前算出多少”。这里没有系统温度或天文源定标。</p>
+      </header>
+      <main>
+        <section id="singleView" class="report-view">
+          <section class="chapter"><div class="chapter-heading"><span>1</span><div><h2>TIME_ONLY 的 I/Q 整数读数</h2><p>先看50 ms片段中的原始整数和短平均，再看新采900秒的I/Q中心与平均数字功率。TIME_ONLY没有频率bin。</p></div></div><div id="singleTimeCards" class="subject-list"></div></section>
+          <section class="chapter"><div class="chapter-heading"><span>2</span><div><h2>生产 F-engine 的 I/Q count 和功率</h2><p>短时图保留逐帧数据；900秒图看慢变化；单路TIME_ONLY软件FFT只在独立图中作参照。</p></div></div><div id="singleFengineCards" class="subject-list"></div></section>
+          <section class="chapter"><div class="chapter-heading"><span>3</span><div><h2>F-engine Allan 方差</h2><p>实线是数据算出的结果；同色虚线只回答“如果是白噪声，继续平均应该下降多快”。</p></div></div><div id="singleAllanCards" class="subject-list"></div></section>
+        </section>
+        <section id="pairView" class="report-view" hidden>
+          <div class="boundary">这里只看生产F-engine的同频复可见度。两路都接独立50 Ω，因此测量的是仪器内部伪相关底，不是天空可见度。</div>
+          <section class="chapter"><div class="chapter-heading"><span>1</span><div><h2>F-engine 复可见度的幅度和相位</h2><p>短时逐帧、帧平均和所选100 ms或1 s的900秒曲线分别画。页面不再显示TIME_ONLY两路复乘或TIME软件FFT相关。</p></div></div><div id="pairFengineCards" class="subject-list"></div></section>
+          <section class="chapter"><div class="chapter-heading"><span>2</span><div><h2>复可见度 Allan 方差</h2><p>计算完整复数向量之差，不对会在±180°绕回的相位角直接相减。</p></div></div><div id="pairAllanCards" class="subject-list"></div></section>
+        </section>
+        <nav class="pagination" aria-label="多选对象分页"><button id="previousPage">上一页</button><span id="pageStatus"></span><button id="nextPage">下一页</button></nav>
+        <details class="identity"><summary>数据身份与报告边界</summary><pre id="identityText"></pre></details>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,20 @@
+[Unit]
+Description=T510 Stage 35 read-only human explorer
+After=network-online.target
+
+[Service]
+Type=simple
+User=astrolab
+Group=astrolab
+WorkingDirectory=/opt/t510-stage35-explorer/current
+ExecStart=/var/lib/t510/stage35/control/s2-analysis-v1-20260831-2059/venv/bin/python /opt/t510-stage35-explorer/current/t510_stage35_explorer.py --config /var/lib/t510/stage35/explorer/current/app_config.json --helper-dir /opt/t510-stage35-explorer/current/helpers --static-root /opt/t510-stage35-explorer/current/static --bind 0.0.0.0:8035
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadOnlyPaths=/var/lib/t510/stage35
+
+[Install]
+WantedBy=multi-user.target

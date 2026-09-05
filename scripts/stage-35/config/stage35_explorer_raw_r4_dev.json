@@ -1,0 +1,8 @@
+{
+  "time_raw": {
+    "A-pre": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-queue/raw/a-time-pre-50ms.pcap"
+  },
+  "spec_raw": {
+    "A-begin": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-queue/raw/a-spec-begin-raw.pcap"
+  }
+}

@@ -82,7 +82,7 @@ overflow、零clip、PLL不失锁和resident遥测不断代。每个run前以当
 
 ## 长任务和产物
 
-自动入口为`scripts/t510_power_thermal_causality.py`，用户级systemd unit为
+自动入口为`scripts/stage-34/t510_power_thermal_causality.py`，用户级systemd unit为
 `deploy/t510/t510-stage34c3-power-thermal.service`。固定证据目录：
 
 - `build/board/latest/evidence/power_thermal_causality`

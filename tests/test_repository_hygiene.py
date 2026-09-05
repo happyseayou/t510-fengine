@@ -46,7 +46,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         ):
             self.assertFalse(retired.exists(), retired)
 
-        for root_name in ("config", "deploy", "scripts"):
+        for root_name in ("config", "deploy"):
             for path in (ROOT / root_name).rglob("*"):
                 if path.is_file():
                     self.assertNotIn("stage33", path.relative_to(ROOT).as_posix().lower())
@@ -58,14 +58,14 @@ class RepositoryHygieneTests(unittest.TestCase):
         }
         self.assertTrue(active_reports)
         self.assertTrue(
-            all(re.match(r"(?:32|33|34|35)", name) for name in active_reports),
+            all(re.match(r"(?:34|35|36)", name) for name in active_reports),
             active_reports,
         )
-        archived_reports = list((ROOT / "reports" / "stages" / "arch").glob("*.md"))
+        archived_reports = list((ROOT / "reports" / "stages" / "archive" / "00-33").glob("*.md"))
         self.assertTrue(archived_reports)
-        self.assertTrue(
-            all(not re.match(r"(?:32|33)", path.name) for path in archived_reports)
-        )
+        self.assertTrue(any(re.match(r"(?:32|33)", path.name) for path in archived_reports))
+        for stage in (34, 35, 36):
+            self.assertTrue((ROOT / "scripts" / f"stage-{stage}").is_dir())
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("build/vivado/latest", readme)

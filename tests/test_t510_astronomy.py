@@ -3,8 +3,11 @@ from __future__ import annotations
 import math
 import random
 import unittest
+import sys
+from pathlib import Path
 
-from python import t510_astronomy as astronomy
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/stage-34'))
+import t510_astronomy as astronomy
 
 
 class AstronomyPerformanceTests(unittest.TestCase):

@@ -1,0 +1,87 @@
+{
+  "format": "T510_STAGE35_S2_REPORT_CONFIG_V2",
+  "schema_version": 2,
+  "analysis_root": "/var/lib/t510/stage35/analysis/stage35-s2-r4-analysis-v1-20260831-2059",
+  "analysis_manifest_sha256": "d999cad943cacecfeb19dceb6f91751390a2097f60f104e8524ecbb4e06b7b09",
+  "queue_manifest_sha256": "bb88abf0ae63b70d5bae33f2a21f8308fe1bceabc829ce0c3104c1b62ce6a6ef",
+  "plotly": {
+    "version": "3.7.0",
+    "bundle": "strict",
+    "source_url": "https://cdn.plot.ly/plotly-strict-3.7.0.min.js",
+    "sha256": "ca8715e7e348e1d56fb5d31575c7850b5cdd277f601bf047c0fefc4172e2957b",
+    "license": "MIT",
+    "license_sha256": "8c45d9eaf50c2f72dd9c7ab9ef440788ba58a3538484b5c51c1f17d5128752e7"
+  },
+  "frequency_axis": {
+    "center_hz": 1020000000.0,
+    "channel_width_hz": 78125.0,
+    "order": "ascending_rf_hz",
+    "first_global_bin": 2048,
+    "last_global_bin": 2047,
+    "rf_min_hz": 860000000.0,
+    "rf_max_hz": 1179921875.0,
+    "landmarks": [
+      {"label": "RFADC fixed item", "rf_hz": 960000000.0, "global_bin": 3328},
+      {"label": "baseband DC", "rf_hz": 1020000000.0, "global_bin": 0}
+    ]
+  },
+  "scans": ["A", "B", "C"],
+  "native_detail": {
+    "window_start_s": 0.0,
+    "window_duration_s": 15.0,
+    "bucket_s": 0.01,
+    "buckets": 1500,
+    "storage_dtype": "float32",
+    "authoritative_dtype": "float64"
+  },
+  "time_histograms": [
+    {
+      "label": "A-pre",
+      "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-a-time-pre-30s/histogram.csv",
+      "sha256": "0d7fe9c0ba5b5a9197294c20bfb6dce47f3de7bbedb2b1bf9e1de05aaf2c7923"
+    },
+    {
+      "label": "A-post",
+      "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-a-time-post-30s/histogram.csv",
+      "sha256": "42e4197e19410da4a703d64b6d431ff02fa25597972aaab959015a79c23be004"
+    },
+    {
+      "label": "B-pre",
+      "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-b-time-pre-30s/histogram.csv",
+      "sha256": "ca54ffe6df7775a9494fd7a71c6d7c9a51915f2181f5ce9f6f35a6bb0ab75d8e"
+    },
+    {
+      "label": "B-post",
+      "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-b-time-post-30s/histogram.csv",
+      "sha256": "d92803aabc90eac51fc97d4cc05758078f61636759f3b54b8ce553d757fc94a0"
+    },
+    {
+      "label": "C-pre",
+      "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-c-time-pre-30s/histogram.csv",
+      "sha256": "db75d262bd5808f5453533a446bcf0afa1e60008c1123f9837e1ae1dbc119bc4"
+    },
+    {
+      "label": "C-post",
+      "path": "/var/lib/t510/stage35/stage35-s2-50ohm-baseline-r4-20260831-1915-c-time-post-30s/histogram.csv",
+      "sha256": "4453451eb7fea785495e16524b98b4580f438249b958797a07ae1589d091e7c2"
+    }
+  ],
+  "dynamic_spectrum": {
+    "window_s": 1.0,
+    "windows": 900,
+    "layers": ["minimum", "mean", "maximum"],
+    "display_encoding": "per_scan_adc_layer_uint16_linear",
+    "statistics_source": "float64_native_10ms_zarr"
+  },
+  "integration_seconds": [2.0, 4.0, 15.0, 30.0],
+  "acf_variants": ["uncentered_raw", "constant_removed", "temperature_regressed"],
+  "psd_variants": ["raw", "constant_removed", "temperature_regressed"],
+  "allan_variants": ["raw_nonoverlap", "raw_overlap", "temperature_regressed_nonoverlap", "temperature_regressed_overlap"],
+  "modes": {
+    "sample": {"detail_adcs": [0], "table_adcs": [0]},
+    "full": {"detail_adcs": [0, 1, 2, 3, 4, 5, 6, 7], "table_adcs": [0, 1, 2, 3, 4, 5, 6, 7]}
+  },
+  "language": "zh-CN",
+  "theme": "light_scientific",
+  "calibration_limit": "No K, Jy, SEFD, connector dBm, or T_sys"
+}

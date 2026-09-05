@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+import sys
 from unittest import mock
 
 from python.t510_clock import (
@@ -13,7 +14,8 @@ from python.t510_clock import (
     LMK04828_INIT_160M_10M_REQUEST_CLKIN2,
     LMK04828_PROFILE_SHA256,
 )
-from scripts import t510_clock_sysref_causality as campaign
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/stage-34'))
+import t510_clock_sysref_causality as campaign
 
 
 def _registers(values: tuple[int, ...]) -> dict[int, int]:

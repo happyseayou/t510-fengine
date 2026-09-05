@@ -1,10 +1,13 @@
 from __future__ import annotations
+import sys
+from pathlib import Path
 
 import random
 import unittest
 
-from scripts import t510_calibration_causality as causality
-from scripts import t510_calibration_causality_low_rf as low_rf
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/stage-34'))
+import t510_calibration_causality as causality
+import t510_calibration_causality_low_rf as low_rf
 
 
 class Stage34b2CausalityTests(unittest.TestCase):

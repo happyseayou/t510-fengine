@@ -1,10 +1,13 @@
+import sys
+from pathlib import Path
 import json
 import math
 import random
 import struct
 import unittest
 
-from scripts import t510_allan_interferometry as stage34d
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/stage-34'))
+import t510_allan_interferometry as stage34d
 
 
 def make_tis1(*, bucket_count=2, pair_count=28):

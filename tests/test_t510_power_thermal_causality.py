@@ -3,8 +3,10 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+import sys
 
-from scripts import t510_power_thermal_causality as campaign
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/stage-34'))
+import t510_power_thermal_causality as campaign
 
 
 class Stage34c3CampaignTests(unittest.TestCase):

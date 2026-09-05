@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).parents[1] / "scripts" / "t510_pl_sysref_phase_eye.py"
+SCRIPT = Path(__file__).parents[1] / "scripts/stage-34" / "t510_pl_sysref_phase_eye.py"
 SPEC = importlib.util.spec_from_file_location("t510_pl_sysref_phase_eye", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 phase_eye = importlib.util.module_from_spec(SPEC)

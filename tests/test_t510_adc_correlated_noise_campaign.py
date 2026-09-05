@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
-from scripts import t510_adc_correlated_noise_campaign as campaign
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/stage-34'))
+import t510_adc_correlated_noise_campaign as campaign
 
 
 def combinations(*, slope: float, lag: float) -> list[dict]:
