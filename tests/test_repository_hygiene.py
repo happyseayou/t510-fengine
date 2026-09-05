@@ -67,7 +67,8 @@ class RepositoryHygieneTests(unittest.TestCase):
         stage34_reports = list((ROOT / "reports" / "stages" / "archive" / "34").glob("34*.md"))
         self.assertTrue(stage34_reports)
         self.assertFalse(list((ROOT / "reports" / "stages").glob("34*.md")))
-        for stage in (34, 35, 36):
+        self.assertFalse((ROOT / "scripts" / "stage-34").exists())
+        for stage in (35, 36):
             self.assertTrue((ROOT / "scripts" / f"stage-{stage}").is_dir())
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
