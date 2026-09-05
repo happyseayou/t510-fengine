@@ -519,7 +519,7 @@ V_ab(t,k) = mean[X_a(t,k) × conj(X_b(t,k))]
 1. 仓库根目录 `AGENTS.md`；
 2. 本文件 `reports/stages/archive/35/35_radio_astronomy_noise_study_plan.md`；
 3. `docs/t510_udp_payload_v2.md`；
-4. `reports/stages/34_fullrate_pfb8_release.md`；
+4. `reports/stages/archive/34/34_fullrate_pfb8_release.md`；
 5. `rust/t510_time_rx/src/main.rs` 中现有 SPEC 接收、完整频谱组装和 `spec-stability` 实现。
 
 然后执行的第一项任务应是：

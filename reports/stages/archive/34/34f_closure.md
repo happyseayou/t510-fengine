@@ -13,7 +13,7 @@ Stage 34f 已完成它能够回答的工程问题：在八路独立 50 Ω、DAC 
 
 两种现象都已经出现在当前可访问的最前端数字边界：RFDC 导出的 AXIS 数据、进入 adapter/rate selector/PFB 之前。D0、D1、PFB、packetizer、UDP 和采集机不是该现象最早出现的位置。固定的 480/960/1440 MHz 时间交织杂散是另一个可分离的确定性问题，不能解释宽带慢时间记忆。
 
-现有切片不能再把范围无歧义地分成 ADC 转换本体、RFDC 内部动态校准、采样时钟相噪/幅噪，或现有 AMS 遥测没有覆盖的模拟电源与公共模条件。继续重复 OCB1、WR、DAC 或单次关 tile 组合已经不能稳定增加信息，因此 34f 在此结题，后续转入 [Stage 35 射电天文噪声科学研究方案](../../reports/stages/archive/35/35_radio_astronomy_noise_study_plan.md)。
+现有切片不能再把范围无歧义地分成 ADC 转换本体、RFDC 内部动态校准、采样时钟相噪/幅噪，或现有 AMS 遥测没有覆盖的模拟电源与公共模条件。继续重复 OCB1、WR、DAC 或单次关 tile 组合已经不能稳定增加信息，因此 34f 在此结题，后续转入 [Stage 35 射电天文噪声科学研究方案](../35/35_radio_astronomy_noise_study_plan.md)。
 
 ## 实验边界
 

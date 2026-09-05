@@ -33,7 +33,7 @@
   首选桶、A/B/C 分层数据和逐 bin 科学结果。
 - [UDP payload v2 合同](../../docs/t510_udp_payload_v2.md)：16×256 block、IQ16、`sample0`
   与 `frame_id` 语义。
-- [Stage 34 全速 PFB8 发布](34_fullrate_pfb8_release.md)：v34、4096 通道、8-tap PFB、
+- [Stage 34 全速 PFB8 发布](archive/34/34_fullrate_pfb8_release.md)：v34、4096 通道、8-tap PFB、
   320 MS/s 生产链和 ENBW 基线。
 - [Stage 35 v34 基线统一](35_v34_baseline.md)：正式 bitstream、`onboard_tcxo` 和未部署边界。
 - `rust/t510_time_rx/src/main.rs` 中的 `SpecStabilityMonitor`、`FullSpectrumAssembler`、

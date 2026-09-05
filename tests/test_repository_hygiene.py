@@ -58,12 +58,15 @@ class RepositoryHygieneTests(unittest.TestCase):
         }
         self.assertTrue(active_reports)
         self.assertTrue(
-            all(re.match(r"(?:34|35|36)", name) for name in active_reports),
+            all(re.match(r"(?:35|36)", name) for name in active_reports),
             active_reports,
         )
         archived_reports = list((ROOT / "reports" / "stages" / "archive" / "00-33").glob("*.md"))
         self.assertTrue(archived_reports)
         self.assertTrue(any(re.match(r"(?:32|33)", path.name) for path in archived_reports))
+        stage34_reports = list((ROOT / "reports" / "stages" / "archive" / "34").glob("34*.md"))
+        self.assertTrue(stage34_reports)
+        self.assertFalse(list((ROOT / "reports" / "stages").glob("34*.md")))
         for stage in (34, 35, 36):
             self.assertTrue((ROOT / "scripts" / f"stage-{stage}").is_dir())
 
