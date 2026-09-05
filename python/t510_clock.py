@@ -186,7 +186,7 @@ def _profile_sha256(values: tuple[int, ...]) -> str:
 
 
 # These complete profiles were exported by the official TICS Pro 1.7.9.1
-# application from the frozen Stage 32 project.  The request-mode export
+# application from the frozen current project.  The request-mode export
 # differs only in documented SYSREF/SYNC fields.  The CLKin0 export adds only
 # manual CLKin0 selection and its PLL1 R divider (10 MHz / 1).
 LMK04828_INIT_160M_10M_REQUEST_CLKIN2 = _replace_profile_registers(
@@ -240,7 +240,7 @@ LMK04828_PROFILE_SYSREF_FREQUENCY_HZ = {
     "160m_10m_request_manual_clkin0": 10_000_000,
 }
 
-# The diagnostic image deliberately starts with the frozen Stage 32 phase.
+# The diagnostic image deliberately starts with the frozen current phase.
 # A routed-datasheet-backed phase eye is measured with that image; only the
 # selected eye centre is allowed to become a non-None production value in the
 # second, release-candidate build.
@@ -768,7 +768,7 @@ class T510ClockController:
         max_attempts: int = 24,
         register_delay_s: float = 0.005,
     ) -> dict[str, int | bool | str]:
-        """Program one SHA-verified Stage 34c-2R full TICS register table."""
+        """Program one SHA-verified clock diagnostic full TICS register table."""
         metadata = LMK04828_TICS_DIAGNOSTIC_PROFILES.get(profile_id)
         if metadata is None:
             raise ValueError(f"diagnostic TICS profile is unavailable: {profile_id}")

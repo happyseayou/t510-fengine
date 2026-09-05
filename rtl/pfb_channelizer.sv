@@ -521,7 +521,7 @@ module feng_channelizer_4096_streaming #(
     logic signed [36:0] pfb_s2_pair [0:PFB_COMPONENTS-1][0:3];
     logic signed [37:0] pfb_s3_quad [0:PFB_COMPONENTS-1][0:1];
     logic signed [38:0] pfb_s4_acc [0:PFB_COMPONENTS-1];
-    logic [22:0]       pfb_s5_magnitude [0:PFB_COMPONENTS-1];
+    logic [23:0]       pfb_s5_magnitude [0:PFB_COMPONENTS-1];
     logic              pfb_s5_negative [0:PFB_COMPONENTS-1];
     logic [CELL_W-1:0] pfb_s6_cell;
     logic [12:0]       reserved_output_beats;
@@ -725,30 +725,32 @@ module feng_channelizer_4096_streaming #(
         coeff_active_valid
     };
 
+    // Stage 36: coefficients remain Q1.17; divide the accumulator by 2^16
+    // to preserve an extra fractional bit before IQ16 rounding (gain 2).
     // Split symmetric rounding and saturation across two registers.  The old
     // single function synthesized as an 11-level carry path at 322 MHz.
-    function automatic [22:0] round_magnitude_q17_39(input logic signed [38:0] acc);
+    function automatic [23:0] round_magnitude_q16_39(input logic signed [38:0] acc);
         logic [39:0] extended;
         logic [39:0] magnitude;
         logic [39:0] biased;
         begin
             extended = {acc[38], acc};
             magnitude = acc[38] ? (~extended + 40'd1) : extended;
-            biased = magnitude + 40'd65536;
-            round_magnitude_q17_39 = biased[39:17];
+            biased = magnitude + 40'd32768;
+            round_magnitude_q16_39 = biased[39:16];
         end
     endfunction
 
     function automatic signed [15:0] saturate_signed_magnitude(
         input logic negative,
-        input logic [22:0] magnitude
+        input logic [23:0] magnitude
     );
         logic signed [15:0] positive_value;
         begin
             positive_value = $signed({1'b0, magnitude[14:0]});
-            if (negative && (magnitude >= 23'd32768)) begin
+            if (negative && (magnitude >= 24'd32768)) begin
                 saturate_signed_magnitude = -16'sd32768;
-            end else if (!negative && (magnitude > 23'd32767)) begin
+            end else if (!negative && (magnitude > 24'd32767)) begin
                 saturate_signed_magnitude = 16'sd32767;
             end else if (negative) begin
                 saturate_signed_magnitude = -positive_value;
@@ -760,21 +762,21 @@ module feng_channelizer_4096_streaming #(
 
     // Reference helper retained for directed simulation checks only.  The RTL
     // datapath uses the two registered functions above.
-    function automatic signed [15:0] round_sat_q17_39(input logic signed [38:0] acc);
+    function automatic signed [15:0] round_sat_q16_39(input logic signed [38:0] acc);
         begin
-            round_sat_q17_39 = saturate_signed_magnitude(
-                acc[38], round_magnitude_q17_39(acc)
+            round_sat_q16_39 = saturate_signed_magnitude(
+                acc[38], round_magnitude_q16_39(acc)
             );
         end
     endfunction
 
     function automatic logic magnitude_saturates(
         input logic negative,
-        input logic [22:0] magnitude
+        input logic [23:0] magnitude
     );
         begin
-            magnitude_saturates = negative ? (magnitude >= 23'd32768)
-                                           : (magnitude > 23'd32767);
+            magnitude_saturates = negative ? (magnitude >= 24'd32768)
+                                           : (magnitude > 24'd32767);
         end
     endfunction
 
@@ -1512,7 +1514,7 @@ module feng_channelizer_4096_streaming #(
 	                        pfb_s5_idx <= pfb_s4_idx;
 	                        for (pfb_comp_idx = 0; pfb_comp_idx < PFB_COMPONENTS; pfb_comp_idx = pfb_comp_idx + 1) begin
 	                            pfb_s5_magnitude[pfb_comp_idx] <=
-	                                round_magnitude_q17_39(pfb_s4_acc[pfb_comp_idx]);
+	                                round_magnitude_q16_39(pfb_s4_acc[pfb_comp_idx]);
 	                            pfb_s5_negative[pfb_comp_idx] <= pfb_s4_acc[pfb_comp_idx][38];
 	                        end
 

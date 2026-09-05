@@ -12,6 +12,8 @@ import time
 import zlib
 from typing import Any, Iterable, Mapping, Optional
 
+from .t510_scaling import CURRENT_CORE_VERSION, qmc_settings, scaling_identity
+
 try:
     from pynq import MMIO, Overlay
 except ImportError as exc:  # pragma: no cover - host-side import guard
@@ -550,7 +552,7 @@ class T510FEngine:
     RFDC_ADC_ANALOG_SAMPLE_RATE_HZ = 3_840_000_000
     RFDC_DAC_ANALOG_SAMPLE_RATE_HZ = 3_840_000_000
     # API v1 compatibility: fs_analog historically used this shared alias.
-    # Stage 34 also reports the ADC and DAC analog rates explicitly.
+    # current also reports the ADC and DAC analog rates explicitly.
     RFDC_ANALOG_SAMPLE_RATE_HZ = RFDC_ADC_ANALOG_SAMPLE_RATE_HZ
     RFDC_COMPLEX_SAMPLE_RATE_HZ = 320_000_000
     RFDC_DECIMATION = 12
@@ -567,15 +569,14 @@ class T510FEngine:
         "constant_phasor": 1,
         "constant": 1,
         "phasor": 1,
-        "stage33_q_advance": 2,
-        "stage33_q_retard": 3,
+        "q_advance": 2,
+        "q_retard": 3,
     }
-    # Stage 33 direct-SSA measurements select the new compensated mode while
+    # current direct-SSA measurements select the new compensated mode while
     # mode 0 remains the unchanged accepted DDS contract.  The same bitstream
-    # also implements stage33_q_retard so physical direction can be reversed
+    # also implements q_retard so physical direction can be reversed
     # by software alone if the first on-board comparison requires it.
-    STAGE34_DAC_TONE_MODE = "stage33_q_advance"
-    STAGE33_DAC_TONE_MODE = STAGE34_DAC_TONE_MODE
+    DAC_TONE_MODE = "q_advance"
     SCIENCE_SAMPLE_RATES: dict[int, dict[str, Any]] = {
         160: {"code": 1, "pl_decim": 2, "sample_rate_hz": 160_000_000.0},
         320: {"code": 2, "pl_decim": 1, "sample_rate_hz": 320_000_000.0},
@@ -806,7 +807,7 @@ class T510FEngine:
                 )
         if len(calls) != 8:
             raise RuntimeError(
-                f"Stage 34 expected eight RFDC tile reset calls, observed {len(calls)}"
+                f"current expected eight RFDC tile reset calls, observed {len(calls)}"
             )
         return calls
 
@@ -875,7 +876,7 @@ class T510FEngine:
                 )
         if len(calls) != 8:
             raise RuntimeError(
-                f"Stage 34 expected eight RFDC tile shutdown calls, observed {len(calls)}"
+                f"current expected eight RFDC tile shutdown calls, observed {len(calls)}"
             )
         return calls
 
@@ -1067,7 +1068,7 @@ class T510FEngine:
     def science_center_bounds_hz(cls, sample_rate_msps: int | float | str) -> tuple[float, float]:
         sample_rate_msps = int(sample_rate_msps)
         if sample_rate_msps not in cls.SCIENCE_SAMPLE_RATES:
-            raise ValueError("Stage 34 complex sample-rate setting must be 160 or 320 MS/s")
+            raise ValueError("current complex sample-rate setting must be 160 or 320 MS/s")
         half_rate_hz = float(cls.SCIENCE_SAMPLE_RATES[sample_rate_msps]["sample_rate_hz"]) / 2.0
         return half_rate_hz, cls.RF_FIRST_NYQUIST_MAX_HZ - half_rate_hz
 
@@ -1114,10 +1115,10 @@ class T510FEngine:
     ) -> None:
         if int(rfdc_complex_sample_rate_hz) != self.RFDC_COMPLEX_SAMPLE_RATE_HZ:
             raise ValueError(
-                "Stage 34 RFDC complex sample rate must be 320 MS/s"
+                "current RFDC complex sample rate must be 320 MS/s"
             )
         if int(decimation) != self.RFDC_DECIMATION:
-            raise ValueError("Stage 34 ADC decimation must be 12")
+            raise ValueError("current ADC decimation must be 12")
         self.ctrl.write(self.regs.SAMPLE_RATE_HZ, rfdc_complex_sample_rate_hz)
         self.rfdc_config = {
             "rfdc_complex_sample_rate_hz": rfdc_complex_sample_rate_hz,
@@ -1401,7 +1402,7 @@ class T510FEngine:
             result["errors"].append(f"expected 8 ADC and 8 DAC blocks, read ADC={adc_blocks} DAC={dac_blocks}")
         result["ok"] = not result["errors"]
         if require and not result["ok"]:
-            raise RuntimeError(f"RFDC_STAGE34_CONTRACT_FAILED: {result['errors']}")
+            raise RuntimeError(f"RFDC_CONTRACT_FAILED: {result['errors']}")
         return result
 
     @staticmethod
@@ -1644,7 +1645,7 @@ class T510FEngine:
         )
         if len(blocks) != 8:
             raise RuntimeError(
-                "RFDC_CALIBRATION_UNAVAILABLE: Stage 34 requires exactly eight active "
+                "RFDC_CALIBRATION_UNAVAILABLE: current requires exactly eight active "
                 f"ADC blocks, observed {len(blocks)} ({blocks})"
             )
         return blocks
@@ -1712,7 +1713,7 @@ class T510FEngine:
         """Read freeze state and all four calibration coefficient banks.
 
         Logical ADC numbering is the existing tile-major, active-block-major
-        Stage 34 ordering: tile0/block0, tile0/block1, ... tile3/block1.
+        current ordering: tile0/block0, tile0/block1, ... tile3/block1.
         """
 
         try:
@@ -2218,7 +2219,7 @@ class T510FEngine:
             xrfdc = None  # type: ignore[assignment]
         event_sysref = self._xrfdc_const(xrfdc, ("EVNT_SRC_SYSREF", "XRFDC_EVNT_SRC_SYSREF"), 2)
         # Keep the immediate-event value in the status payload for API
-        # compatibility even though the Stage 33 production sequences use
+        # compatibility even though the current production sequences use
         # SYSREF, SLICE, or TILE events only.
         event_immediate = self._xrfdc_const(xrfdc, ("EVNT_SRC_IMMEDIATE", "XRFDC_EVNT_SRC_IMMEDIATE"), 0)
         event_slice = self._xrfdc_const(xrfdc, ("EVNT_SRC_SLICE", "XRFDC_EVNT_SRC_SLICE"), 1)
@@ -2975,6 +2976,10 @@ class T510FEngine:
         """Apply the current observation configuration with MTS/SYSREF required."""
         kwargs.setdefault("require_full_clock_lock", True)
         kwargs.setdefault("require_mts", True)
+        current_scaling = int(self.ctrl.read(self.regs.CORE_VERSION)) == CURRENT_CORE_VERSION
+        requested_start = bool(kwargs.get("start", False))
+        if current_scaling:
+            kwargs["start"] = False
         config = self.apply_sysref_locked_observation_config(**kwargs)
         clock = config.get("clock", {})
         nco = config.get("nco", {})
@@ -2989,7 +2994,45 @@ class T510FEngine:
                 raise RuntimeError(f"RFDC_SYSREF_LOCK_FAILED: RFDC MTS failures: {failures}")
         config["mts_locked"] = True
         config["rfdc_driver"] = self.read_rfdc_driver_status(probe_symbols=False)
+        if current_scaling:
+            config["digital_scaling"] = self.configure_digital_scaling()
+            if requested_start:
+                self.start()
         return config
+
+    def read_digital_scaling(self, *, require: bool = False) -> dict[str, Any]:
+        rows = []
+        for tile in range(4):
+            for block in range(2):
+                rows.append(dict(tile=tile, block=block,
+                                 qmc=dict(self.rfdc.adc_tiles[tile].blocks[block].QMCSettings)))
+        result = scaling_identity(int(self.ctrl.read(self.regs.CORE_VERSION)),
+                                  int(self.ctrl.read(self.regs.PFB_FFT_SHIFT)), rows)
+        if require and not result["ok"]:
+            raise RuntimeError(f"DIGITAL_SCALING_MISMATCH: {result['errors']}")
+        return result
+
+    def configure_digital_scaling(self) -> dict[str, Any]:
+        """Reapply the version-bound QMC profile after stopped RFDC/MTS setup."""
+        if int(self.ctrl.read(self.regs.CORE_VERSION)) != CURRENT_CORE_VERSION:
+            raise RuntimeError("current QMC profile requires core 0x00010036")
+        if self.read_status()["streaming"]:
+            raise RuntimeError("QMC configuration requires stopped streaming")
+        import xrfdc
+        try:
+            for tile in range(4):
+                for block in range(2):
+                    self.rfdc.adc_tiles[tile].blocks[block].QMCSettings = qmc_settings()
+                for block in range(2):
+                    self.rfdc.adc_tiles[tile].blocks[block].UpdateEvent(xrfdc.EVENT_QMC)
+            return self.read_digital_scaling(require=True)
+        except Exception:
+            self.stop()
+            raise
+
+    def _require_current_scaling(self) -> None:
+        if int(self.ctrl.read(self.regs.CORE_VERSION)) == CURRENT_CORE_VERSION:
+            self.read_digital_scaling(require=True)
 
     @staticmethod
     def _normalize_input_source_mode(input_source_mode: str) -> str:
@@ -3022,6 +3065,7 @@ class T510FEngine:
         mts_adc_target_latency: int = -1,
         mts_dac_target_latency: int = -1,
         force_clock_reconfigure: bool = False,
+        require_clock_preserved: bool = False,
         dac_source_mode: str = "constant_phasor",
         input_source_mode: str = "dac_loopback",
         clock_ref: str = PRODUCTION_CLOCK_REF,
@@ -3056,7 +3100,7 @@ class T510FEngine:
             and abs(dac_signal_hz - observe_center_hz) > 1.0
         ):
             raise ValueError(
-                "Stage 34 constant_phasor requires dac_signal_hz to equal "
+                "current constant_phasor requires dac_signal_hz to equal "
                 "observe_center_hz; use single_tone for an offset signal"
             )
 
@@ -3070,6 +3114,27 @@ class T510FEngine:
             time.sleep(0.05)
             clock = self.clock.read_status(include_registers=False)
             status_ref = str(clock.get("selected_ref", clock.get("ref", "")))
+            status_profile = str(clock.get("profile_id", ""))
+            preserve_errors: list[str] = []
+            if not bool(clock.get("configured", False)):
+                preserve_errors.append("CLOCK_NOT_CONFIGURED")
+            if status_ref != str(clock_ref):
+                preserve_errors.append(
+                    f"REFERENCE_MISMATCH:expected={clock_ref}:actual={status_ref}"
+                )
+            if status_profile != str(clock_profile):
+                preserve_errors.append(
+                    f"PROFILE_MISMATCH:expected={clock_profile}:actual={status_profile}"
+                )
+            if int(clock.get("pll1_lock", 0)) != 1:
+                preserve_errors.append("PLL1_NOT_LOCKED")
+            if int(clock.get("pll2_lock", 0)) != 1:
+                preserve_errors.append("PLL2_NOT_LOCKED")
+            if bool(require_clock_preserved) and preserve_errors:
+                raise RuntimeError(
+                    "RFDC_CLOCK_PRESERVE_GATE_FAILED: "
+                    f"errors={preserve_errors}; live={clock}"
+                )
             if bool(force_clock_reconfigure) or not bool(clock.get("configured", False)) or status_ref != str(clock_ref):
                 clock = self.configure_clock(
                     ref=str(clock_ref), profile=str(clock_profile)
@@ -3092,6 +3157,12 @@ class T510FEngine:
                 self._write_sync_config(clock_ref=self.CLOCK_REFS[str(clock_ref)])
                 self.clock_reference = str(clock_ref)
                 self.clock_status = dict(clock)
+                if bool(require_clock_preserved):
+                    clock_recovery["clock_preserved"] = True
+                    clock_recovery["preserve_profile_id"] = status_profile
+                    clock_recovery["preserve_profile_sha256"] = str(
+                        clock.get("profile_sha256", "")
+                    )
             if require_full_clock_lock and not clock.get("configured", False):
                 raise RuntimeError(f"RFDC_SYSREF_LOCK_FAILED: LMK {clock_ref} clock did not lock: {clock}")
             self.set_adc_active_mask(adc_active_mask)
@@ -3105,7 +3176,7 @@ class T510FEngine:
         dac_tone_mode = (
             "constant_phasor"
             if dac_source_mode == "constant_phasor"
-            else self.STAGE34_DAC_TONE_MODE
+            else self.DAC_TONE_MODE
         )
 
         self.configure_rfdc(
@@ -3481,7 +3552,7 @@ class T510FEngine:
         except Exception as exc:
             raise ValueError(f"Unsupported science sample rate: {sample_rate_msps!r}") from exc
         if value not in cls.SCIENCE_SAMPLE_RATES:
-            raise ValueError("Stage 34 complex sample-rate setting must be 160 or 320 MS/s")
+            raise ValueError("current complex sample-rate setting must be 160 or 320 MS/s")
         return value
 
     @classmethod
@@ -3491,7 +3562,7 @@ class T510FEngine:
             if code not in cls.SCIENCE_OUTPUT_MODE_NAMES:
                 raise ValueError("science output mode code must be in range 0..4")
             if code == 4:
-                raise ValueError("Stage 34 does not support TIME_MONITOR_SPEC")
+                raise ValueError("current does not support TIME_MONITOR_SPEC")
             return cls.SCIENCE_OUTPUT_MODE_NAMES[code], code
         key = str(output_mode).strip().lower().replace("-", "_").replace(" ", "_")
         if key not in cls.SCIENCE_OUTPUT_MODES:
@@ -3501,7 +3572,7 @@ class T510FEngine:
             )
         code = int(cls.SCIENCE_OUTPUT_MODES[key])
         if code == 4:
-            raise ValueError("Stage 34 does not support TIME_MONITOR_SPEC")
+            raise ValueError("current does not support TIME_MONITOR_SPEC")
         return cls.SCIENCE_OUTPUT_MODE_NAMES[code], code
 
     @classmethod
@@ -4186,7 +4257,7 @@ class T510FEngine:
         src_mac: str = "02:00:00:00:00:01",
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Configure one of the five Stage 34 production profiles.
+        """Configure one of the five current production profiles.
 
         Wire layout, port allocation, flow counts, PFB layout, synchronization
         policy, and diagnostic controls remain fixed.  The board-global CMAC
@@ -4204,7 +4275,7 @@ class T510FEngine:
         }
         if (sample_rate_msps, mode_code) not in allowed:
             raise ValueError(
-                "Stage 34 production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
+                "current production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
                 "and 320MS/s TIME_ONLY/SPEC_ONLY"
             )
         normalized_src_ip = _normalize_unicast_ipv4(src_ip)
@@ -4219,10 +4290,10 @@ class T510FEngine:
         }
         supplied = sorted(forbidden.intersection(kwargs))
         if supplied:
-            raise ValueError(f"Stage 34 fixed production parameters cannot be overridden: {supplied}")
+            raise ValueError(f"current fixed production parameters cannot be overridden: {supplied}")
         unexpected = sorted(set(kwargs).difference({"start", "clear_counters"}))
         if unexpected:
-            raise ValueError(f"unsupported Stage 34 production parameters: {unexpected}")
+            raise ValueError(f"unsupported current production parameters: {unexpected}")
 
         start_requested = bool(kwargs.pop("start", True))
         active_clock_ref = str(
@@ -4300,10 +4371,10 @@ class T510FEngine:
                 "science_status": self.read_science_output_status(),
                 "tx_status": self.read_tx_status(),
                 "channelizer_status": self.read_channelizer_status(),
-                "stage": 34,
+                "contract": "current",
                 "science_product": "FENGINE_IQ16_COMPLEX_VOLTAGE_8TAP_RTL_PFB",
                 "production_scope": dict(self.PRODUCTION_SCOPE),
-                "convergence_target": "STAGE34_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
+                "convergence_target": "FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
                 "fengine_nchan": 4096,
                 "fengine_taps": 8 if expects_spec else None,
                 "fengine_fft_shift": self.FENGINE_FFT_ONLY_DEFAULT_FFT_SHIFT if expects_spec else None,
@@ -4393,8 +4464,8 @@ class T510FEngine:
         measurement_ready_timeout_s: float = 10.0,
         **config_kwargs: Any,
     ) -> dict[str, Any]:
-        """Run the Stage 34 board gate for any production profile."""
-        expected_core_version = 0x0001_0034
+        """Run the current board gate for any production profile."""
+        expected_core_version = CURRENT_CORE_VERSION
         mode_name, mode_code = self._normalize_science_output_mode(output_mode)
         sample_rate_msps = self._normalize_science_sample_rate_msps(sample_rate_msps)
         allowed = {
@@ -4406,7 +4477,7 @@ class T510FEngine:
         }
         if (sample_rate_msps, mode_code) not in allowed:
             raise ValueError(
-                "Stage 34 production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
+                "current production supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC "
                 "and 320MS/s TIME_ONLY/SPEC_ONLY"
             )
 
@@ -4421,7 +4492,7 @@ class T510FEngine:
             )
             config_kwargs = {}
         elif config_kwargs:
-            raise ValueError(f"unused Stage 34 config kwargs when configure=False: {sorted(config_kwargs)}")
+            raise ValueError(f"unused current config kwargs when configure=False: {sorted(config_kwargs)}")
 
         expects_time = mode_code in (
             self.SCIENCE_OUTPUT_MODES["time_only"],
@@ -4440,9 +4511,11 @@ class T510FEngine:
                 timeout_s=float(measurement_ready_timeout_s),
             )
 
+        scaling_before = self.read_digital_scaling(require=True)
         before = self.read_status()
         time.sleep(max(float(seconds), 0.0))
         after = self.read_status()
+        scaling_after = self.read_digital_scaling(require=False)
         tx_live = self.read_tx_status()
         tx_after = self._prefer_coherent_live_tx_status(
             self._tx_status_from_status_snapshot(after, tx_live),
@@ -4474,6 +4547,9 @@ class T510FEngine:
         )
         errors: list[str] = []
         blockers: list[str] = []
+
+        if not scaling_after["ok"] or scaling_after != scaling_before:
+            errors.append("DIGITAL_SCALING_CHANGED_DURING_GATE")
 
         if int(after.get("core_version", 0)) != int(expected_core_version):
             errors.append(
@@ -4585,12 +4661,12 @@ class T510FEngine:
 
         ok = not errors and not blockers
         return {
-            "classification": f"STAGE34_{sample_rate_msps}MSPS_{mode_name}_BOARD_{'PASS' if ok else 'FAIL'}",
+            "classification": f"T510_{sample_rate_msps}MSPS_{mode_name}_BOARD_{'PASS' if ok else 'FAIL'}",
             "ok": ok,
             "full_science_validated": ok,
-            "stage": 34,
+            "contract": "current",
             "production_scope": dict(self.PRODUCTION_SCOPE),
-            "convergence_target": "STAGE34_FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
+            "convergence_target": "FIVE_PRODUCTION_COMBINATIONS_FULL_RATE_BOARD_AND_HOST",
             "host_receiver_required": True,
             "expected_core_version": f"0x{int(expected_core_version):08x}",
             "sample_rate_msps": sample_rate_msps,
@@ -4606,6 +4682,8 @@ class T510FEngine:
             "after": after,
             "tx_after": tx_after,
             "science_after": science,
+            "digital_scaling_before": scaling_before,
+            "digital_scaling_after": scaling_after,
             "channelizer_after": channelizer,
             "spec_routes": spec_routes,
             "time_routes": time_routes,
@@ -5322,6 +5400,7 @@ class T510FEngine:
         )
 
     def arm_scheduled_sync(self, *, timeout_s: float = 0.25) -> dict[str, Any]:
+        self._require_current_scaling()
         self.ctrl.write(self.regs.SYNC_COMMAND, 0x2)
         return self._wait_scheduled_sync(lambda value: bool(value["armed"]), timeout_s=timeout_s)
 
@@ -5350,6 +5429,7 @@ class T510FEngine:
         return readback
 
     def start(self) -> None:
+        self._require_current_scaling()
         self.ctrl.write(self.regs.CONTROL, 0x1)
 
     def trigger_epoch(self) -> None:

@@ -28,6 +28,7 @@ from python.t510_control import (
 )
 from python.t510_fengine import RegisterMap, T510FEngine
 from scripts.t510_board_host_gate import _qsfp_physical_health, _t510_rfdc_health
+from python.t510_scaling import qmc_settings, scaling_identity
 
 
 class FakeCore:
@@ -254,6 +255,13 @@ class FEngineConfigTests(unittest.TestCase):
             for block in range(2)
         ]
         snapshot = {
+            "core_version": "0x00010036",
+            "error_flags": 0,
+            "digital_scaling": scaling_identity(
+                0x00010036, 0x556,
+                [dict(tile=tile, block=block, qmc=qmc_settings())
+                 for tile in range(4) for block in range(2)],
+            ),
             "profile": {"center_mhz": 200.0},
             "rfdc": {
                 "adc_analog_sample_rate_hz": 3_840_000_000,
@@ -324,6 +332,7 @@ class FEngineConfigTests(unittest.TestCase):
         )
         self.assertEqual(signature.parameters["mts_adc_target_latency"].default, -1)
         self.assertEqual(signature.parameters["mts_dac_target_latency"].default, -1)
+        self.assertFalse(signature.parameters["require_clock_preserved"].default)
 
     def test_destination_defaults_and_validation(self) -> None:
         config = FEngineConfig()
@@ -503,6 +512,20 @@ class FEngineConfigTests(unittest.TestCase):
         )
         self.assertEqual(core.observation_kwargs["sync_mode"], "free_run")
 
+    def test_clock_preserving_prepare_propagates_strict_no_reconfigure_gate(self) -> None:
+        core = FakeCore()
+        controller = FEngineController("overlay/t510_fengine.bit", core=core)  # type: ignore[arg-type]
+        controller.prepare(
+            FEngineConfig(),
+            fresh_download=False,
+            clock_ref="tcxo_10mhz",
+            clock_profile="160m_10m_request_manual_clkin0",
+            force_clock_reconfigure=False,
+            require_clock_preserved=True,
+        )
+        self.assertFalse(core.observation_kwargs["force_clock_reconfigure"])
+        self.assertTrue(core.observation_kwargs["require_clock_preserved"])
+
     def test_identity_or_endpoint_readback_failure_never_starts(self) -> None:
         for failure in ("board", "source", "endpoint"):
             with self.subTest(failure=failure):
@@ -567,7 +590,7 @@ class FEngineConfigTests(unittest.TestCase):
         self.assertTrue(all(event[1]["enable"] is False for event in tones))
         self.assertTrue(
             all(
-                event[1]["mode"] == T510FEngine.STAGE33_DAC_TONE_MODE
+                event[1]["mode"] == T510FEngine.DAC_TONE_MODE
                 for event in tones
             )
         )
@@ -626,13 +649,13 @@ class FEngineConfigTests(unittest.TestCase):
 
     def test_stage33_dac_compensation_modes_have_distinct_readback(self) -> None:
         core = FakeFEngineFEngine()
-        core.set_dac_tone(channel=0, mode="stage33_q_advance")
-        core.set_dac_tone(channel=1, mode="stage33_q_retard")
+        core.set_dac_tone(channel=0, mode="q_advance")
+        core.set_dac_tone(channel=1, mode="q_retard")
         result = core.read_dac_channels()
         self.assertEqual(result["channels"][0]["mode"], 2)
-        self.assertEqual(result["channels"][0]["mode_name"], "stage33_q_advance")
+        self.assertEqual(result["channels"][0]["mode_name"], "q_advance")
         self.assertEqual(result["channels"][1]["mode"], 3)
-        self.assertEqual(result["channels"][1]["mode_name"], "stage33_q_retard")
+        self.assertEqual(result["channels"][1]["mode_name"], "q_retard")
 
     def test_low_level_profiles_fix_routes_pfb_and_wire_parameters(self) -> None:
         for mode, clear_time, clear_spec, pfb_control in (("time_only", False, True, 0), ("spec_only", True, False, 3), ("time_spec", False, False, 3)):

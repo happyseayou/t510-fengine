@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
+import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,36 +57,83 @@ class _Core:
 
 
 class T510MtsCampaignTests(unittest.TestCase):
-    def test_initial_conditioning_is_recorded_outside_campaign_cycles(self) -> None:
-        core = _Core()
-        result = CAMPAIGN._condition_initial_hardware(
-            core,
-            lmk_settle_seconds=0.0,
-            settle_seconds=0.0,
-        )
-        self.assertTrue(result["ok"])
-        self.assertFalse(result["counted_as_campaign_cycle"])
-        self.assertEqual(len(result["reset_calls"]), 8)
-        self.assertEqual(core.events[0], "stop")
-        self.assertEqual(
-            core.events[1],
-            "clock:external_10mhz:160m_10m_continuous",
-        )
-        self.assertEqual(core.events[2:10], [
-            "reset:adc0", "reset:adc1", "reset:adc2", "reset:adc3",
-            "reset:dac0", "reset:dac1", "reset:dac2", "reset:dac3",
-        ])
-        self.assertEqual(core.events[-2:], ["lmk_status:False", "rfdc_contract:True"])
+    def test_bootstrap_preserves_clock_before_download_without_tile_reset(self):
+        events=[]; ctrl=Mock(); core=ctrl.require_core.return_value
+        ctrl.connect.side_effect=lambda **kw: events.append('download')
+        core.stop.side_effect=lambda: events.append('stop')
+        core.set_dac_enable_mask.side_effect=lambda n: events.append(('mute', n))
+        with patch.object(CAMPAIGN, '_preserve_clock', side_effect=lambda ref: events.append('clock_gate')):
+            result=CAMPAIGN._condition_initial_hardware(ctrl, lmk_settle_seconds=0,
+                settle_seconds=0, clock_ref='tcxo_10mhz')
+        self.assertEqual(events, ['clock_gate','download','stop',('mute',0)])
+        self.assertFalse(result['counted_as_campaign_cycle'])
+        core.configure_clock.assert_not_called()
+        core.reset_all_rfdc_tiles.assert_not_called()
 
-    def test_initial_conditioning_fails_closed_before_tile_reset(self) -> None:
-        core = _Core(clock_configured=False)
-        with self.assertRaisesRegex(RuntimeError, "initial LMK configuration did not lock"):
-            CAMPAIGN._condition_initial_hardware(
-                core,
-                lmk_settle_seconds=0.0,
-                settle_seconds=0.0,
-            )
-        self.assertFalse(any(event.startswith("reset:") for event in core.events))
+    def test_clock_identity_failure_cannot_download_or_reset(self):
+        ctrl=Mock()
+        with patch.object(CAMPAIGN, '_preserve_clock', side_effect=RuntimeError('identity mismatch')):
+            with self.assertRaisesRegex(RuntimeError, 'identity mismatch'):
+                CAMPAIGN._condition_initial_hardware(ctrl, lmk_settle_seconds=0,
+                    settle_seconds=0, clock_ref='tcxo_10mhz')
+        ctrl.connect.assert_not_called()
+
+    def test_lmk_handoff_shutdown_precedes_clock_and_sysref_precedes_restart(self):
+        events=[]; ctrl=Mock(); core=ctrl.require_core.return_value
+        core.shutdown_all_rfdc_tiles.side_effect=lambda: events.append('shutdown')
+        core.configure_clock.side_effect=lambda **kw: events.append('lmk') or {'configured':True}
+        core.clock.set_sysref.side_effect=lambda on: events.append(('sysref',on))
+        ctrl.connect.side_effect=lambda **kw: events.append('download')
+        core.set_dac_enable_mask.side_effect=lambda mask: events.append(('mute',mask))
+        with patch.object(CAMPAIGN, '_reset_rfdc_tiles', side_effect=lambda c: events.append('reset')):
+            CAMPAIGN._reload_lmk(ctrl, clock_ref='tcxo_10mhz', settle_seconds=0)
+        self.assertEqual(events,[('mute',0),'shutdown','lmk',('sysref',True),'download',('mute',0),'reset'])
+
+    def test_lmk_lock_failure_does_not_reload_or_reset(self):
+        ctrl=Mock(); core=ctrl.require_core.return_value
+        core.configure_clock.return_value={'configured':False}
+        with self.assertRaisesRegex(RuntimeError,'failed to lock'):
+            CAMPAIGN._reload_lmk(ctrl, clock_ref='tcxo_10mhz', settle_seconds=0)
+        ctrl.connect.assert_not_called()
+        core.clock.set_sysref.assert_not_called()
+
+    def test_discovery_reuses_quantized_strict_headroom_policy(self):
+        policy = CAMPAIGN._recommended_fixed_targets(
+            [432] * 4 + [456] * 4,
+            [48] * 4 + [768] * 4 + [96] * 4,
+        )
+        self.assertEqual(policy["targets"], {"adc": 492, "dac": -1})
+        self.assertEqual(
+            policy["derivation"]["current_observed_bounds"]["adc"]["max"], 456
+        )
+        self.assertEqual(
+            policy["derivation"]["dac_normalized_observations"],
+            [48] * 4 + [48] * 4 + [96] * 4,
+        )
+        self.assertEqual(policy["derivation"]["dac_sysref_t1_period"], 720)
+        self.assertIsNone(policy["derivation"]["worst_case_frozen_offsets"]["dac"])
+        self.assertEqual(policy["derivation"]["dac_alignment_mode"], "single_device_relative")
+        self.assertFalse(policy["derivation"]["dac_deterministic_target_feasible"])
+        self.assertEqual(
+            policy["derivation"]["dac_deterministic_infeasible_witness"],
+            [32, 384, 416],
+        )
+        self.assertEqual(policy["derivation"]["dac_feasible_fixed_targets"], [])
+        boundary = CAMPAIGN._recommended_fixed_targets(
+            [360, 456], [32, 384, 416, 768]
+        )
+        self.assertEqual(
+            boundary["derivation"]["dac_normalized_observations"],
+            [32, 384, 416, 48],
+        )
+
+    def test_discovery_fails_if_frozen_envelope_or_delay_range_is_exceeded(self):
+        with self.assertRaisesRegex(ValueError, "ADC_DISCOVERY_EXCEEDS_FROZEN_MAX"):
+            CAMPAIGN._recommended_fixed_targets([468] * 4, [48] * 4)
+        with self.assertRaisesRegex(ValueError, "ADC_DISCOVERY_EXCEEDS_DELAY_RANGE"):
+            CAMPAIGN._recommended_fixed_targets([0] * 4, [48] * 4)
+        relative = CAMPAIGN._recommended_fixed_targets([432] * 4, [752] * 4)
+        self.assertEqual(relative["targets"]["dac"], -1)
 
     def test_fixed_cycle_accepts_driver_factor_quantization(self) -> None:
         payload = {
@@ -120,7 +170,7 @@ class T510MtsCampaignTests(unittest.TestCase):
         )
         payload["mts"]["dac_config"]["latency"] = [92, 92, 92, 80]
         self.assertIn(
-            "DAC_TILE_LATENCY_MISMATCH",
+            "DAC_INTERTILE_RESIDUAL_EXCEEDS_FACTOR_QUANTIZATION",
             CAMPAIGN._assess_cycle(
                 payload,
                 phase="fixed",
@@ -128,6 +178,88 @@ class T510MtsCampaignTests(unittest.TestCase):
                 dac_target=88,
             ),
         )
+
+    def test_discovery_accepts_real_r5_driver_quantized_dac_vector(self) -> None:
+        payload = {
+            "clock_ref": "tcxo_10mhz",
+            "clock": {
+                "configured": True,
+                "profile_id": "160m_10m_request_manual_clkin0",
+                "sysref_mode": "request",
+                "sysref_request_gpio": 0,
+                "sysref_output_expected_on": False,
+            },
+            "mts": {
+                "failures": [],
+                "calls": [],
+                "adc_config": {
+                    "tiles": 0xF,
+                    "target_latency": -1,
+                    "latency": [408, 408, 408, 408],
+                    "offset": [0, 0, 0, 0],
+                },
+                "dac_config": {
+                    "tiles": 0xF,
+                    "target_latency": -1,
+                    "latency": [768, 768, 768, 764],
+                    "offset": [0, 0, 0, 29],
+                },
+            },
+        }
+        self.assertEqual(
+            CAMPAIGN._assess_cycle(
+                payload, phase="discovery", adc_target=-1, dac_target=-1
+            ),
+            [],
+        )
+
+    def test_fixed_accepts_adc_target_with_r6_dac_relative_vector(self) -> None:
+        payload = {
+            "clock_ref": "tcxo_10mhz",
+            "clock": {
+                "configured": True,
+                "profile_id": "160m_10m_request_manual_clkin0",
+                "sysref_mode": "request",
+                "sysref_request_gpio": 0,
+                "sysref_output_expected_on": False,
+            },
+            "mts": {
+                "failures": [],
+                "calls": [],
+                "adc_config": {
+                    "tiles": 0xF,
+                    "target_latency": 492,
+                    "latency": [492, 492, 492, 492],
+                    "offset": [7, 7, 7, 7],
+                },
+                "dac_config": {
+                    "tiles": 0xF,
+                    "target_latency": -1,
+                    "latency": [416, 416, 416, 416],
+                    "offset": [0, 0, 0, 0],
+                },
+            },
+        }
+        self.assertEqual(
+            CAMPAIGN._assess_cycle(
+                payload, phase="fixed", adc_target=492, dac_target=-1
+            ),
+            [],
+        )
+
+    def test_fixed_phase_rederives_frozen_target_from_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            discovery = Path(temporary) / "discovery.json"
+            discovery.write_text(json.dumps({
+                "observed_latency": {"adc": [360, 456], "dac": [32, 384, 768]},
+                "recommended_fixed_targets": {"adc": 480, "dac": 400},
+            }))
+            args = SimpleNamespace(
+                phase="fixed", adc_target=None, dac_target=None,
+                discovery_json=str(discovery),
+            )
+            with self.assertRaisesRegex(ValueError, "do not match frozen policy"):
+                CAMPAIGN._targets(args)
 
 
 if __name__ == "__main__":

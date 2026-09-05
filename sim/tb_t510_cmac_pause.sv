@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`include "tb_common.svh"
 `default_nettype none
 
 module tb_t510_cmac_pause;
@@ -112,9 +113,9 @@ module tb_t510_cmac_pause;
 
         tx_valid <= 1'b0;
         if (failures == 0) begin
-            $display("PASS: tb_t510_cmac_pause");
+            `TB_PASS("tb_t510_cmac_pause")
         end else begin
-            $display("CHECK FAILED: tb_t510_cmac_pause failures=%0d", failures);
+            $fatal(1, "CHECK FAILED: tb_t510_cmac_pause failures=%0d", failures);
         end
         $finish;
     end

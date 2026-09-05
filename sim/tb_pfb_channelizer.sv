@@ -135,7 +135,7 @@ module tb_pfb_channelizer;
                     acc = acc + sample_value * production_coeff[tap*4096 + phase];
                 end
                 magnitude = (acc < 0) ? -acc : acc;
-                rounded = (magnitude + 65536) >>> 17;
+                rounded = (magnitude + 32768) >>> 16;
                 if (acc < 0) begin
                     output_value = (rounded >= 32768) ? -16'sd32768 : -rounded;
                 end else begin
@@ -531,10 +531,10 @@ module tb_pfb_channelizer;
 
     initial begin
         generate_production_pfb_coefficients();
-        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q17_39(39'sd65535)), 16'sd0, "PFB positive sub-half-LSB rounds to zero")
-        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q17_39(-39'sd65535)), 16'sd0, "PFB negative sub-half-LSB rounds to zero")
-        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q17_39(39'sd65536)), 16'sd1, "PFB positive half-LSB rounds away from zero")
-        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q17_39(-39'sd65536)), -16'sd1, "PFB negative half-LSB rounds away from zero")
+        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q16_39(39'sd32767)), 16'sd0, "PFB positive sub-half-LSB rounds to zero")
+        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q16_39(-39'sd32767)), 16'sd0, "PFB negative sub-half-LSB rounds to zero")
+        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q16_39(39'sd32768)), 16'sd1, "PFB positive half-LSB rounds away from zero")
+        `TB_CHECK_EQ($signed(dut.u_feng_channelizer_4096.round_sat_q16_39(-39'sd32768)), -16'sd1, "PFB negative half-LSB rounds away from zero")
         reset_dut();
 
         @(negedge clk);

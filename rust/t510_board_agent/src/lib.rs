@@ -12,8 +12,8 @@ use axum::{Json, Router};
 use config::{HelperBitstream, RuntimeConfig};
 use model::{
     CalibrationRequest, ClockDiagnosticPrepareRequest, ClockDiagnosticRestoreRequest,
-    ConfigureRequest, DacRequest, DiagnosticMutationRequest, ExpectedBoardRequest, Ocb1Request,
-    OutputLoadRequest, ScheduledSyncPrepareRequest,
+    ClockReference, ConfigureRequest, DacRequest, DiagnosticMutationRequest,
+    ExpectedBoardRequest, Ocb1Request, OutputLoadRequest, ScheduledSyncPrepareRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -382,6 +382,12 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
             },
             "operations": {
                 "configure": true,
+                "clock_preserving_hot_update": {
+                    "supported": true,
+                    "hitless": false,
+                    "requires_receiver_stream_accepting_false": true,
+                    "requires_exact_live_clock_profile_and_dual_pll_lock": true
+                },
                 "start": true,
                 "stop": true,
                 "reset": true,
@@ -1087,7 +1093,27 @@ async fn configure(
             })),
         ));
     }
-    let bitstream = resolved.helper.clone();
+    let reference = match request.clock_reference {
+        ClockReference::OnboardTcxo => "onboard_tcxo",
+        ClockReference::External10Mhz => "external_10mhz",
+    };
+    let qualification = resolved
+        .public
+        .mts_qualifications
+        .get(reference)
+        .expect("catalog references were validated");
+    if qualification.status != "qualified" {
+        return Err(ApiError::new(
+            &state,
+            StatusCode::CONFLICT,
+            "REFERENCE_UNQUALIFIED",
+            format!("clock reference {reference} has not completed qualification"),
+            Some(json!({"clock_reference": reference, "status": qualification.status})),
+        ));
+    }
+    let mut bitstream = resolved.helper.clone();
+    bitstream.mts_adc_target_latency = qualification.mts_adc_target_latency;
+    bitstream.mts_dac_target_latency = qualification.mts_dac_target_latency;
     run_hardware(
         &state,
         "configure",
@@ -1320,8 +1346,8 @@ mod tests {
     use super::*;
     use crate::config::{AgentConfig, BitstreamSpec, ProfileSpec, RuntimeConfig};
     use crate::model::{
-        ClockDiagnosticPrepareRequest, ClockReference, Endpoint, MtsTargetMode, Profile,
-        ProfileMode, SourceIdentity, StreamKind,
+        ClockDiagnosticPrepareRequest, ClockReference, ConfigureUpdateMode, Endpoint,
+        MtsTargetMode, Profile, ProfileMode, SourceIdentity, StreamKind,
     };
     use http_body_util::BodyExt;
     use sha2::{Digest, Sha256};
@@ -1357,9 +1383,11 @@ mod tests {
 
     fn configure_request(mode: ProfileMode) -> ConfigureRequest {
         ConfigureRequest {
-            bitstream_id: "test".into(),
+            bitstream_id: "fengine-current".into(),
             board_id: 1,
             clock_reference: ClockReference::External10Mhz,
+            update_mode: ConfigureUpdateMode::Full,
+            receiver_stream_accepting: None,
             profile: Profile {
                 sample_rate_msps: 160,
                 mode,
@@ -1370,6 +1398,43 @@ mod tests {
                 mac: "02:00:00:00:00:01".into(),
             },
             endpoints: endpoints(mode),
+        }
+    }
+
+    fn qualified_mts() -> crate::config::MtsQualification {
+        crate::config::MtsQualification {
+            status: "qualified".into(),
+            mts_adc_target_latency: Some(492),
+            mts_dac_target_latency: Some(-1),
+            campaign: Some(crate::config::MtsCampaignProof {
+                discovery: crate::config::MtsCampaignCycles {
+                    rfdc_reset: 20, overlay_reload: 10, lmk_reload: 10, passed: 40,
+                },
+                fixed: crate::config::MtsCampaignCycles {
+                    rfdc_reset: 20, overlay_reload: 10, lmk_reload: 10, passed: 40,
+                },
+                observed_adc_max: 456,
+                observed_dac_max: 768,
+                adc_margin: 20,
+                dac_margin: 16,
+                latency_quantum: 12,
+                strict_headroom_quanta: 1,
+                dac_sysref_t1_period: 720,
+                frozen_evidence_bounds: crate::config::MtsLatencyBounds {
+                    adc: crate::config::MtsMinMax { min: 360, max: 456 },
+                    dac: crate::config::MtsMinMax { min: 32, max: 416 },
+                },
+                frozen_fixed_targets: crate::config::MtsLatencyTargets { adc: 492, dac: -1 },
+                dac_nominal_target: 400,
+                dac_period_branch_ceiling: 392,
+                dac_alignment_mode: "single_device_relative".into(),
+                dac_deterministic_target_feasible: false,
+                dac_deterministic_infeasible_witness: vec![32, 384, 416],
+                lmk_settle_seconds: crate::config::MtsSettleSeconds {
+                    discovery: 3.0, fixed: 3.0,
+                },
+                evidence_sha256: "1".repeat(64),
+            }),
         }
     }
 
@@ -1393,35 +1458,23 @@ mod tests {
                 python_executable: Path::new("/bin/sh").to_path_buf(),
                 helper_path: helper,
                 helper_pythonpath: temp.path().to_path_buf(),
-                default_bitstream_id: "test".into(),
+                default_bitstream_id: "fengine-current".into(),
                 configure_timeout_seconds: operation_timeout_seconds,
                 operation_timeout_seconds,
                 bitstreams: vec![BitstreamSpec {
-                    id: "test".into(),
+                    id: "fengine-current".into(),
                     path: bitstream,
                     sha256: sha,
-                    core_version: "0x00010034".into(),
-                    mts_adc_target_latency: Some(240),
-                    mts_dac_target_latency: Some(224),
-                    mts_campaign: Some(crate::config::MtsCampaignProof {
-                        discovery: crate::config::MtsCampaignCycles {
-                            rfdc_reset: 20,
-                            overlay_reload: 10,
-                            lmk_reload: 10,
-                            passed: 40,
-                        },
-                        fixed: crate::config::MtsCampaignCycles {
-                            rfdc_reset: 20,
-                            overlay_reload: 10,
-                            lmk_reload: 10,
-                            passed: 40,
-                        },
-                        observed_adc_max: 220,
-                        observed_dac_max: 208,
-                        adc_margin: 20,
-                        dac_margin: 16,
-                        evidence_sha256: "1".repeat(64),
-                    }),
+                    core_version: "0x00010036".into(),
+                    scaling_profile: "qmc16383of8192-pfb16-fft0556".into(),
+                    pfb_output_shift: 16,
+                    coefficient_fraction_bits: 17,
+                    fft_shift: "0x0556".into(),
+                    required_qmc_gain: 1.9998779296875,
+                    mts_qualifications: std::collections::HashMap::from([
+                        ("onboard_tcxo".into(), qualified_mts()),
+                        ("external_10mhz".into(), qualified_mts()),
+                    ]),
                     profiles: vec![ProfileSpec {
                         sample_rate_msps: 160,
                         modes: vec![
@@ -1470,10 +1523,19 @@ mod tests {
         let mut bad_mask = configure_request(ProfileMode::TimeOnly);
         bad_mask.endpoints[8].enabled = true;
         assert!(bad_mask.validate().unwrap_err().contains("enable mask"));
+
+        let mut hot = configure_request(ProfileMode::SpecOnly);
+        hot.update_mode = ConfigureUpdateMode::ClockPreserving;
+        assert!(hot
+            .validate()
+            .unwrap_err()
+            .contains("receiver_stream_accepting=false"));
+        hot.receiver_stream_accepting = Some(false);
+        assert!(hot.validate().is_ok());
     }
 
     #[test]
-    fn validates_stage33_dac_first_nyquist_and_offset_bounds() {
+    fn validates_current_dac_first_nyquist_and_offset_bounds() {
         let request = |center_mhz: f64, rf_frequency_mhz: f64| DacRequest {
             expected_board_id: 1,
             center_mhz,
@@ -1542,42 +1604,68 @@ mod tests {
             "#!/bin/sh\nread input\nprintf '{\"ok\":true,\"result\":{}}\\n'\n",
             2,
         );
-        let resolved = state.runtime.bitstream("test").unwrap();
-        assert_eq!(resolved.helper.mts_adc_target_latency, Some(240));
-        assert_eq!(resolved.helper.mts_dac_target_latency, Some(224));
+        let resolved = state.runtime.bitstream("fengine-current").unwrap();
+        assert_eq!(resolved.helper.mts_adc_target_latency, Some(492));
+        assert_eq!(resolved.helper.mts_dac_target_latency, Some(-1));
         assert!(state.runtime.bitstream("../../tmp/other.bit").is_none());
         let mut missing_target = state.runtime.config.clone();
-        missing_target.bitstreams[0].mts_adc_target_latency = None;
+        missing_target.bitstreams[0].mts_qualifications
+            .get_mut("onboard_tcxo").unwrap().mts_adc_target_latency = None;
         assert!(
             RuntimeConfig::validate(Path::new("/x").into(), missing_target, false)
                 .unwrap_err()
-                .contains("requires frozen non-negative ADC/DAC MTS target latencies")
+                .contains("has no ADC MTS target")
         );
         let mut missing_campaign = state.runtime.config.clone();
-        missing_campaign.bitstreams[0].mts_campaign = None;
+        missing_campaign.bitstreams[0].mts_qualifications
+            .get_mut("onboard_tcxo").unwrap().campaign = None;
         assert!(
             RuntimeConfig::validate(Path::new("/x").into(), missing_campaign, false)
                 .unwrap_err()
                 .contains("campaign proof")
         );
         let mut wrong_target = state.runtime.config.clone();
-        wrong_target.bitstreams[0].mts_adc_target_latency = Some(241);
+        wrong_target.bitstreams[0].mts_qualifications
+            .get_mut("onboard_tcxo").unwrap().mts_adc_target_latency = Some(-1);
         assert!(
             RuntimeConfig::validate(Path::new("/x").into(), wrong_target, false)
                 .unwrap_err()
-                .contains("observed maxima")
+                .contains("invalid MTS targets")
         );
-        let mut stale_target = state.runtime.config.clone();
-        stale_target.bitstreams[0].mts_adc_target_latency = Some(230);
-        stale_target.bitstreams[0]
-            .mts_campaign
+        let mut wrong_envelope = state.runtime.config.clone();
+        wrong_envelope.bitstreams[0].mts_qualifications
+            .get_mut("onboard_tcxo").unwrap()
+            .campaign
             .as_mut()
             .unwrap()
-            .observed_adc_max = 210;
+            .frozen_evidence_bounds
+            .dac
+            .min = 500;
+        assert!(
+            RuntimeConfig::validate(Path::new("/x").into(), wrong_envelope, false)
+                .unwrap_err()
+                .contains("invalid MTS campaign contract")
+        );
+        let mut short_settle = state.runtime.config.clone();
+        short_settle.bitstreams[0].mts_qualifications
+            .get_mut("onboard_tcxo").unwrap()
+            .campaign
+            .as_mut()
+            .unwrap()
+            .lmk_settle_seconds
+            .fixed = 1.0;
+        assert!(
+            RuntimeConfig::validate(Path::new("/x").into(), short_settle, false)
+                .unwrap_err()
+                .contains("invalid MTS campaign contract")
+        );
+        let mut stale_target = state.runtime.config.clone();
+        stale_target.bitstreams[0].mts_qualifications
+            .get_mut("onboard_tcxo").unwrap().status = "pending".into();
         assert!(
             RuntimeConfig::validate(Path::new("/x").into(), stale_target, false)
                 .unwrap_err()
-                .contains("must not reuse")
+                .contains("pending but contains qualification results")
         );
         let mut config = state.runtime.config.clone();
         config.bitstreams[0].path = Path::new("relative.bit").to_path_buf();

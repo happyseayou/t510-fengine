@@ -4,35 +4,73 @@
   "python_executable": "/usr/local/share/pynq-venv/bin/python3",
   "helper_path": "/opt/t510-agent/current/python/t510_hw.py",
   "helper_pythonpath": "/opt/t510-agent/current",
-  "default_bitstream_id": "fengine-0x00010034",
+  "default_bitstream_id": "fengine-current",
   "configure_timeout_seconds": 180,
   "operation_timeout_seconds": 30,
   "bitstreams": [
     {
-      "id": "fengine-0x00010034",
+      "id": "fengine-current",
       "path": "/opt/t510-agent/current/overlay/t510_fengine.bit",
-      "sha256": "c21d93f5ea71e9ac17a4448cff138a8faaf9c7347d879be919b680d196b8a5be",
-      "core_version": "0x00010034",
-      "mts_adc_target_latency": 416,
-      "mts_dac_target_latency": 112,
-      "mts_campaign": {
-        "discovery": {
-          "rfdc_reset": 20,
-          "overlay_reload": 10,
-          "lmk_reload": 10,
-          "passed": 40
+      "sha256": "e00c586a1d862d7c7af113361832a30093334493e49f943e3dd22bf44f950665",
+      "core_version": "0x00010036",
+      "mts_qualifications": {
+        "onboard_tcxo": {
+          "status": "qualified",
+          "mts_adc_target_latency": 492,
+          "mts_dac_target_latency": -1,
+          "campaign": {
+            "discovery": {
+              "rfdc_reset": 20,
+              "overlay_reload": 10,
+              "lmk_reload": 10,
+              "passed": 40
+            },
+            "fixed": {
+              "rfdc_reset": 20,
+              "overlay_reload": 10,
+              "lmk_reload": 10,
+              "passed": 40
+            },
+            "observed_adc_max": 456,
+            "observed_dac_max": 768,
+            "adc_margin": 20,
+            "dac_margin": 16,
+            "dac_nominal_target": 400,
+            "dac_period_branch_ceiling": 392,
+            "dac_alignment_mode": "single_device_relative",
+            "dac_deterministic_target_feasible": false,
+            "dac_deterministic_infeasible_witness": [
+              32,
+              384,
+              416
+            ],
+            "lmk_settle_seconds": {
+              "discovery": 3.0,
+              "fixed": 3.0
+            },
+            "latency_quantum": 12,
+            "strict_headroom_quanta": 1,
+            "dac_sysref_t1_period": 720,
+            "frozen_evidence_bounds": {
+              "adc": {
+                "min": 360,
+                "max": 456
+              },
+              "dac": {
+                "min": 32,
+                "max": 416
+              }
+            },
+            "frozen_fixed_targets": {
+              "adc": 492,
+              "dac": -1
+            },
+            "evidence_sha256": "9294f58b93d05e5b5ea108e1ed2ae4ad4f2009b46cba4c9a652d3422b82a4007"
+          }
         },
-        "fixed": {
-          "rfdc_reset": 20,
-          "overlay_reload": 10,
-          "lmk_reload": 10,
-          "passed": 40
-        },
-        "observed_adc_max": 396,
-        "observed_dac_max": 96,
-        "adc_margin": 20,
-        "dac_margin": 16,
-        "evidence_sha256": "5f3c23aecee17153f1f3f58c2837bdb972a1ac1ee2487446a707dabe6aea5d8d"
+        "external_10mhz": {
+          "status": "pending"
+        }
       },
       "profiles": [
         {
@@ -50,7 +88,12 @@
             "spec_only"
           ]
         }
-      ]
+      ],
+      "scaling_profile": "qmc16383of8192-pfb16-fft0556",
+      "pfb_output_shift": 16,
+      "coefficient_fraction_bits": 17,
+      "fft_shift": "0x0556",
+      "required_qmc_gain": 1.9998779296875
     }
   ]
 }

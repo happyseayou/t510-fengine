@@ -21,6 +21,11 @@
 
 `define TB_PASS(NAME) \
     begin \
+        integer tb_pass_file; \
+        tb_pass_file = $fopen({NAME, ".pass"}, "w"); \
+        if (!tb_pass_file) $fatal(1, "cannot write test completion marker"); \
+        $fdisplay(tb_pass_file, "%s PASS", NAME); \
+        $fclose(tb_pass_file); \
         $display("[%0t] PASS: %s", $time, NAME); \
         $finish; \
     end

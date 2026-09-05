@@ -15,8 +15,7 @@ from typing import Any, Iterable
 from .t510_fengine import T510FEngine
 
 
-EXPECTED_CORE_VERSION = 0x0001_0034
-STAGE34C2R_CORE_VERSION = 0x0001_0035
+EXPECTED_CORE_VERSION = 0x0001_0036
 TIME_DST_PORT_BASE = 4300
 SPEC_DST_PORT_BASE = 4308
 TIME_FLOW_COUNT = 8
@@ -206,7 +205,7 @@ class FEngineConfig:
         }
         if (sample_rate_msps, mode) not in allowed:
             raise ValueError(
-                "Stage 34 supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC and "
+                "current supports 160MS/s TIME_ONLY/SPEC_ONLY/TIME_SPEC and "
                 "320MS/s TIME_ONLY/SPEC_ONLY"
             )
         center = float(self.center_mhz)
@@ -327,7 +326,7 @@ class FEngineConfig:
 
 
 class FEngineController:
-    """Production controller for the Stage 34 contract."""
+    """Production controller for the current contract."""
 
     def __init__(
         self,
@@ -354,7 +353,7 @@ class FEngineController:
 
     def require_core(self) -> T510FEngine:
         if self.core is None:
-            raise RuntimeError("connect the Stage 34 production controller first")
+            raise RuntimeError("connect the current production controller first")
         return self.core
 
     def _program_destinations(self, config: FEngineConfig) -> list[dict[str, Any]]:
@@ -394,7 +393,7 @@ class FEngineController:
         if len(readback) != len(endpoints):
             mismatches.append(f"endpoint count requested={len(endpoints)} readback={len(readback)}")
         if mismatches:
-            raise RuntimeError("Stage 34 TX endpoint readback mismatch: " + "; ".join(mismatches))
+            raise RuntimeError("current TX endpoint readback mismatch: " + "; ".join(mismatches))
         return endpoints
 
     @staticmethod
@@ -461,7 +460,7 @@ class FEngineController:
                 channel=channel,
                 phase0=phase0,
                 phase_inject=0,
-                mode=T510FEngine.STAGE34_DAC_TONE_MODE,
+                mode=T510FEngine.DAC_TONE_MODE,
             )
             rows.append({
                 "channel": channel,
@@ -556,6 +555,7 @@ class FEngineController:
         clock_ref: str = T510FEngine.PRODUCTION_CLOCK_REF,
         clock_profile: str = T510FEngine.PRODUCTION_CLOCK_PROFILE,
         force_clock_reconfigure: bool = True,
+        require_clock_preserved: bool = False,
     ) -> dict[str, Any]:
         """Apply a production configuration while leaving science streaming stopped."""
         config = config if isinstance(config, FEngineConfig) else FEngineConfig(**dict(config))
@@ -585,6 +585,7 @@ class FEngineController:
             require_full_clock_lock=True,
             require_mts=True,
             force_clock_reconfigure=bool(force_clock_reconfigure),
+            require_clock_preserved=bool(require_clock_preserved),
             input_source_mode="dac_loopback",
             clock_ref=clock_ref,
             clock_profile=clock_profile,
@@ -600,7 +601,7 @@ class FEngineController:
             or bool(mts_payload.get("failures"))
         ):
             raise RuntimeError(
-                "Stage 34 requires a successful configure-time MTS result with call evidence"
+                "current requires a successful configure-time MTS result with call evidence"
             )
         mts_result_id = zlib.crc32(
             json.dumps(mts_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -626,7 +627,7 @@ class FEngineController:
         source_readback = core.configure_tx_source_identity(**requested_source)
         if requested_source != source_readback:
             raise RuntimeError(
-                "Stage 34 TX source identity readback mismatch: "
+                "current TX source identity readback mismatch: "
                 f"requested={requested_source} readback={source_readback}"
             )
         endpoints = self._program_destinations(config)
@@ -638,7 +639,7 @@ class FEngineController:
         board_id_readback = core.configure_board_id(config.board_id)
         if board_id_readback != config.board_id:
             raise RuntimeError(
-                "Stage 34 board_id readback mismatch: "
+                "current board_id readback mismatch: "
                 f"requested={config.board_id} readback={board_id_readback}"
             )
         core.stop()
@@ -670,7 +671,7 @@ class FEngineController:
             status = core.read_status()
         if not self._stream_path_accepting(status):
             raise RuntimeError(
-                "Stage 34 immediate start did not produce an accepting streaming "
+                "current immediate start did not produce an accepting streaming "
                 f"data path: {status}"
             )
         return status
@@ -725,7 +726,7 @@ class FEngineController:
             ):
                 return status
             if time.monotonic() >= deadline:
-                raise RuntimeError(f"Stage 34 stop could not be proven: {status}")
+                raise RuntimeError(f"current stop could not be proven: {status}")
             previous = status
             time.sleep(max(float(settle_seconds), 0.01))
 
@@ -765,6 +766,39 @@ class FEngineController:
             result["channelizer"] = core.read_channelizer_status()
         return result
 
+    def prepare_clock_preserving_hot_update(
+        self,
+        config: FEngineConfig,
+        *,
+        program_dac: bool = False,
+        clock_ref: str = T510FEngine.PRODUCTION_CLOCK_REF,
+        clock_profile: str = T510FEngine.PRODUCTION_CLOCK_PROFILE,
+    ) -> dict[str, Any]:
+        """Reload PL while preserving an already verified live LMK profile.
+
+        The caller must perform a pre-overlay LMK identity/lock check.  This
+        method deliberately separates the bitstream reload from ``prepare`` so
+        the latter can re-read and enforce the same clock identity after PL is
+        live, without ever falling back to an LMK reset or profile rewrite.
+        """
+
+        pre_configuration_status = self.connect(download=True)
+        result = self.prepare(
+            config,
+            fresh_download=False,
+            program_dac=bool(program_dac),
+            clock_ref=str(clock_ref),
+            clock_profile=str(clock_profile),
+            force_clock_reconfigure=False,
+            require_clock_preserved=True,
+        )
+        result["hot_update"] = {
+            "mode": "clock_preserving",
+            "pre_configuration_status": pre_configuration_status,
+            "clock_reconfigured": False,
+        }
+        return result
+
     def apply(self, config: FEngineConfig, *, fresh_download: bool = True) -> dict[str, Any]:
         """Apply a configuration and start science streaming immediately."""
         result = self.prepare(config, fresh_download=fresh_download, program_dac=True)
@@ -784,7 +818,7 @@ class FEngineController:
         overlay when no configuration is cached locally.
         """
         if self.config is None and center_mhz is None:
-            raise RuntimeError("center_mhz is required when no Stage 34 configuration is cached")
+            raise RuntimeError("center_mhz is required when no current configuration is cached")
         channels = tuple(
             item if isinstance(item, DacChannelConfig) else DacChannelConfig(**dict(item))
             for item in dac_channels
@@ -850,7 +884,7 @@ class FEngineController:
 
     def validate(self, *, seconds: float = 10.0) -> dict[str, Any]:
         if self.config is None:
-            raise RuntimeError("apply a Stage 34 production configuration first")
+            raise RuntimeError("apply a current production configuration first")
         return self.require_core().run_production_validation(
             configure=False,
             sample_rate_msps=self.config.sample_rate_msps,
@@ -861,7 +895,7 @@ class FEngineController:
 
     def capture_preview(self, *, time_window_us: float = 0.25) -> dict[str, Any]:
         if self.config is None:
-            raise RuntimeError("apply a Stage 34 production configuration first")
+            raise RuntimeError("apply a current production configuration first")
         core = self.require_core()
         preview = core.capture_preview_fast(n=1024, input_mask=0xFF, timeout=1.0)
         channel0 = self.config.dac_channels[0]
@@ -890,7 +924,6 @@ __all__ = [
     "DEFAULT_SOURCE_MAC",
     "DacChannelConfig",
     "EXPECTED_CORE_VERSION",
-    "STAGE34C2R_CORE_VERSION",
     "FlowDestination",
     "INPUT_MASK",
     "PAYLOAD_BYTES",

@@ -215,7 +215,7 @@ module feng_ctrl_axi #(
     output wire [2:0]                   science_output_mode_cfg
 );
 
-    localparam [31:0] CORE_VERSION = 32'h0001_0034;
+    localparam [31:0] CORE_VERSION = 32'h0001_0036;
     localparam [31:0] PREVIEW_SAMPLE_RATE_HZ = 32'd320_000_000;
     localparam [31:0] PREVIEW_AXIS_BEAT_RATE_HZ = 32'd80_000_000;
     localparam [31:0] PREVIEW_MODE_FULLRATE_IQ = 32'd1;

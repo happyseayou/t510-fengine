@@ -37,13 +37,25 @@ pub struct BitstreamSpec {
     pub path: PathBuf,
     pub sha256: String,
     pub core_version: String,
-    #[serde(default)]
-    pub mts_adc_target_latency: Option<i32>,
-    #[serde(default)]
-    pub mts_dac_target_latency: Option<i32>,
-    #[serde(default)]
-    pub mts_campaign: Option<MtsCampaignProof>,
+    pub scaling_profile: String,
+    pub pfb_output_shift: u8,
+    pub coefficient_fraction_bits: u8,
+    pub fft_shift: String,
+    pub required_qmc_gain: f64,
+    pub mts_qualifications: HashMap<String, MtsQualification>,
     pub profiles: Vec<ProfileSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MtsQualification {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mts_adc_target_latency: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mts_dac_target_latency: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign: Option<MtsCampaignProof>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -64,7 +76,46 @@ pub struct MtsCampaignProof {
     pub observed_dac_max: i32,
     pub adc_margin: i32,
     pub dac_margin: i32,
+    pub latency_quantum: i32,
+    pub strict_headroom_quanta: i32,
+    pub dac_sysref_t1_period: i32,
+    pub frozen_evidence_bounds: MtsLatencyBounds,
+    pub frozen_fixed_targets: MtsLatencyTargets,
+    pub dac_nominal_target: i32,
+    pub dac_period_branch_ceiling: i32,
+    pub dac_alignment_mode: String,
+    pub dac_deterministic_target_feasible: bool,
+    pub dac_deterministic_infeasible_witness: Vec<i32>,
+    pub lmk_settle_seconds: MtsSettleSeconds,
     pub evidence_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MtsMinMax {
+    pub min: i32,
+    pub max: i32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MtsLatencyBounds {
+    pub adc: MtsMinMax,
+    pub dac: MtsMinMax,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MtsLatencyTargets {
+    pub adc: i32,
+    pub dac: i32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MtsSettleSeconds {
+    pub discovery: f64,
+    pub fixed: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -79,10 +130,12 @@ pub struct PublicBitstream {
     pub id: String,
     pub sha256: String,
     pub core_version: String,
-    pub mts_adc_target_latency: Option<i32>,
-    pub mts_dac_target_latency: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mts_campaign: Option<MtsCampaignProof>,
+    pub scaling_profile: String,
+    pub pfb_output_shift: u8,
+    pub coefficient_fraction_bits: u8,
+    pub fft_shift: String,
+    pub required_qmc_gain: f64,
+    pub mts_qualifications: HashMap<String, MtsQualification>,
     pub profiles: Vec<ProfileSpec>,
 }
 
@@ -124,6 +177,84 @@ fn sha256_file(path: &Path) -> Result<String, String> {
         digest.update(&buffer[..count]);
     }
     Ok(hex::encode(digest.finalize()))
+}
+
+fn validate_mts_qualification(
+    bitstream_id: &str,
+    reference: &str,
+    qualification: &MtsQualification,
+) -> Result<(), String> {
+    match qualification.status.as_str() {
+        "pending" => {
+            if qualification.mts_adc_target_latency.is_some()
+                || qualification.mts_dac_target_latency.is_some()
+                || qualification.campaign.is_some()
+            {
+                return Err(format!(
+                    "bitstream {bitstream_id} reference {reference} is pending but contains qualification results"
+                ));
+            }
+            Ok(())
+        }
+        "qualified" => {
+            let adc = qualification.mts_adc_target_latency.ok_or_else(|| {
+                format!("bitstream {bitstream_id} reference {reference} has no ADC MTS target")
+            })?;
+            let dac = qualification.mts_dac_target_latency.ok_or_else(|| {
+                format!("bitstream {bitstream_id} reference {reference} has no DAC MTS target")
+            })?;
+            if adc < 0 || dac < -1 {
+                return Err(format!(
+                    "bitstream {bitstream_id} reference {reference} has invalid MTS targets"
+                ));
+            }
+            let campaign = qualification.campaign.as_ref().ok_or_else(|| {
+                format!("bitstream {bitstream_id} reference {reference} has no MTS campaign proof")
+            })?;
+            for (name, cycles) in [
+                ("discovery", &campaign.discovery),
+                ("fixed", &campaign.fixed),
+            ] {
+                if cycles.rfdc_reset != 20
+                    || cycles.overlay_reload != 10
+                    || cycles.lmk_reload != 10
+                    || cycles.passed != 40
+                {
+                    return Err(format!(
+                        "bitstream {bitstream_id} reference {reference} {name} campaign must pass the complete 40-cycle matrix"
+                    ));
+                }
+            }
+            if campaign.adc_margin != 20
+                || campaign.dac_margin != 16
+                || campaign.latency_quantum != 12
+                || campaign.strict_headroom_quanta != 1
+                || campaign.dac_sysref_t1_period != 720
+                || campaign.lmk_settle_seconds.discovery != 3.0
+                || campaign.lmk_settle_seconds.fixed != 3.0
+                || campaign.frozen_fixed_targets != (MtsLatencyTargets { adc, dac })
+                || campaign.frozen_evidence_bounds.adc.min
+                    > campaign.frozen_evidence_bounds.adc.max
+                || campaign.frozen_evidence_bounds.dac.min
+                    > campaign.frozen_evidence_bounds.dac.max
+            {
+                return Err(format!(
+                    "bitstream {bitstream_id} reference {reference} has an invalid MTS campaign contract"
+                ));
+            }
+            if campaign.evidence_sha256.len() != 64
+                || hex::decode(&campaign.evidence_sha256).is_err()
+            {
+                return Err(format!(
+                    "bitstream {bitstream_id} reference {reference} has an invalid evidence SHA256"
+                ));
+            }
+            Ok(())
+        }
+        status => Err(format!(
+            "bitstream {bitstream_id} reference {reference} has unknown qualification status {status}"
+        )),
+    }
 }
 
 impl RuntimeConfig {
@@ -184,74 +315,41 @@ impl RuntimeConfig {
                     item.id
                 ));
             }
-            let core_value = u32::from_str_radix(core, 16).expect("validated core version");
-            if core_value != 0x0001_0034 {
+            if item.scaling_profile.trim().is_empty()
+                || !item.fft_shift.starts_with("0x")
+                || item.pfb_output_shift == 0
+                || item.coefficient_fraction_bits == 0
+                || !item.required_qmc_gain.is_finite()
+                || item.required_qmc_gain <= 0.0
+            {
+                return Err(format!("bitstream {} has invalid digital scaling metadata", item.id));
+            }
+            if config.bitstreams.len() != 1 || item.id != "fengine-current" {
+                return Err(
+                    "the current-only catalog must contain exactly one fengine-current entry".into(),
+                );
+            }
+            let required_references = HashSet::from(["onboard_tcxo", "external_10mhz"]);
+            let actual_references: HashSet<&str> =
+                item.mts_qualifications.keys().map(String::as_str).collect();
+            if actual_references != required_references {
                 return Err(format!(
-                    "bitstream {} must use the Stage 35 baseline CORE_VERSION 0x00010034",
+                    "bitstream {} must declare onboard_tcxo and external_10mhz qualifications",
                     item.id
                 ));
             }
-            if item.mts_adc_target_latency.is_none()
-                || item.mts_dac_target_latency.is_none()
-                || item.mts_adc_target_latency.is_some_and(|value| value < 0)
-                || item.mts_dac_target_latency.is_some_and(|value| value < 0)
+            for (reference, qualification) in &item.mts_qualifications {
+                validate_mts_qualification(&item.id, reference, qualification)?;
+            }
+            if item
+                .mts_qualifications
+                .get("onboard_tcxo")
+                .is_none_or(|qualification| qualification.status != "qualified")
             {
                 return Err(format!(
-                    "Stage 35 baseline bitstream {} requires frozen non-negative ADC/DAC MTS target latencies",
+                    "bitstream {} requires a qualified onboard_tcxo profile",
                     item.id
                 ));
-            }
-            if item.mts_adc_target_latency == Some(230) || item.mts_dac_target_latency == Some(336)
-            {
-                return Err(format!(
-                    "Stage 34 bitstream {} must not reuse the retired ADC/DAC MTS targets 230/336; use newly discovered targets",
-                    item.id
-                ));
-            }
-            {
-                let campaign = item.mts_campaign.as_ref().ok_or_else(|| {
-                    format!(
-                        "Stage 35 baseline bitstream {} requires the v34 MTS discovery/fixed campaign proof",
-                        item.id
-                    )
-                })?;
-                for (name, cycles) in [
-                    ("discovery", &campaign.discovery),
-                    ("fixed", &campaign.fixed),
-                ] {
-                    if cycles.rfdc_reset != 20
-                        || cycles.overlay_reload != 10
-                        || cycles.lmk_reload != 10
-                        || cycles.passed != 40
-                    {
-                        return Err(format!(
-                            "Stage 34 bitstream {} {name} MTS campaign must pass 20 RFDC reset + 10 overlay reload + 10 LMK reload cycles (40/40)",
-                            item.id
-                        ));
-                    }
-                }
-                if campaign.adc_margin != 20 || campaign.dac_margin != 16 {
-                    return Err(format!(
-                        "Stage 34 bitstream {} MTS margins must be ADC +20 and DAC +16",
-                        item.id
-                    ));
-                }
-                if item.mts_adc_target_latency != Some(campaign.observed_adc_max + 20)
-                    || item.mts_dac_target_latency != Some(campaign.observed_dac_max + 16)
-                {
-                    return Err(format!(
-                        "Stage 34 bitstream {} MTS targets must equal observed maxima plus the frozen margins",
-                        item.id
-                    ));
-                }
-                if campaign.evidence_sha256.len() != 64
-                    || hex::decode(&campaign.evidence_sha256).is_err()
-                {
-                    return Err(format!(
-                        "Stage 34 bitstream {} MTS evidence_sha256 must be 64 hex digits",
-                        item.id
-                    ));
-                }
             }
             if item.profiles.is_empty() {
                 return Err(format!("bitstream {} profiles must not be empty", item.id));
@@ -269,18 +367,25 @@ impl RuntimeConfig {
                 id: item.id.clone(),
                 sha256: item.sha256.to_ascii_lowercase(),
                 core_version: item.core_version.clone(),
-                mts_adc_target_latency: item.mts_adc_target_latency,
-                mts_dac_target_latency: item.mts_dac_target_latency,
-                mts_campaign: item.mts_campaign.clone(),
+                scaling_profile: item.scaling_profile.clone(),
+                pfb_output_shift: item.pfb_output_shift,
+                coefficient_fraction_bits: item.coefficient_fraction_bits,
+                fft_shift: item.fft_shift.clone(),
+                required_qmc_gain: item.required_qmc_gain,
+                mts_qualifications: item.mts_qualifications.clone(),
                 profiles: item.profiles.clone(),
             };
+            let onboard = item
+                .mts_qualifications
+                .get("onboard_tcxo")
+                .expect("validated onboard qualification");
             let helper = HelperBitstream {
                 id: item.id.clone(),
                 path: item.path.clone(),
                 sha256: item.sha256.to_ascii_lowercase(),
                 core_version: item.core_version.clone(),
-                mts_adc_target_latency: item.mts_adc_target_latency,
-                mts_dac_target_latency: item.mts_dac_target_latency,
+                mts_adc_target_latency: onboard.mts_adc_target_latency,
+                mts_dac_target_latency: onboard.mts_dac_target_latency,
             };
             catalog.insert(item.id.clone(), ResolvedBitstream { helper, public });
         }

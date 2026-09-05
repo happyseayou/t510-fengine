@@ -92,9 +92,18 @@ set_property include_dirs [list [file join $repo_root sim]] [get_filesets sim_1]
 set_property verilog_define {T510_SIM_FFT_MODEL} [get_filesets sim_1]
 set_property xsim.simulate.runtime 0ns [get_filesets sim_1]
 
+if {[info exists ::t510_sim_selected_tops]} {
+    foreach selected $::t510_sim_selected_tops {
+        if {[lsearch -exact $tb_tops $selected] < 0} {error "unknown regression top: $selected"}
+    }
+    if {[llength $::t510_sim_selected_tops] == 0} {error "empty regression selection"}
+    set tb_tops $::t510_sim_selected_tops
+}
 set failed 0
 foreach tb $tb_tops {
     puts "INFO: Running $tb"
+    set pass_marker [file join $repo_root demo-ant.sim sim_1 behav xsim ${tb}.pass]
+    file delete -force $pass_marker
     catch {close_sim -force}
     set_property top $tb [get_filesets sim_1]
     update_compile_order -fileset sim_1
@@ -102,18 +111,20 @@ foreach tb $tb_tops {
     if {$launch_rc != 0} {
         puts "ERROR: launch_simulation failed for $tb"
         puts $launch_msg
-        incr failed
         catch {close_sim -force}
-        continue
+        error "RTL simulation launch failed for $tb: $launch_msg"
     }
     set run_rc [catch {run all} run_msg]
     if {$run_rc != 0} {
         puts "ERROR: run all failed for $tb"
         puts $run_msg
-        incr failed
+        catch {close_sim -force}
+        error "RTL simulation failed for $tb: $run_msg"
     } else {
         set sim_log [file join $repo_root demo-ant.sim sim_1 behav xsim simulate.log]
-        set check_failed 0
+        # GUI sessions can omit simulate.log and run all can return normally
+        # after a testbench $error/$finish. Require a fresh positive marker.
+        set check_failed [expr {![file exists $pass_marker]}]
         if {[file exists $sim_log]} {
             set handle [open $sim_log r]
             set sim_text [read $handle]
@@ -125,8 +136,8 @@ foreach tb $tb_tops {
             }
         }
         if {$check_failed} {
-            puts "ERROR: $tb reported CHECK FAILED in simulate.log"
-            incr failed
+            catch {close_sim -force}
+            error "RTL simulation failed or did not reach TB_PASS: $tb"
         } else {
             puts "INFO: $tb completed"
         }

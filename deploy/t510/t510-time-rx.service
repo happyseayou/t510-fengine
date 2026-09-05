@@ -7,10 +7,22 @@ After=t510-rx-tune.service network-online.target
 Type=simple
 User=astrolab
 Group=astrolab
+RuntimeDirectory=t510-time-rx
+RuntimeDirectoryMode=0750
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
 NoNewPrivileges=true
-ExecStart=/opt/t510-time-rx/current/t510_time_rx --interface enp1s0f0np0 --dst-port-base 4300 --src-port-base 4000 --flow-count 24 --time-flow-count 8 --spec-flow-count 16 --backend fanout --fanout-mode port --fanout-group 0x27d --worker-count 24 --pin-workers off --initial-sample-rate-msps 160 --ring-mb 512 --block-mb 4 --batch-size 4096 --web 0.0.0.0:8089 --web-fps 30 --waveform-points 4096 --waveform-max-points 16384
+Nice=-10
+CPUWeight=10000
+IOWeight=10000
+# Sixteen port-fanout sockets map the sixteen formal SPEC flows one-to-one.
+# On heterogeneous GB10 CPUs, auto pinning places the eight full-rate TIME
+# workers on eight 3.9 GHz big cores. The next eight SPEC-only workers use
+# little cores, leaving two big and two little cores for the CUDA feeder,
+# writer, HTTP control, and operating system. TIME_SPEC maps its 24 flows modulo
+# 16 without changing the wire contract. A 1 GiB ring per worker absorbs a
+# transient scheduler/VM pause without weakening the zero-drop gate.
+ExecStart=/opt/t510-time-rx/current/t510_time_rx --interface enp1s0f0np0 --dst-port-base 4300 --src-port-base 4000 --flow-count 24 --time-flow-count 8 --spec-flow-count 16 --backend fanout --fanout-mode port --fanout-group 0x27d --worker-count 16 --pin-workers auto --initial-sample-rate-msps 160 --ring-mb 1024 --block-mb 4 --batch-size 4096 --web 0.0.0.0:8089 --web-fps 30 --waveform-points 4096 --waveform-max-points 16384
 Restart=on-failure
 RestartSec=2
 LimitNOFILE=65536

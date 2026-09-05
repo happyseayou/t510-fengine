@@ -18,12 +18,12 @@
 </head>
 <body><main>
   <h1>T510 Board Agent API</h1>
-  <p class="muted">Stage 35 · v34 F-engine control baseline · OpenAPI 3.1 · Agent version 0.3.6</p>
+  <p class="muted">Current F-engine control · OpenAPI 3.1 · Agent version 0.3.7</p>
   <p class="warning"><strong>开发网络安全模式：</strong><code>security_mode=none</code>。服务不校验 token、allowlist 或 mTLS，不启用 CORS。请仅放在受控实验室局域网中。</p>
 
   <section>
     <h2>职责边界</h2>
-    <p>Agent 只做配置和控制，并在请求时读取一次累计寄存器快照。它不抓取波形/频谱，不做 FFT、WebSocket 或 packet capture，也不计算 packet rate/drop rate（does not calculate packet rates）。独立的 Stage 34 reference watchdog 只轮询 LMK PLL1/PLL2 锁定状态并在物理参考失锁时执行安全 STOP；它不计算数据率或保存波形。Center Hub 应保存相邻 <code>GET /api/v2/status</code> 快照并计算速率。</p>
+    <p>Agent 只做配置和控制，并在请求时读取一次累计寄存器快照。它不抓取波形/频谱，不做 FFT、WebSocket 或 packet capture，也不计算 packet rate/drop rate（does not calculate packet rates）。独立的 current reference watchdog 只轮询 LMK PLL1/PLL2 锁定状态并在物理参考失锁时执行安全 STOP；它不计算数据率或保存波形。Center Hub 应保存相邻 <code>GET /api/v2/status</code> 快照并计算速率。</p>
     <p>每个硬件请求同步启动一次固定 Python helper。Agent 同一时刻只接受一个自身发起的硬件请求；冲突返回 <code>409 HARDWARE_BUSY</code>。Agent 不管理 Jupyter，也不能阻止 notebook 同时写硬件。</p>
   </section>
 
@@ -60,7 +60,7 @@
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/unfreeze</code></td><td>停流、未 arm、DAC 静音时原子解除八路冻结。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/preview</code></td><td>science UDP 停止时抓取八路 RFDC preview，返回 RMS/peak dBFS 和 clip；用于训练电平门禁。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/rfdc/calibration/train-freeze</code></td><td>校验声明的八路 center+60 MHz训练单音；依据AMD PG269的−40 dBFS最低输入要求，使用带4 dB余量的−36..−8 dBFS工程窗口，以5 Hz等待GCB/TSCB连续2秒稳定，原子freeze后静音DAC。</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/clock/diagnostic</code></td><td>读取Stage 34c-2时钟事务、完整LMK profile SHA、SYSREF request GPIO、预期物理输出、PLL锁定和MTS实测值。</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v2/clock/diagnostic</code></td><td>读取clock diagnostic时钟事务、完整LMK profile SHA、SYSREF request GPIO、预期物理输出、PLL锁定和MTS实测值。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/clock/diagnostic/prepare</code></td><td>仅在停流、receiver不接收、DAC静音、freeze=0且OCB1动态时，写入冻结profile、reset RFDC、执行MTS并返回一次性<code>clock_transaction_id</code>。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/clock/diagnostic/restore</code></td><td>恢复最后一次CONFIGURE明确选择的外部10 MHz或板载TCXO生产时钟，并重新reset RFDC和执行MTS。</td></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/v2/configure</code></td><td>加载 catalog bitstream，配置 profile/source/24 endpoints/board ID；完成后保持停流。重复调用会真实重配。</td></tr>
@@ -91,7 +91,7 @@ curl -sS -X POST http://192.168.100.117:8010/api/v2/rfdc/calibration/freeze \
   -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq
 curl -sS -X POST http://192.168.100.117:8010/api/v2/rfdc/calibration/unfreeze \
   -H 'Content-Type: application/json' -d '{"expected_board_id":1}' | jq</pre>
-    <p>Stage 34c-2时钟诊断（诊断START还必须携带prepare返回的事务ID）：</p>
+    <p>clock diagnostic时钟诊断（诊断START还必须携带prepare返回的事务ID）：</p>
 <pre>curl -s http://192.168.100.117:8010/api/v2/clock/diagnostic | jq
 curl -sS -X POST http://192.168.100.117:8010/api/v2/clock/diagnostic/prepare \
   -H 'Content-Type: application/json' \
@@ -103,7 +103,8 @@ curl -sS -X POST http://192.168.100.117:8010/api/v2/clock/diagnostic/restore \
 
   <section>
     <h2>配置请求</h2>
-    <p><code>endpoints</code> 必须恰好 24 项，ID 0..23 各一次；0..7 为 <code>TIME</code>，8..23 为 <code>SPEC</code>。<code>clock_reference</code> 可显式选择 <code>external_10mhz</code> 或 <code>onboard_tcxo</code>；Stage 35 无 WR 观测使用后者，它在 MTS 后关闭 request-mode SYSREF，并以 free-run 相对采样时间工作，不需要外部 10 MHz 或 PPS。字段 <code>sample_rate_msps</code> 表示复采样率档位：<code>160</code> 是 160 MS/s，中心范围 80..1840 MHz；<code>320</code> 是 320 MS/s，中心范围 160..1760 MHz。160 支持三种 mode；320 明确拒绝 <code>time_spec</code>。ADC/DAC 模拟采样率为 3.84 GS/s，分别使用 12× 抽取/插值；UDP 数据格式保持不变。</p>
+    <p><code>endpoints</code> 必须恰好 24 项，ID 0..23 各一次；0..7 为 <code>TIME</code>，8..23 为 <code>SPEC</code>。<code>clock_reference</code> 可显式选择 <code>external_10mhz</code> 或 <code>onboard_tcxo</code>；单板 free-run 观测使用后者，它在 MTS 后关闭 request-mode SYSREF，并以 free-run 相对采样时间工作，不需要外部 10 MHz 或 PPS。字段 <code>sample_rate_msps</code> 表示复采样率档位：<code>160</code> 是 160 MS/s，中心范围 80..1840 MHz；<code>320</code> 是 320 MS/s，中心范围 160..1760 MHz。160 支持三种 mode；320 明确拒绝 <code>time_spec</code>。ADC/DAC 模拟采样率为 3.84 GS/s，分别使用 12× 抽取/插值；UDP 数据格式保持不变。</p>
+    <p>默认 <code>update_mode=full</code> 会执行完整时钟配置。不断电热更新必须显式使用 <code>update_mode=clock_preserving</code> 并同时提交 <code>receiver_stream_accepting=false</code>；Agent 只在实时 LMK profile/selector/双 PLL 精确匹配时重载 PL，绝不隐式回落为 LMK reset/rewrite。该模式允许受控停流，不是 hitless。</p>
 <pre>curl -sS -X POST http://192.168.100.117:8010/api/v2/configure \
   -H 'Content-Type: application/json' \
   --data @config/t510/configure_160_time_only.example.json | jq</pre>

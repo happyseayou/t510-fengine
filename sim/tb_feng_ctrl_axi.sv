@@ -526,7 +526,7 @@ module tb_feng_ctrl_axi;
         reset_dut();
 
         axi_read(16'h0000, rd);
-        `TB_CHECK_EQ(rd, 32'h0001_0034, "CORE_VERSION Stage 34")
+        `TB_CHECK_EQ(rd, 32'h0001_0036, "CORE_VERSION Stage 36")
         axi_read(16'h0008, rd);
         `TB_CHECK_EQ(rd, 32'd0, "default MODE")
         axi_read(16'h0114, rd);

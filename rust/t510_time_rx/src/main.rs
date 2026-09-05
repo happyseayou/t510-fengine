@@ -10,12 +10,20 @@ use std::io::{Read, Write};
 use std::mem;
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{FromRawFd, RawFd};
+use std::path::PathBuf;
 use std::ptr;
 use std::slice;
 use std::sync::atomic::{fence, AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use t510_time_rx::autocorrelation::{AutocorrelationController, AutocorrelationRequest, AutocorrelationWorkerState};
+use t510_time_rx::crosscorrelation::{
+    CrossCorrelationController, CrossCorrelationRequest, CrossCorrelationWorkerState,
+};
+use t510_time_rx::time_capture::{
+    TimeCaptureController, TimeCaptureRequest, TimeCaptureWorkerState,
+};
 #[cfg(test)]
 use t510_time_rx::SpectrumSnapshot;
 use t510_time_rx::{
@@ -78,24 +86,27 @@ const DEFAULT_SPEC_FLOW_COUNT: usize = 16;
 const MAX_FLOW_COUNT: usize = 24;
 const MAX_WORKER_COUNT: usize = 64;
 const RAW_SPEC_CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
-const RAW_SPEC_CAPTURE_MAX_PACKETS_PER_BLOCK: usize = 256;
+const RAW_SPEC_CAPTURE_MAX_PACKETS_PER_BLOCK: usize = 8192;
+const RAW_SPEC_CAPTURE_START_LEAD_FRAMES: u64 = 16_384;
+const RAW_TIME_CAPTURE_START_LEAD_PACKETS: u32 = 65_536;
+const RAW_CAPTURE_START_UNSET: u64 = u64::MAX;
 const SPEC_STABILITY_MAX_TARGETS: usize = 32;
 const SPEC_STABILITY_FORMAL_DURATION_SECONDS: u32 = 600;
 const SPEC_STABILITY_LONG_DURATION_SECONDS: u32 = 3600;
 
-#[derive(Debug)]
-struct CapturedEthernetFrame {
-    timestamp: Duration,
-    bytes: Vec<u8>,
+#[derive(Debug, Default)]
+struct RawCaptureSlot {
+    records: Vec<u8>,
+    frame_count: usize,
 }
 
 #[derive(Debug)]
 struct RawSpecCaptureState {
     generation: u64,
     target_per_block: usize,
-    slots: Vec<Vec<CapturedEthernetFrame>>,
     slot_count: usize,
     include_time: bool,
+    time_only: bool,
     in_progress: bool,
 }
 
@@ -104,7 +115,11 @@ struct RawSpecCapture {
     active: AtomicBool,
     target_per_block: AtomicUsize,
     include_time: AtomicBool,
+    time_only: AtomicBool,
+    spec_start_sample0: AtomicU64,
+    time_start_seq: AtomicU64,
     captured_per_block: Vec<AtomicUsize>,
+    slots: Vec<Mutex<RawCaptureSlot>>,
     state: Mutex<RawSpecCaptureState>,
     completed: Condvar,
 }
@@ -115,13 +130,19 @@ impl Default for RawSpecCapture {
             active: AtomicBool::new(false),
             target_per_block: AtomicUsize::new(0),
             include_time: AtomicBool::new(false),
+            time_only: AtomicBool::new(false),
+            spec_start_sample0: AtomicU64::new(RAW_CAPTURE_START_UNSET),
+            time_start_seq: AtomicU64::new(RAW_CAPTURE_START_UNSET),
             captured_per_block: (0..MAX_FLOW_COUNT).map(|_| AtomicUsize::new(0)).collect(),
+            slots: (0..MAX_FLOW_COUNT)
+                .map(|_| Mutex::new(RawCaptureSlot::default()))
+                .collect(),
             state: Mutex::new(RawSpecCaptureState {
                 generation: 0,
                 target_per_block: 0,
-                slots: (0..MAX_FLOW_COUNT).map(|_| Vec::new()).collect(),
                 slot_count: SPEC_BLOCK_COUNT as usize,
                 include_time: false,
+                time_only: false,
                 in_progress: false,
             }),
             completed: Condvar::new(),
@@ -130,7 +151,12 @@ impl Default for RawSpecCapture {
 }
 
 impl RawSpecCapture {
-    fn begin(&self, target_per_block: usize, include_time: bool) -> Result<u64, String> {
+    fn begin(
+        &self,
+        target_per_block: usize,
+        include_time: bool,
+        time_only: bool,
+    ) -> Result<u64, String> {
         if target_per_block == 0 || target_per_block > RAW_SPEC_CAPTURE_MAX_PACKETS_PER_BLOCK {
             return Err(format!(
                 "packets_per_block must be in 1..={RAW_SPEC_CAPTURE_MAX_PACKETS_PER_BLOCK}"
@@ -142,15 +168,24 @@ impl RawSpecCapture {
         }
         state.generation = state.generation.wrapping_add(1).max(1);
         state.target_per_block = target_per_block;
+        if time_only && !include_time {
+            return Err("time_only raw capture requires include_time=true".to_string());
+        }
         state.include_time = include_time;
-        state.slot_count = if include_time {
+        state.time_only = time_only;
+        state.slot_count = if time_only {
+            DEFAULT_TIME_FLOW_COUNT
+        } else if include_time {
             DEFAULT_FLOW_COUNT
         } else {
             SPEC_BLOCK_COUNT as usize
         };
-        for slot in &mut state.slots {
-            slot.clear();
-            slot.reserve(target_per_block);
+        for slot in &self.slots {
+            let mut slot = slot.lock().map_err(|_| "capture slot lock poisoned")?;
+            slot.records.clear();
+            slot.frame_count = 0;
+            slot.records
+                .reserve(target_per_block.saturating_mul(DEFAULT_FRAME_SIZE + 16));
         }
         for count in &self.captured_per_block {
             count.store(0, Ordering::Relaxed);
@@ -158,6 +193,11 @@ impl RawSpecCapture {
         self.target_per_block
             .store(target_per_block, Ordering::Relaxed);
         self.include_time.store(include_time, Ordering::Relaxed);
+        self.time_only.store(time_only, Ordering::Relaxed);
+        self.spec_start_sample0
+            .store(RAW_CAPTURE_START_UNSET, Ordering::Release);
+        self.time_start_seq
+            .store(RAW_CAPTURE_START_UNSET, Ordering::Release);
         state.in_progress = true;
         self.active.store(true, Ordering::Release);
         Ok(state.generation)
@@ -167,7 +207,9 @@ impl RawSpecCapture {
         if !self.active.load(Ordering::Acquire) {
             return;
         }
-        let slot_count = if self.include_time.load(Ordering::Relaxed) {
+        let slot_count = if self.time_only.load(Ordering::Relaxed) {
+            DEFAULT_TIME_FLOW_COUNT
+        } else if self.include_time.load(Ordering::Relaxed) {
             DEFAULT_FLOW_COUNT
         } else {
             SPEC_BLOCK_COUNT as usize
@@ -179,33 +221,81 @@ impl RawSpecCapture {
         if self.captured_per_block[block].load(Ordering::Relaxed) >= target {
             return;
         }
-        let Ok(mut state) = self.state.lock() else {
+        let Some(slot) = self.slots.get(block) else {
             return;
         };
-        if !state.in_progress || state.slots[block].len() >= state.target_per_block {
+        let Ok(mut slot) = slot.lock() else {
+            return;
+        };
+        if slot.frame_count >= target {
             return;
         }
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
-        state.slots[block].push(CapturedEthernetFrame {
-            timestamp,
-            bytes: frame.to_vec(),
-        });
-        self.captured_per_block[block].store(state.slots[block].len(), Ordering::Relaxed);
-        if state
-            .slots
-            .iter()
-            .take(state.slot_count)
-            .all(|slot| slot.len() >= state.target_per_block)
+        let seconds = timestamp.as_secs().min(u32::MAX as u64) as u32;
+        let micros = timestamp.subsec_micros();
+        let len = frame.len().min(u32::MAX as usize) as u32;
+        slot.records.extend_from_slice(&seconds.to_le_bytes());
+        slot.records.extend_from_slice(&micros.to_le_bytes());
+        slot.records.extend_from_slice(&len.to_le_bytes());
+        slot.records.extend_from_slice(&len.to_le_bytes());
+        slot.records.extend_from_slice(frame);
+        slot.frame_count += 1;
+        let count = slot.frame_count;
+        drop(slot);
+        self.captured_per_block[block].store(count, Ordering::Release);
+        if count >= target
+            && self
+                .captured_per_block
+                .iter()
+                .take(slot_count)
+                .all(|count| count.load(Ordering::Acquire) >= target)
         {
-            state.in_progress = false;
-            self.active.store(false, Ordering::Release);
-            self.completed.notify_all();
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            if state.in_progress {
+                state.in_progress = false;
+                self.active.store(false, Ordering::Release);
+                self.completed.notify_all();
+            }
         }
     }
 
-    fn ingest_spec(&self, block_index: u16, frame: &[u8]) {
+    fn ingest_spec(&self, block_index: u16, sample0: u64, frame: &[u8]) {
+        if self.time_only.load(Ordering::Relaxed) {
+            return;
+        }
+        // Fanout workers observe an HTTP capture arm at different times. Pick
+        // one future FPGA sample0 so all sixteen blocks capture the same
+        // spectra instead of sixteen balanced but mutually disjoint prefixes.
+        let mut start = self.spec_start_sample0.load(Ordering::Acquire);
+        if start == RAW_CAPTURE_START_UNSET {
+            let candidate = match sample0
+                .checked_add(RAW_SPEC_CAPTURE_START_LEAD_FRAMES.saturating_mul(4096))
+            {
+                Some(value) => value,
+                None => return,
+            };
+            match self.spec_start_sample0.compare_exchange(
+                RAW_CAPTURE_START_UNSET,
+                candidate,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => start = candidate,
+                Err(actual) => start = actual,
+            }
+        }
+        let offset = sample0.wrapping_sub(start);
+        let span = self
+            .target_per_block
+            .load(Ordering::Relaxed)
+            .saturating_mul(4096) as u64;
+        if offset >= span || offset % 4096 != 0 {
+            return;
+        }
         let block = block_index as usize;
         let slot = if self.include_time.load(Ordering::Relaxed) {
             DEFAULT_TIME_FLOW_COUNT + block
@@ -215,10 +305,40 @@ impl RawSpecCapture {
         self.ingest_slot(slot, frame);
     }
 
-    fn ingest_time(&self, flow_id: usize, frame: &[u8]) {
-        if self.include_time.load(Ordering::Relaxed) && flow_id < DEFAULT_TIME_FLOW_COUNT {
-            self.ingest_slot(flow_id, frame);
+    fn ingest_time(&self, flow_id: usize, sequence: u32, frame: &[u8]) {
+        if !self.include_time.load(Ordering::Relaxed) || flow_id >= DEFAULT_TIME_FLOW_COUNT {
+            return;
         }
+        if self.time_only.load(Ordering::Relaxed) {
+            // Fanout workers observe a new capture request at different times.
+            // Select one future, flow-cycle-aligned sequence interval so every
+            // worker records the same TIME span instead of eight skewed spans.
+            let mut start = self.time_start_seq.load(Ordering::Acquire);
+            if start == RAW_CAPTURE_START_UNSET {
+                let candidate = sequence
+                    .wrapping_add(RAW_TIME_CAPTURE_START_LEAD_PACKETS)
+                    .wrapping_add((DEFAULT_TIME_FLOW_COUNT - 1) as u32)
+                    & !((DEFAULT_TIME_FLOW_COUNT - 1) as u32);
+                match self.time_start_seq.compare_exchange(
+                    RAW_CAPTURE_START_UNSET,
+                    candidate as u64,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => start = candidate as u64,
+                    Err(actual) => start = actual,
+                }
+            }
+            let offset = sequence.wrapping_sub(start as u32);
+            let span = self
+                .target_per_block
+                .load(Ordering::Relaxed)
+                .saturating_mul(DEFAULT_TIME_FLOW_COUNT) as u32;
+            if offset >= span {
+                return;
+            }
+        }
+        self.ingest_slot(flow_id, frame);
     }
 
     fn wait_pcap(&self, generation: u64, timeout: Duration) -> Result<Vec<u8>, String> {
@@ -235,12 +355,16 @@ impl RawSpecCapture {
         if wait_result.timed_out() && state.in_progress {
             state.in_progress = false;
             self.active.store(false, Ordering::Release);
-            let counts: Vec<usize> = state.slots.iter().map(Vec::len).collect();
+            let counts: Vec<usize> = self
+                .captured_per_block
+                .iter()
+                .map(|count| count.load(Ordering::Relaxed))
+                .collect();
             return Err(format!(
                 "raw spectrum capture timed out; block counts={counts:?}"
             ));
         }
-        Ok(encode_pcap(&state.slots[..state.slot_count]))
+        encode_pcap(&self.slots[..state.slot_count])
     }
 }
 
@@ -1347,14 +1471,13 @@ impl SpecStabilityMonitor {
     }
 }
 
-fn encode_pcap(slots: &[Vec<CapturedEthernetFrame>]) -> Vec<u8> {
-    let frame_count: usize = slots.iter().map(Vec::len).sum();
-    let frame_bytes: usize = slots
+fn encode_pcap(slots: &[Mutex<RawCaptureSlot>]) -> Result<Vec<u8>, String> {
+    let locked: Vec<_> = slots
         .iter()
-        .flat_map(|slot| slot.iter())
-        .map(|frame| frame.bytes.len())
-        .sum();
-    let mut out = Vec::with_capacity(24 + frame_count * 16 + frame_bytes);
+        .map(|slot| slot.lock().map_err(|_| "capture slot lock poisoned"))
+        .collect::<Result<_, _>>()?;
+    let record_bytes: usize = locked.iter().map(|slot| slot.records.len()).sum();
+    let mut out = Vec::with_capacity(24 + record_bytes);
     out.extend_from_slice(&0xa1b2c3d4u32.to_le_bytes());
     out.extend_from_slice(&2u16.to_le_bytes());
     out.extend_from_slice(&4u16.to_le_bytes());
@@ -1362,17 +1485,10 @@ fn encode_pcap(slots: &[Vec<CapturedEthernetFrame>]) -> Vec<u8> {
     out.extend_from_slice(&0u32.to_le_bytes());
     out.extend_from_slice(&65_535u32.to_le_bytes());
     out.extend_from_slice(&1u32.to_le_bytes());
-    for frame in slots.iter().flat_map(|slot| slot.iter()) {
-        let seconds = frame.timestamp.as_secs().min(u32::MAX as u64) as u32;
-        let micros = frame.timestamp.subsec_micros();
-        let len = frame.bytes.len().min(u32::MAX as usize) as u32;
-        out.extend_from_slice(&seconds.to_le_bytes());
-        out.extend_from_slice(&micros.to_le_bytes());
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&frame.bytes);
+    for slot in locked {
+        out.extend_from_slice(&slot.records);
     }
-    out
+    Ok(out)
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -1420,7 +1536,7 @@ fn parse_u16_auto(value: &str) -> Result<u16, String> {
 #[command(
     author,
     version,
-    about = "T510 Stage 34 TIME/SPEC receiver and fixed 8-tap F-engine preview"
+    about = "T510 TIME/SPEC receiver and full-band autocorrelation capture"
 )]
 struct Args {
     #[arg(long, default_value = "ens2f0np0")]
@@ -1471,6 +1587,13 @@ struct Args {
     batch_size: usize,
     #[arg(long, default_value_t = 10)]
     poll_timeout_ms: i32,
+    #[arg(long, default_value = "/var/lib/t510/measurements")]
+    measurement_root: PathBuf,
+    #[arg(
+        long,
+        default_value = "/opt/t510-time-rx/current/t510_xcorr_cuda"
+    )]
+    crosscorrelation_sidecar: PathBuf,
 }
 
 impl Args {
@@ -2713,9 +2836,12 @@ struct SharedState {
     spectrum_preview: SpecPreviewCapture,
     raw_spec_capture: Arc<RawSpecCapture>,
     spec_stability_monitor: Arc<SpecStabilityMonitor>,
+    autocorrelation_controller: Arc<AutocorrelationController>,
+    time_capture_controller: Arc<TimeCaptureController>,
+    crosscorrelation_controller: Arc<CrossCorrelationController>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct DisplayConfigPatch {
     sample_rate_msps: Option<u32>,
     output_mode: Option<String>,
@@ -2739,6 +2865,13 @@ struct RawSpecCaptureRequest {
     packets_per_block: usize,
     #[serde(default)]
     include_time: bool,
+    #[serde(default)]
+    time_only: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct MeasurementStopRequest {
+    reason: Option<String>,
 }
 
 impl DisplayConfigPatch {
@@ -2905,6 +3038,18 @@ fn apply_display_config_patch_to_shared(
     state: &mut SharedState,
     patch: DisplayConfigPatch,
 ) -> Result<(DisplayConfig, u64), String> {
+    if state.autocorrelation_controller.is_active() {
+        return Err("receiver configuration is frozen during measurement capture".to_string());
+    }
+    if state.time_capture_controller.is_active() {
+        return Err("receiver configuration is frozen during TIME capture".to_string());
+    }
+    if state.crosscorrelation_controller.is_active() {
+        return Err(
+            "receiver configuration is frozen during cross-correlation capture"
+                .to_string(),
+        );
+    }
     patch.apply_to(&mut state.config)?;
     state.config_generation = state.config_generation.saturating_add(1);
     state.waveform_binary.clear();
@@ -3586,12 +3731,72 @@ fn set_packet_fanout_port_bpf(
     }
 }
 
-fn pin_current_thread(worker_id: usize) -> std::io::Result<()> {
-    let cpus = thread::available_parallelism()
-        .map(|value| value.get())
-        .unwrap_or(1)
-        .max(1);
-    let cpu = worker_id % cpus;
+fn performance_balanced_cpu_order(
+    topology: &[(usize, Option<(u64, u64)>)],
+    high_priority_count: usize,
+) -> Vec<usize> {
+    // The first workers receive TIME ports. On heterogeneous Arm systems they
+    // need the fastest cores because each of eight TIME ports carries twice
+    // the packet rate of one of the sixteen SPEC ports. After those workers,
+    // prefer the slow cores so a few fast cores remain available to the CUDA
+    // feeder, writer, HTTP control, and operating system.
+    let mut ranked = topology.to_vec();
+    ranked.sort_by(|left, right| {
+        right
+            .1
+            .unwrap_or_default()
+            .cmp(&left.1.unwrap_or_default())
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let first_count = high_priority_count.min(ranked.len());
+    let mut result: Vec<usize> = ranked[..first_count].iter().map(|entry| entry.0).collect();
+    let mut remaining = ranked[first_count..].to_vec();
+    remaining.sort_by(|left, right| {
+        left.1
+            .unwrap_or_default()
+            .cmp(&right.1.unwrap_or_default())
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    result.extend(remaining.into_iter().map(|entry| entry.0));
+    result
+}
+
+fn allowed_cpus_performance_balanced(high_priority_count: usize) -> std::io::Result<Vec<usize>> {
+    let mut affinity: libc::cpu_set_t = unsafe { mem::zeroed() };
+    let rc =
+        unsafe { libc::sched_getaffinity(0, mem::size_of::<libc::cpu_set_t>(), &mut affinity) };
+    if rc < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut topology = Vec::new();
+    for cpu in 0..libc::CPU_SETSIZE as usize {
+        if !unsafe { libc::CPU_ISSET(cpu, &affinity) } {
+            continue;
+        }
+        let max_frequency_khz = fs::read_to_string(format!(
+            "/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_max_freq"
+        ))
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+        let capacity = fs::read_to_string(format!("/sys/devices/system/cpu/cpu{cpu}/cpu_capacity"))
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok());
+        topology.push((cpu, max_frequency_khz.zip(capacity)));
+    }
+    let cpus = performance_balanced_cpu_order(&topology, high_priority_count);
+    if cpus.is_empty() {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "process affinity contains no CPUs",
+        ))
+    } else {
+        Ok(cpus)
+    }
+}
+
+fn pin_current_thread(worker_id: usize, high_priority_count: usize) -> std::io::Result<()> {
+    let cpus = allowed_cpus_performance_balanced(high_priority_count)?;
+    let cpu = cpus[worker_id % cpus.len()];
     let mut set: libc::cpu_set_t = unsafe { mem::zeroed() };
     unsafe {
         libc::CPU_ZERO(&mut set);
@@ -4563,13 +4768,22 @@ struct ReceiverRuntime {
     rate_flow_packets: Vec<u64>,
     rate_flow_bytes: Vec<u64>,
     nic_reader: NicStatsReader,
+    autocorrelation_controller: Arc<AutocorrelationController>,
+    autocorrelation_worker: AutocorrelationWorkerState,
+    crosscorrelation_controller: Arc<CrossCorrelationController>,
+    crosscorrelation_worker: CrossCorrelationWorkerState,
 }
 
 impl ReceiverRuntime {
     fn new(args: &Args, shared: Arc<Mutex<SharedState>>) -> Self {
-        let (config, config_generation) = {
+        let (config, config_generation, autocorrelation_controller, crosscorrelation_controller) = {
             let guard = shared.lock().unwrap();
-            (guard.config.clone(), guard.config_generation)
+            (
+                guard.config.clone(),
+                guard.config_generation,
+                guard.autocorrelation_controller.clone(),
+                guard.crosscorrelation_controller.clone(),
+            )
         };
         Self {
             dst_port_base: args.dst_port_base(),
@@ -4603,6 +4817,10 @@ impl ReceiverRuntime {
             rate_flow_packets: vec![0; args.flow_count_clamped()],
             rate_flow_bytes: vec![0; args.flow_count_clamped()],
             nic_reader: NicStatsReader::new(&args.interface),
+            autocorrelation_controller,
+            autocorrelation_worker: AutocorrelationWorkerState::default(),
+            crosscorrelation_controller,
+            crosscorrelation_worker: CrossCorrelationWorkerState::default(),
         }
     }
 
@@ -4670,6 +4888,13 @@ impl ReceiverRuntime {
                     self.publish_if_due();
                     return;
                 }
+                self.autocorrelation_controller
+                    .ingest(&mut self.autocorrelation_worker, &header, udp_payload);
+                self.crosscorrelation_controller.ingest(
+                    &mut self.crosscorrelation_worker,
+                    &header,
+                    udp_payload,
+                );
                 self.process_spec_packet(header, udp_payload, src_port, dst_port);
             }
             other => {
@@ -4799,7 +5024,13 @@ impl ReceiverRuntime {
             false
         };
 
-        let display_enabled = spectrum_preview_enabled(&self.config);
+        // A formal all-sample accumulator/correlator has priority over the
+        // optional browser preview.  Preview assembly takes the shared UI
+        // mutex and occasionally allocates/encodes a spectrum frame on a
+        // receive worker; even a rare host pause is unacceptable at 320 MS/s.
+        let display_enabled = spectrum_preview_enabled(&self.config)
+            && !self.autocorrelation_controller.is_active()
+            && !self.crosscorrelation_controller.is_active();
         let should_decode = if display_enabled {
             self.shared
                 .lock()
@@ -5168,6 +5399,12 @@ struct FanoutWorkerRuntime {
     spectrum_gate: Arc<SpectrumPreviewGate>,
     raw_spec_capture: Arc<RawSpecCapture>,
     spec_stability_monitor: Arc<SpecStabilityMonitor>,
+    autocorrelation_controller: Arc<AutocorrelationController>,
+    autocorrelation_worker: AutocorrelationWorkerState,
+    crosscorrelation_controller: Arc<CrossCorrelationController>,
+    crosscorrelation_worker: CrossCorrelationWorkerState,
+    time_capture_controller: Arc<TimeCaptureController>,
+    time_capture_worker: TimeCaptureWorkerState,
     stats: WorkerStats,
     per_flow: Vec<FlowStats>,
     flow_previous_headers: Vec<Option<T510Header>>,
@@ -5207,6 +5444,9 @@ impl FanoutWorkerRuntime {
             spectrum_websocket_clients,
             raw_spec_capture,
             spec_stability_monitor,
+            autocorrelation_controller,
+            crosscorrelation_controller,
+            time_capture_controller,
         ) = {
             let guard = config.shared.lock().unwrap();
             (
@@ -5217,6 +5457,9 @@ impl FanoutWorkerRuntime {
                 guard.stats.spectrum_websocket_clients,
                 guard.raw_spec_capture.clone(),
                 guard.spec_stability_monitor.clone(),
+                guard.autocorrelation_controller.clone(),
+                guard.crosscorrelation_controller.clone(),
+                guard.time_capture_controller.clone(),
             )
         };
         Self {
@@ -5230,6 +5473,12 @@ impl FanoutWorkerRuntime {
             spectrum_gate: config.spectrum_gate.clone(),
             raw_spec_capture,
             spec_stability_monitor,
+            autocorrelation_controller,
+            autocorrelation_worker: AutocorrelationWorkerState::default(),
+            crosscorrelation_controller,
+            crosscorrelation_worker: CrossCorrelationWorkerState::default(),
+            time_capture_controller,
+            time_capture_worker: TimeCaptureWorkerState::default(),
             stats: WorkerStats::new(config.worker_id),
             per_flow: (0..config.flow_count)
                 .map(|flow_id| {
@@ -5314,7 +5563,14 @@ impl FanoutWorkerRuntime {
                 }
                 self.raw_spec_capture.ingest_time(
                     view.dst_port.saturating_sub(self.dst_port_base) as usize,
+                    header.seq_no,
                     frame,
+                );
+                self.time_capture_controller.ingest(
+                    &mut self.time_capture_worker,
+                    view.dst_port.saturating_sub(self.dst_port_base) as usize,
+                    &header,
+                    view.payload,
                 );
                 self.spec_stability_monitor.ingest_time(
                     &header,
@@ -5336,8 +5592,16 @@ impl FanoutWorkerRuntime {
                     self.publish_if_due();
                     return;
                 }
-                self.raw_spec_capture.ingest_spec(header.block_index, frame);
+                self.raw_spec_capture
+                    .ingest_spec(header.block_index, header.sample0, frame);
                 self.spec_stability_monitor.ingest(&header, view.payload);
+                self.autocorrelation_controller
+                    .ingest(&mut self.autocorrelation_worker, &header, view.payload);
+                self.crosscorrelation_controller.ingest(
+                    &mut self.crosscorrelation_worker,
+                    &header,
+                    view.payload,
+                );
                 self.process_spec_packet(header, view.payload, view.src_port, view.dst_port);
             }
             other => {
@@ -5392,8 +5656,16 @@ impl FanoutWorkerRuntime {
             self.stats.detected_sample_rate_msps = per_flow_detected_consensus(&self.per_flow);
         }
 
-        let display_enabled =
-            self.config.needs_time() && !self.config.paused && self.is_display_owner();
+        // The display owner normally decodes and reconstructs waveform frames
+        // at web_fps in addition to its receive work.  During the all-sample
+        // TIME capture measurement that extra burden falls on exactly one TIME
+        // flow and can exhaust only that worker's packet ring.  Freeze preview
+        // generation while the formal accumulator/writer is active; flow
+        // continuity and rate accounting below remain live.
+        let display_enabled = self.config.needs_time()
+            && !self.config.paused
+            && self.is_display_owner()
+            && !self.time_capture_controller.is_active();
         if display_enabled
             && self.last_waveform.elapsed() >= self.waveform_interval
             && !self.display_capture.active
@@ -5466,7 +5738,14 @@ impl FanoutWorkerRuntime {
             false
         };
 
-        let display_enabled = spectrum_preview_enabled(&self.config);
+        // Fanout workers are the production 83.6 Gbit/s receive path. Keep
+        // browser spectrum assembly completely off those workers while either
+        // formal all-sample product is active; otherwise one unlucky flow can
+        // spend long enough encoding a preview for its PACKET_RX_RING to
+        // overflow and permanently desynchronise the 16-way correlator.
+        let display_enabled = spectrum_preview_enabled(&self.config)
+            && !self.autocorrelation_controller.is_active()
+            && !self.crosscorrelation_controller.is_active();
         let should_decode = display_enabled
             && self
                 .spectrum_gate
@@ -5750,10 +6029,10 @@ impl FanoutWorkerRuntime {
     }
 }
 
-fn run_fanout_worker(config: FanoutWorkerConfig) {
+fn run_fanout_worker(config: FanoutWorkerConfig, startup: mpsc::SyncSender<Result<(), String>>) {
     let mut runtime = FanoutWorkerRuntime::new(&config);
     if config.pin_workers == PinWorkers::Auto {
-        if let Err(err) = pin_current_thread(config.worker_id) {
+        if let Err(err) = pin_current_thread(config.worker_id, config.time_flow_count) {
             runtime.stats.last_error =
                 Some(format!("worker {} CPU pin failed: {err}", config.worker_id));
         }
@@ -5767,15 +6046,24 @@ fn run_fanout_worker(config: FanoutWorkerConfig) {
     ) {
         Ok(socket) => socket,
         Err(err) => {
-            runtime.stats.last_error = Some(format!(
+            let message = format!(
                 "worker {} fanout socket open failed: {err}",
                 config.worker_id
-            ));
+            );
+            runtime.stats.last_error = Some(message.clone());
             runtime.force_report();
+            let _ = startup.send(Err(message));
             return;
         }
     };
     runtime.force_report();
+    // PACKET_FANOUT_DATA interprets the BPF result as the socket's join index,
+    // not the caller's worker_id. The receiver starts workers sequentially and
+    // waits for this acknowledgement so port N deterministically reaches
+    // worker N instead of whichever thread happened to open its socket first.
+    if startup.send(Ok(())).is_err() {
+        return;
+    }
     loop {
         let batch = match socket.drain(|frame| runtime.process_frame(frame)) {
             Ok(batch) => batch,
@@ -6078,7 +6366,23 @@ fn run_fanout_receiver(args: Args, shared: Arc<Mutex<SharedState>>) -> std::io::
             display_owner: display_owner.clone(),
             spectrum_gate: spectrum_gate.clone(),
         };
-        thread::spawn(move || run_fanout_worker(worker));
+        let (startup_tx, startup_rx) = mpsc::sync_channel(0);
+        thread::Builder::new()
+            .name(format!("t510-fanout-{worker_id:02}"))
+            .spawn(move || run_fanout_worker(worker, startup_tx))
+            .map_err(|error| {
+                std::io::Error::other(format!("spawn fanout worker {worker_id} failed: {error}"))
+            })?;
+        match startup_rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(std::io::Error::other(error)),
+            Err(error) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("fanout worker {worker_id} startup acknowledgement failed: {error}"),
+                ));
+            }
+        }
     }
 
     let mut base = ReceiverStats::new(&args);
@@ -6428,7 +6732,11 @@ fn handle_http(
                     guard.raw_spec_capture.clone()
                 };
                 match capture
-                    .begin(request.packets_per_block, request.include_time)
+                    .begin(
+                        request.packets_per_block,
+                        request.include_time,
+                        request.time_only,
+                    )
                     .and_then(|generation| capture.wait_pcap(generation, RAW_SPEC_CAPTURE_TIMEOUT))
                 {
                     Ok(pcap) => {
@@ -6455,65 +6763,387 @@ fn handle_http(
                 )
             }
         }
+    } else if first.starts_with("POST /api/measure/autocorrelation ") {
+        let body = request_body(&buf);
+        match serde_json::from_slice::<AutocorrelationRequest>(body) {
+            Ok(request) => {
+                let start_result = {
+                    let guard = shared.lock().unwrap();
+                    let config = &guard.config;
+                    if guard.spec_stability_monitor.active.load(Ordering::Acquire) {
+                        Err(concat!(
+                            "stop the sparse spec-stability monitor before ",
+                            "full-band capture"
+                        )
+                        .to_string())
+                    } else if guard.time_capture_controller.is_active() {
+                        Err(
+                            "TIME capture must finish before autocorrelation starts"
+                                .to_string(),
+                        )
+                    } else if guard.crosscorrelation_controller.is_active() {
+                        Err(
+                            "cross-correlation must finish before autocorrelation starts"
+                                .to_string(),
+                        )
+                    } else if config.output_mode != "spec_only" {
+                        Err(
+                            "autocorrelation requires receiver output_mode=spec_only"
+                                .to_string(),
+                        )
+                    } else if config.sample_rate_msps != request.sample_rate_msps {
+                        Err(format!(
+                            "receiver sample rate is {} MS/s, request is {} MS/s",
+                            config.sample_rate_msps, request.sample_rate_msps
+                        ))
+                    } else if (config.center_mhz - request.center_mhz).abs() > 1.0e-6 {
+                        Err(format!(
+                            "receiver center is {:.9} MHz, request is {:.9} MHz",
+                            config.center_mhz, request.center_mhz
+                        ))
+                    } else {
+                        guard.autocorrelation_controller.begin(request)
+                    }
+                };
+                match start_result {
+                    Ok(status) => {
+                        let response = serde_json::to_vec(&status).unwrap_or_default();
+                        write_response(&mut stream, "202 Accepted", "application/json", &response)
+                    }
+                    Err(error) => {
+                        let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                        write_response(
+                            &mut stream,
+                            "409 Conflict",
+                            "application/json",
+                            response.as_bytes(),
+                        )
+                    }
+                }
+            }
+            Err(error) => {
+                let response =
+                    serde_json::json!({"ok": false, "error": error.to_string()}).to_string();
+                write_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    response.as_bytes(),
+                )
+            }
+        }
+    } else if first.starts_with("GET /api/measure/autocorrelation/status ") {
+        let controller = {
+            let guard = shared.lock().unwrap();
+            guard.autocorrelation_controller.clone()
+        };
+        let response = serde_json::to_vec(&controller.status()).unwrap_or_default();
+        write_response(&mut stream, "200 OK", "application/json", &response)
+    } else if first.starts_with("POST /api/measure/autocorrelation/stop ") {
+        let body = request_body(&buf);
+        let reason = if body.is_empty() {
+            Ok("measurement capture stopped by explicit API request".to_string())
+        } else {
+            serde_json::from_slice::<MeasurementStopRequest>(body)
+                .map(|request| {
+                    request.reason.unwrap_or_else(|| {
+                        "measurement capture stopped by explicit API request".to_string()
+                    })
+                })
+                .map_err(|error| error.to_string())
+        };
+        match reason.and_then(|reason| {
+            let controller = {
+                let guard = shared.lock().unwrap();
+                guard.autocorrelation_controller.clone()
+            };
+            controller.stop(&reason)
+        }) {
+            Ok(status) => {
+                let response = serde_json::to_vec(&status).unwrap_or_default();
+                write_response(&mut stream, "202 Accepted", "application/json", &response)
+            }
+            Err(error) => {
+                let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                write_response(
+                    &mut stream,
+                    "409 Conflict",
+                    "application/json",
+                    response.as_bytes(),
+                )
+            }
+        }
+    } else if first.starts_with("POST /api/measure/crosscorrelation ") {
+        let body = request_body(&buf);
+        match serde_json::from_slice::<CrossCorrelationRequest>(body) {
+            Ok(request) => {
+                let start_result = {
+                    let guard = shared.lock().unwrap();
+                    let config = &guard.config;
+                    if guard.spec_stability_monitor.active.load(Ordering::Acquire) {
+                        Err(
+                            "stop spec-stability before cross-correlation capture"
+                                .to_string(),
+                        )
+                    } else if guard.autocorrelation_controller.is_active() {
+                        Err(
+                            "autocorrelation must finish before cross-correlation starts"
+                                .to_string(),
+                        )
+                    } else if guard.time_capture_controller.is_active() {
+                        Err(
+                            "TIME capture must finish before cross-correlation starts"
+                                .to_string(),
+                        )
+                    } else if config.output_mode != "spec_only" {
+                        Err(concat!(
+                            "cross-correlation requires receiver ",
+                            "output_mode=spec_only"
+                        )
+                        .to_string())
+                    } else if config.sample_rate_msps != request.sample_rate_msps {
+                        Err(format!(
+                            "receiver sample rate is {} MS/s, request is {} MS/s",
+                            config.sample_rate_msps, request.sample_rate_msps
+                        ))
+                    } else if (config.center_mhz - request.center_mhz).abs() > 1.0e-6 {
+                        Err(format!(
+                            "receiver center is {:.9} MHz, request is {:.9} MHz",
+                            config.center_mhz, request.center_mhz
+                        ))
+                    } else {
+                        guard.crosscorrelation_controller.begin(request)
+                    }
+                };
+                match start_result {
+                    Ok(status) => {
+                        let response = serde_json::to_vec(&status).unwrap_or_default();
+                        write_response(&mut stream, "202 Accepted", "application/json", &response)
+                    }
+                    Err(error) => {
+                        let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                        write_response(
+                            &mut stream,
+                            "409 Conflict",
+                            "application/json",
+                            response.as_bytes(),
+                        )
+                    }
+                }
+            }
+            Err(error) => {
+                let response =
+                    serde_json::json!({"ok": false, "error": error.to_string()}).to_string();
+                write_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    response.as_bytes(),
+                )
+            }
+        }
+    } else if first.starts_with("GET /api/measure/crosscorrelation/status ") {
+        let controller = {
+            let guard = shared.lock().unwrap();
+            guard.crosscorrelation_controller.clone()
+        };
+        let response = serde_json::to_vec(&controller.status()).unwrap_or_default();
+        write_response(&mut stream, "200 OK", "application/json", &response)
+    } else if first.starts_with("POST /api/measure/crosscorrelation/stop ") {
+        let body = request_body(&buf);
+        let reason = if body.is_empty() {
+            Ok("cross-correlation stopped by explicit API request".to_string())
+        } else {
+            serde_json::from_slice::<MeasurementStopRequest>(body)
+                .map(|request| {
+                    request.reason.unwrap_or_else(|| {
+                        "cross-correlation stopped by explicit API request".to_string()
+                    })
+                })
+                .map_err(|error| error.to_string())
+        };
+        match reason.and_then(|reason| {
+            let controller = {
+                let guard = shared.lock().unwrap();
+                guard.crosscorrelation_controller.clone()
+            };
+            controller.stop(&reason)
+        }) {
+            Ok(status) => {
+                let response = serde_json::to_vec(&status).unwrap_or_default();
+                write_response(&mut stream, "202 Accepted", "application/json", &response)
+            }
+            Err(error) => {
+                let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                write_response(
+                    &mut stream,
+                    "409 Conflict",
+                    "application/json",
+                    response.as_bytes(),
+                )
+            }
+        }
+    } else if first.starts_with("POST /api/measure/time ") {
+        let body = request_body(&buf);
+        match serde_json::from_slice::<TimeCaptureRequest>(body) {
+            Ok(request) => {
+                let start_result = {
+                    let guard = shared.lock().unwrap();
+                    let config = &guard.config;
+                    if guard.spec_stability_monitor.active.load(Ordering::Acquire) {
+                        Err("stop spec-stability before TIME capture".to_string())
+                    } else if guard.autocorrelation_controller.is_active() {
+                        Err("autocorrelation must finish before TIME capture".to_string())
+                    } else if guard.crosscorrelation_controller.is_active() {
+                        Err("cross-correlation must finish before TIME capture"
+                            .to_string())
+                    } else if config.output_mode != "time_only" {
+                        Err(
+                            "TIME capture requires receiver output_mode=time_only"
+                                .to_string(),
+                        )
+                    } else if config.sample_rate_msps != request.sample_rate_msps {
+                        Err(format!(
+                            "receiver sample rate is {} MS/s, request is {} MS/s",
+                            config.sample_rate_msps, request.sample_rate_msps
+                        ))
+                    } else if (config.center_mhz - request.center_mhz).abs() > 1.0e-6 {
+                        Err(format!(
+                            "receiver center is {:.9} MHz, request is {:.9} MHz",
+                            config.center_mhz, request.center_mhz
+                        ))
+                    } else {
+                        guard.time_capture_controller.begin(request)
+                    }
+                };
+                match start_result {
+                    Ok(status) => {
+                        let response = serde_json::to_vec(&status).unwrap_or_default();
+                        write_response(&mut stream, "202 Accepted", "application/json", &response)
+                    }
+                    Err(error) => {
+                        let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                        write_response(
+                            &mut stream,
+                            "409 Conflict",
+                            "application/json",
+                            response.as_bytes(),
+                        )
+                    }
+                }
+            }
+            Err(error) => {
+                let response =
+                    serde_json::json!({"ok": false, "error": error.to_string()}).to_string();
+                write_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    response.as_bytes(),
+                )
+            }
+        }
+    } else if first.starts_with("GET /api/measure/time/status ") {
+        let controller = {
+            let guard = shared.lock().unwrap();
+            guard.time_capture_controller.clone()
+        };
+        let response = serde_json::to_vec(&controller.status()).unwrap_or_default();
+        write_response(&mut stream, "200 OK", "application/json", &response)
+    } else if first.starts_with("POST /api/measure/time/stop ") {
+        let body = request_body(&buf);
+        let reason = if body.is_empty() {
+            Ok("TIME capture stopped by explicit API request".to_string())
+        } else {
+            serde_json::from_slice::<MeasurementStopRequest>(body)
+                .map(|request| {
+                    request.reason.unwrap_or_else(|| {
+                        "TIME capture stopped by explicit API request".to_string()
+                    })
+                })
+                .map_err(|error| error.to_string())
+        };
+        match reason.and_then(|reason| {
+            let controller = {
+                let guard = shared.lock().unwrap();
+                guard.time_capture_controller.clone()
+            };
+            controller.stop(&reason)
+        }) {
+            Ok(status) => {
+                let response = serde_json::to_vec(&status).unwrap_or_default();
+                write_response(&mut stream, "202 Accepted", "application/json", &response)
+            }
+            Err(error) => {
+                let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                write_response(
+                    &mut stream,
+                    "409 Conflict",
+                    "application/json",
+                    response.as_bytes(),
+                )
+            }
+        }
     } else if first.starts_with("POST /api/measure/spec-stability ") {
         let body = request_body(&buf);
         match serde_json::from_slice::<SpecStabilityRequest>(body) {
             Ok(request) => {
-                let (config, monitor) = {
+                let start_result = {
                     let guard = shared.lock().unwrap();
-                    (guard.config.clone(), guard.spec_stability_monitor.clone())
+                    let config = &guard.config;
+                    let allowed_mode = config.output_mode == "spec_only"
+                        || (request.include_time_statistics
+                            && request.sample_rate_msps == 160
+                            && config.output_mode == "time_spec");
+                    if guard.autocorrelation_controller.is_active() {
+                        Err(
+                            "full-band capture must finish before spec-stability starts"
+                                .to_string(),
+                        )
+                    } else if guard.time_capture_controller.is_active() {
+                        Err(
+                            "TIME capture must finish before spec-stability starts"
+                                .to_string(),
+                        )
+                    } else if guard.crosscorrelation_controller.is_active() {
+                        Err(concat!(
+                            "cross-correlation must finish before ",
+                            "spec-stability starts"
+                        )
+                        .to_string())
+                    } else if !allowed_mode {
+                        Err(concat!(
+                            "receiver Web configuration must be SPEC_ONLY, or 160 MS/s ",
+                            "TIME_SPEC when include_time_statistics=true"
+                        )
+                        .to_string())
+                    } else if config.sample_rate_msps != request.sample_rate_msps {
+                        Err(format!(
+                            "receiver sample rate is {} MS/s, request is {} MS/s",
+                            config.sample_rate_msps, request.sample_rate_msps
+                        ))
+                    } else if (config.center_mhz - request.center_mhz).abs() > 1.0e-6 {
+                        Err(format!(
+                            "receiver center is {:.9} MHz, request is {:.9} MHz",
+                            config.center_mhz, request.center_mhz
+                        ))
+                    } else {
+                        guard.spec_stability_monitor.begin(request)
+                    }
                 };
-                let allowed_mode = config.output_mode == "spec_only"
-                    || (request.include_time_statistics
-                        && request.sample_rate_msps == 160
-                        && config.output_mode == "time_spec");
-                let config_error = if !allowed_mode {
-                    Some(
-                        "receiver Web configuration must be SPEC_ONLY, or 160 MS/s TIME_SPEC when include_time_statistics=true"
-                            .to_string(),
-                    )
-                } else if config.sample_rate_msps != request.sample_rate_msps {
-                    Some(format!(
-                        "receiver sample rate is {} MS/s, request is {} MS/s",
-                        config.sample_rate_msps, request.sample_rate_msps
-                    ))
-                } else if (config.center_mhz - request.center_mhz).abs() > 1.0e-6 {
-                    Some(format!(
-                        "receiver center is {:.9} MHz, request is {:.9} MHz",
-                        config.center_mhz, request.center_mhz
-                    ))
-                } else {
-                    None
-                };
-                if let Some(error) = config_error {
-                    let response = serde_json::json!({"ok": false, "error": error}).to_string();
-                    write_response(
-                        &mut stream,
-                        "409 Conflict",
-                        "application/json",
-                        response.as_bytes(),
-                    )
-                } else {
-                    match monitor.begin(request) {
-                        Ok(status) => {
-                            let response = serde_json::to_vec(&status).unwrap_or_default();
-                            write_response(
-                                &mut stream,
-                                "202 Accepted",
-                                "application/json",
-                                &response,
-                            )
-                        }
-                        Err(error) => {
-                            let response =
-                                serde_json::json!({"ok": false, "error": error}).to_string();
-                            write_response(
-                                &mut stream,
-                                "409 Conflict",
-                                "application/json",
-                                response.as_bytes(),
-                            )
-                        }
+                match start_result {
+                    Ok(status) => {
+                        let response = serde_json::to_vec(&status).unwrap_or_default();
+                        write_response(&mut stream, "202 Accepted", "application/json", &response)
+                    }
+                    Err(error) => {
+                        let response = serde_json::json!({"ok": false, "error": error}).to_string();
+                        write_response(
+                            &mut stream,
+                            "409 Conflict",
+                            "application/json",
+                            response.as_bytes(),
+                        )
                     }
                 }
             }
@@ -6579,6 +7209,15 @@ fn handle_http(
         || first.starts_with("OPTIONS /api/measure/spec-stability/status ")
         || first.starts_with("OPTIONS /api/measure/spec-stability/result ")
         || first.starts_with("OPTIONS /api/measure/spec-stability/data ")
+        || first.starts_with("OPTIONS /api/measure/autocorrelation ")
+        || first.starts_with("OPTIONS /api/measure/autocorrelation/status ")
+        || first.starts_with("OPTIONS /api/measure/autocorrelation/stop ")
+        || first.starts_with("OPTIONS /api/measure/crosscorrelation ")
+        || first.starts_with("OPTIONS /api/measure/crosscorrelation/status ")
+        || first.starts_with("OPTIONS /api/measure/crosscorrelation/stop ")
+        || first.starts_with("OPTIONS /api/measure/time ")
+        || first.starts_with("OPTIONS /api/measure/time/status ")
+        || first.starts_with("OPTIONS /api/measure/time/stop ")
     {
         write_response(&mut stream, "204 No Content", "text/plain", b"")
     } else {
@@ -6844,6 +7483,8 @@ mod tests {
             frame_kb: DEFAULT_FRAME_SIZE / 1024,
             batch_size: 4096,
             poll_timeout_ms: 10,
+            measurement_root: PathBuf::from("/tmp/t510-measurement-tests"),
+            crosscorrelation_sidecar: PathBuf::from("/bin/false"),
         }
     }
 
@@ -7264,10 +7905,25 @@ mod tests {
     #[test]
     fn raw_spec_capture_exports_balanced_classic_pcap() {
         let capture = RawSpecCapture::default();
-        let generation = capture.begin(2, false).unwrap();
+        let generation = capture.begin(2, false, false).unwrap();
+        // Workers may first observe the arm at different FPGA times; none of
+        // those prefixes may leak into the witness.
+        for block in 0..SPEC_BLOCK_COUNT {
+            capture.ingest_spec(block, u64::from(block) * 4096, &[block as u8, 0xee]);
+        }
+        assert!(capture
+            .captured_per_block
+            .iter()
+            .take(SPEC_BLOCK_COUNT as usize)
+            .all(|count| count.load(Ordering::Acquire) == 0));
+        let start = capture.spec_start_sample0.load(Ordering::Acquire);
         for packet in 0..2u8 {
             for block in 0..SPEC_BLOCK_COUNT {
-                capture.ingest_spec(block, &[block as u8, packet]);
+                capture.ingest_spec(
+                    block,
+                    start + u64::from(packet) * 4096,
+                    &[block as u8, packet],
+                );
             }
         }
         let pcap = capture
@@ -7281,17 +7937,35 @@ mod tests {
     #[test]
     fn raw_time_spec_capture_uses_all_twenty_four_existing_ring_flows() {
         let capture = RawSpecCapture::default();
-        let generation = capture.begin(1, true).unwrap();
+        let generation = capture.begin(1, true, false).unwrap();
         for flow in 0..DEFAULT_TIME_FLOW_COUNT {
-            capture.ingest_time(flow, &[flow as u8, 0xaa]);
+            capture.ingest_time(flow, flow as u32, &[flow as u8, 0xaa]);
         }
+        capture.ingest_spec(0, 0, &[0, 0x00]);
+        let start = capture.spec_start_sample0.load(Ordering::Acquire);
         for block in 0..SPEC_BLOCK_COUNT {
-            capture.ingest_spec(block, &[block as u8, 0x55]);
+            capture.ingest_spec(block, start, &[block as u8, 0x55]);
         }
         let pcap = capture
             .wait_pcap(generation, Duration::from_millis(10))
             .unwrap();
         assert_eq!(pcap.len(), 24 + DEFAULT_FLOW_COUNT * (16 + 2));
+        assert!(!capture.active.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn raw_time_only_capture_completes_with_eight_existing_ring_flows() {
+        let capture = RawSpecCapture::default();
+        let generation = capture.begin(1, true, true).unwrap();
+        capture.ingest_time(2, 1_002, &[2, 0x00]);
+        let start = 66_544u32;
+        for flow in 0..DEFAULT_TIME_FLOW_COUNT {
+            capture.ingest_time(flow, start + flow as u32, &[flow as u8, 0xaa]);
+        }
+        let pcap = capture
+            .wait_pcap(generation, Duration::from_millis(10))
+            .unwrap();
+        assert_eq!(pcap.len(), 24 + DEFAULT_TIME_FLOW_COUNT * (16 + 2));
         assert!(!capture.active.load(Ordering::Acquire));
     }
 
@@ -7553,6 +8227,14 @@ mod tests {
     #[test]
     fn config_patch_increments_generation_and_resets_previews() {
         let args = test_args();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let measurement_root = std::env::temp_dir().join(format!(
+            "t510-measurement-config-freeze-{}-{nonce}",
+            std::process::id()
+        ));
         let mut state = SharedState {
             config: DisplayConfig::default(),
             config_generation: 7,
@@ -7564,6 +8246,12 @@ mod tests {
             spectrum_preview: SpecPreviewCapture::default(),
             raw_spec_capture: Arc::new(RawSpecCapture::default()),
             spec_stability_monitor: Arc::new(SpecStabilityMonitor::default()),
+            autocorrelation_controller: Arc::new(AutocorrelationController::new(measurement_root.clone())),
+            time_capture_controller: Arc::new(TimeCaptureController::new(measurement_root.clone())),
+            crosscorrelation_controller: Arc::new(CrossCorrelationController::new(
+                measurement_root.clone(),
+                PathBuf::from("/bin/false"),
+            )),
         };
         state.spectrum_preview.status.complete = true;
         state.stats.detected_sample_rate_msps = Some(160);
@@ -7600,6 +8288,40 @@ mod tests {
         assert!(!state.spectrum_preview.status.complete);
         assert_eq!(state.stats.selected_sample_rate_msps, 320);
         assert!(state.stats.selected_detected_mismatch);
+
+        state
+            .autocorrelation_controller
+            .begin(AutocorrelationRequest {
+                scan_id: "config-freeze".to_string(),
+                tuning_id: "test".to_string(),
+                duration_seconds: 1,
+                native_bucket_ms: 100,
+                sample_rate_msps: 320,
+                center_mhz: config.center_mhz,
+                expected_fft_shift: None,
+                metadata: BTreeMap::new(),
+            })
+            .unwrap();
+        let error = apply_display_config_patch_to_shared(
+            &mut state,
+            DisplayConfigPatch {
+                paused: Some(true),
+                ..DisplayConfigPatch::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("frozen during measurement capture"));
+        assert_eq!(state.config_generation, 8);
+        state
+            .autocorrelation_controller
+            .stop("config freeze test complete")
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while state.autocorrelation_controller.is_active() {
+            assert!(Instant::now() < deadline, "measurement stop timeout");
+            thread::sleep(Duration::from_millis(10));
+        }
+        fs::remove_dir_all(measurement_root).unwrap();
     }
 
     #[test]
@@ -7620,6 +8342,16 @@ mod tests {
             spectrum_preview: SpecPreviewCapture::default(),
             raw_spec_capture: Arc::new(RawSpecCapture::default()),
             spec_stability_monitor: Arc::new(SpecStabilityMonitor::default()),
+            autocorrelation_controller: Arc::new(AutocorrelationController::new(PathBuf::from(
+                "/tmp/t510-measurement-tests",
+            ))),
+            time_capture_controller: Arc::new(TimeCaptureController::new(PathBuf::from(
+                "/tmp/t510-measurement-tests",
+            ))),
+            crosscorrelation_controller: Arc::new(CrossCorrelationController::new(
+                PathBuf::from("/tmp/t510-measurement-tests"),
+                PathBuf::from("/bin/false"),
+            )),
         };
 
         clear_stale_previews(&mut state);
@@ -7648,6 +8380,16 @@ mod tests {
             spectrum_preview: SpecPreviewCapture::default(),
             raw_spec_capture: Arc::new(RawSpecCapture::default()),
             spec_stability_monitor: Arc::new(SpecStabilityMonitor::default()),
+            autocorrelation_controller: Arc::new(AutocorrelationController::new(PathBuf::from(
+                "/tmp/t510-measurement-tests",
+            ))),
+            time_capture_controller: Arc::new(TimeCaptureController::new(PathBuf::from(
+                "/tmp/t510-measurement-tests",
+            ))),
+            crosscorrelation_controller: Arc::new(CrossCorrelationController::new(
+                PathBuf::from("/tmp/t510-measurement-tests"),
+                PathBuf::from("/bin/false"),
+            )),
         };
 
         clear_stale_previews(&mut state);
@@ -7710,6 +8452,43 @@ mod tests {
         assert_eq!(filter[2].code, BPF_ALU | BPF_MOD | BPF_K);
         assert_eq!(filter[2].k, DEFAULT_FLOW_COUNT as u32);
         assert_eq!(filter[3].code, BPF_RET | BPF_A);
+
+        // Production uses sixteen receiver workers. The sixteen SPEC ports
+        // (flow offsets 8..23) must still land on sixteen distinct sockets;
+        // otherwise two full-rate flows could contend on one pinned worker.
+        let production = bpf_fanout_by_dst_port(4300, 16);
+        assert_eq!(production[2].k, 16);
+        let mut spec_workers: Vec<u32> = (8..24).map(|flow| flow % production[2].k).collect();
+        spec_workers.sort_unstable();
+        spec_workers.dedup();
+        assert_eq!(spec_workers.len(), 16);
+    }
+
+    #[test]
+    fn worker_cpu_order_prioritizes_big_cores_and_reserves_two_for_cuda() {
+        let topology: Vec<(usize, Option<(u64, u64)>)> = (0..20)
+            .map(|cpu| {
+                let big = matches!(cpu, 5..=9 | 15..=19);
+                (
+                    cpu,
+                    Some(if big {
+                        (3_900_000, 1024)
+                    } else {
+                        (2_808_000, 731)
+                    }),
+                )
+            })
+            .collect();
+        assert_eq!(
+            performance_balanced_cpu_order(&topology, 8),
+            vec![5, 6, 7, 8, 9, 15, 16, 17, 0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 18, 19]
+        );
+    }
+
+    #[test]
+    fn worker_cpu_order_preserves_unknown_noncontiguous_cpus() {
+        let topology = vec![(2, None), (6, None), (9, None)];
+        assert_eq!(performance_balanced_cpu_order(&topology, 8), vec![2, 6, 9]);
     }
 
     #[test]
@@ -8488,6 +9267,12 @@ fn main() -> std::io::Result<()> {
     }
     initial_config.display_points = args.waveform_points_clamped();
     sanitize_config(&mut initial_config);
+    let autocorrelation_controller = Arc::new(AutocorrelationController::new(args.measurement_root.clone()));
+    let time_capture_controller = Arc::new(TimeCaptureController::new(args.measurement_root.clone()));
+    let crosscorrelation_controller = Arc::new(CrossCorrelationController::new(
+        args.measurement_root.clone(),
+        args.crosscorrelation_sidecar.clone(),
+    ));
     let shared = Arc::new(Mutex::new(SharedState {
         config: initial_config,
         config_generation: 0,
@@ -8499,6 +9284,9 @@ fn main() -> std::io::Result<()> {
         spectrum_preview: SpecPreviewCapture::default(),
         raw_spec_capture: Arc::new(RawSpecCapture::default()),
         spec_stability_monitor: Arc::new(SpecStabilityMonitor::default()),
+        autocorrelation_controller,
+        time_capture_controller,
+        crosscorrelation_controller,
     }));
 
     let receiver_shared = shared.clone();
@@ -8527,6 +9315,8 @@ fn main() -> std::io::Result<()> {
         frame_kb: args.frame_kb,
         batch_size: args.batch_size,
         poll_timeout_ms: args.poll_timeout_ms,
+        measurement_root: args.measurement_root.clone(),
+        crosscorrelation_sidecar: args.crosscorrelation_sidecar.clone(),
     };
     thread::spawn(move || {
         if let Err(err) = run_receiver(receiver_args, receiver_shared) {

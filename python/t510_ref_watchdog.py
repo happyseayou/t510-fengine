@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resident Stage 34 external-reference safety watchdog.
+"""Resident current external-reference safety watchdog.
 
 The T510 board does not route LMK04828 STATUS_LD1/STATUS_LD2 into the FPGA.
 Consequently the PL scheduler cannot distinguish a healthy external 10 MHz
@@ -32,10 +32,10 @@ from typing import Any
 
 from python.t510_ams import aggregate_ams_snapshots, read_ams_snapshot
 from python.t510_clock import T510ClockController
+from python.t510_control import EXPECTED_CORE_VERSION
 
 
 SCHEMA_VERSION = 1
-EXPECTED_CORE_VERSION = 0x0001_0034
 DEFAULT_STATE_PATH = Path("/run/t510-ref-watchdog.json")
 DEFAULT_LOCK_PATH = Path("/run/t510-ref-watchdog.lock")
 DEFAULT_CONFIGURE_LOCK_PATH = Path("/run/t510-configure.lock")

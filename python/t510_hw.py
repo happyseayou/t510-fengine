@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot PYNQ bridge for the stateless Stage 34 Rust Board Agent.
+"""One-shot PYNQ bridge for the stateless current Rust Board Agent.
 
 The request is one JSON object on stdin. Exactly one JSON object is emitted on
 stdout; incidental PYNQ output is redirected to stderr.
@@ -58,6 +58,7 @@ CLOCK_DIAGNOSTIC_STATE_PATH = Path("/run/t510-clock-diagnostic.json")
 OUTPUT_LOAD_STATE_PATH = Path("/run/t510-output-load.json")
 RFDC_POWER_STATE_PATH = Path("/run/t510-rfdc-power.json")
 LAST_CONFIGURE_REQUEST_PATH = Path("/run/t510-last-configure.json")
+HOT_UPDATE_STATE_PATH = Path("/var/lib/t510/hot-update-state.json")
 REFERENCE_WATCHDOG_MAX_AGE_MS = 1_500
 CALIBRATION_OFFICIAL_MIN_DBFS = -40.0
 CALIBRATION_ENGINEERING_MIN_DBFS = -36.0
@@ -95,6 +96,8 @@ CLOCK_PROFILE_SYSREF_FREQUENCY_HZ = {
     "160m_10m_request_manual_clkin2": 10_000_000,
     "160m_10m_request_manual_clkin0": 10_000_000,
 }
+CONFIGURE_UPDATE_FULL = "full"
+CONFIGURE_UPDATE_CLOCK_PRESERVING = "clock_preserving"
 
 OUTPUT_LOAD_PRODUCTION = "PRODUCTION"
 OUTPUT_LOAD_ACTIVE = "ACTIVE"
@@ -106,14 +109,14 @@ RFDC_POWER_RESTORE_REQUIRED = "RESTORE_REQUIRED"
 RFDC_POWER_FAULT_LATCHED = "FAULT_LATCHED"
 
 
-def _extend_stage34c2r_clock_profiles() -> None:
+def _extend_diagnostic_clock_profiles() -> None:
     manifest_path = os.environ.get("T510_CLOCK_DIAGNOSTIC_PROFILE_MANIFEST", "").strip()
     if not manifest_path:
         return
     try:
         manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"cannot load Stage 34c-2R clock profile manifest: {exc}") from exc
+        raise RuntimeError(f"cannot load clock diagnostic clock profile manifest: {exc}") from exc
     for row in manifest.get("profiles", []):
         profile_id = str(row.get("profile_id", ""))
         if profile_id == "160m_5m_request_manual_clkin2" or (
@@ -124,10 +127,10 @@ def _extend_stage34c2r_clock_profiles() -> None:
             CLOCK_PROFILE_SYSREF_FREQUENCY_HZ[profile_id] = int(row["sysref_frequency_hz"])
 
 
-_extend_stage34c2r_clock_profiles()
-PL_SYSREF_DIAGNOSTIC_CORE_VERSION = 0x0001_0035
+_extend_diagnostic_clock_profiles()
+PL_SYSREF_CAPTURE_MIN_CORE_VERSION = 0x0001_0035
 PL_SYSREF_CAPTURE_OBSERVATION_SECONDS = 0.050
-# Final v35 phase-eye-frozen route: the PL SYSREF input IOB has +3.809 ns
+# Final phase-eye-frozen route: the PL SYSREF input IOB has +3.809 ns
 # setup and +0.830 ns hold slack.  Publish the smaller routed pin margin.
 PL_SYSREF_INPUT_MARGIN_NS: float | None = 0.830
 
@@ -307,6 +310,115 @@ def _production_clock_readback_errors(
     if int(live.get("pll2_lock", 0)) != 1:
         errors.append("PLL2_NOT_LOCKED")
     return errors
+
+
+def _persist_hot_update_state(state: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        **state,
+        "schema_version": 1,
+        "updated_at_unix_ms": time.time_ns() // 1_000_000,
+    }
+    _write_json_atomic(HOT_UPDATE_STATE_PATH, payload)
+    return payload
+
+
+def _clock_preserving_preflight(selection: dict[str, str]) -> dict[str, Any]:
+    """Prove the requested production clock is live without rewriting LMK.
+
+    A request-mode SYSREF left asserted by an interrupted prior CONFIGURE is
+    deasserted only after profile identity, selector GPIO and both PLL locks
+    are verified.  LMK RESET and the profile register table are never written.
+    """
+
+    from python.t510_clock import (  # Imported only inside the hardware guard.
+        LMK04828_PROFILE_SHA256,
+        T510ClockController,
+    )
+
+    expected_profile = selection["profile_id"]
+    expected_sha = str(LMK04828_PROFILE_SHA256.get(expected_profile, ""))
+    if not expected_sha:
+        raise HelperError(
+            "HOT_UPDATE_CLOCK_PROFILE_UNSUPPORTED",
+            f"clock-preserving update has no frozen SHA for {expected_profile}",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
+
+    clock = T510ClockController()
+    before = dict(clock.read_status(include_registers=True))
+
+    def errors(live: dict[str, Any]) -> list[str]:
+        result = _production_clock_readback_errors(selection, live)
+        if str(live.get("selected_ref", "")) != selection["driver_ref"]:
+            result.append("DRIVER_REFERENCE_READBACK_MISMATCH")
+        if str(live.get("profile_sha256", "")).lower() != expected_sha.lower():
+            result.append("PROFILE_SHA_READBACK_MISMATCH")
+        gpio = live.get("gpio", {})
+        if not isinstance(gpio, dict):
+            result.append("GPIO_READBACK_UNAVAILABLE")
+        else:
+            if int(gpio.get("reset", {}).get("value", -1)) != 0:
+                result.append("LMK_RESET_NOT_DEASSERTED")
+            expected_selector = (0, 0) if selection["driver_ref"] == "tcxo_10mhz" else (0, 1)
+            actual_selector = (
+                int(gpio.get("ref_select0", {}).get("value", -1)),
+                int(gpio.get("ref_select1", {}).get("value", -1)),
+            )
+            if actual_selector != expected_selector:
+                result.append(
+                    "REFERENCE_SELECTOR_MISMATCH:"
+                    f"expected={expected_selector}:actual={actual_selector}"
+                )
+        if live.get("errors"):
+            result.append(f"CLOCK_READ_ERRORS:{live.get('errors')}")
+        return result
+
+    before_errors = errors(before)
+    if before_errors:
+        raise HelperError(
+            "HOT_UPDATE_CLOCK_PREFLIGHT_FAILED",
+            "live LMK identity/lock gate rejected clock-preserving update",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={
+                "errors": before_errors,
+                "expected_profile_sha256": expected_sha,
+                "live": before,
+            },
+        )
+
+    sysref_deassert = None
+    if (
+        selection["sysref_policy"] == "mts_only"
+        and int(before.get("sysref_request_gpio", 0)) != 0
+    ):
+        sysref_deassert = clock.set_sysref(
+            False, mode=T510ClockController.SYSREF_REQUEST
+        )
+    after = dict(clock.read_status(include_registers=True))
+    after_errors = errors(after)
+    if int(after.get("sysref_request_gpio", -1)) != 0:
+        after_errors.append("SYSREF_REQUEST_NOT_DEASSERTED")
+    if after_errors:
+        raise HelperError(
+            "HOT_UPDATE_CLOCK_PREFLIGHT_FAILED",
+            "LMK changed or lost lock while normalizing SYSREF before hot update",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={
+                "errors": after_errors,
+                "expected_profile_sha256": expected_sha,
+                "before": before,
+                "after": after,
+                "sysref_deassert": sysref_deassert,
+            },
+        )
+    return {
+        "expected_profile_sha256": expected_sha,
+        "before": before,
+        "sysref_deassert": sysref_deassert,
+        "after": after,
+        "lmk_reset_written": False,
+        "profile_registers_written": False,
+    }
 
 
 def _mark_clock_production(
@@ -1163,7 +1275,7 @@ def _read_sysref_capture_evidence(
 ) -> dict[str, Any]:
     """Prove physical SYSREF activity from all three v35 capture domains."""
     status = dict(first_status if first_status is not None else core.read_status())
-    supported = int(status.get("core_version", 0)) >= PL_SYSREF_DIAGNOSTIC_CORE_VERSION
+    supported = int(status.get("core_version", 0)) >= PL_SYSREF_CAPTURE_MIN_CORE_VERSION
 
     def counts(value: dict[str, Any]) -> dict[str, int]:
         return {
@@ -1209,6 +1321,12 @@ def _status_snapshot(controller: FEngineController) -> dict[str, Any]:
     core = controller.require_core()
     status = core.read_status()
     core_version = f"0x{int(status.get('core_version', 0)):08x}"
+    digital_scaling = None
+    if int(status.get("core_version", 0)) == 0x00010036:
+        try:
+            digital_scaling = core.read_digital_scaling(require=False)
+        except Exception as exc:
+            digital_scaling = {"ok": False, "errors": [f"{type(exc).__name__}: {exc}"]}
     live_mts = _mts_summary(core, core_version=core_version)
     mts = (
         live_mts
@@ -1240,7 +1358,7 @@ def _status_snapshot(controller: FEngineController) -> dict[str, Any]:
         rfdc_contract = (
             core.read_rfdc_contract(require=False)
             if hasattr(core, "read_rfdc_contract")
-            else {"ok": False, "errors": ["Stage 34 RFDC contract readback unavailable"]}
+            else {"ok": False, "errors": ["current RFDC contract readback unavailable"]}
         )
     except Exception as exc:
         rfdc_contract = {
@@ -1281,6 +1399,7 @@ def _status_snapshot(controller: FEngineController) -> dict[str, Any]:
     return {
         "captured_at_unix_ms": time.time_ns() // 1_000_000,
         "core_version": core_version,
+        "digital_scaling": digital_scaling,
         "board_id": int(status.get("board_id", 0)),
         "streaming": streaming,
         "error_flags": int(status.get("error_flags", 0)),
@@ -1675,6 +1794,23 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
     _invalidate_output_load_state("CONFIGURE_STARTED")
     _invalidate_rfdc_power_state("CONFIGURE_STARTED")
     body = _body(request)
+    update_mode = str(body.get("update_mode", CONFIGURE_UPDATE_FULL)).strip().lower()
+    if update_mode not in (
+        CONFIGURE_UPDATE_FULL,
+        CONFIGURE_UPDATE_CLOCK_PRESERVING,
+    ):
+        raise HelperError(
+            "CONFIGURE_UPDATE_MODE_INVALID",
+            "update_mode must be full or clock_preserving",
+            exit_code=EXIT_INVALID,
+        )
+    hot_update = update_mode == CONFIGURE_UPDATE_CLOCK_PRESERVING
+    if hot_update and body.get("receiver_stream_accepting") is not False:
+        raise HelperError(
+            "HOT_UPDATE_RECEIVER_QUIESCENCE_REQUIRED",
+            "clock-preserving update requires receiver_stream_accepting=false",
+            exit_code=EXIT_STATE_CONFLICT,
+        )
     clock_selection = _production_clock_selection(body)
     bitstream = _bitstream(request)
     path = _verify_bitstream(bitstream, hash_file=True)
@@ -1726,18 +1862,84 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
         spec_destinations=spec_destinations,
         dac_channels=validation_dac_channels,
     )
+    hot_update_transaction_id = secrets.token_hex(16) if hot_update else None
+    hot_update_preflight = None
+    hot_update_state = None
+    if hot_update:
+        hot_update_state = _persist_hot_update_state(
+            {
+                "state": "PREFLIGHT_STARTED",
+                "transaction_id": hot_update_transaction_id,
+                "bitstream_id": bitstream["id"],
+                "bitstream_sha256": bitstream["sha256"],
+                "clock_reference": clock_selection["api_reference"],
+                "profile_id": clock_selection["profile_id"],
+                "receiver_stream_accepting": False,
+                "ready": False,
+            }
+        )
+        try:
+            hot_update_preflight = _clock_preserving_preflight(clock_selection)
+        except Exception as exc:
+            _persist_hot_update_state(
+                {
+                    **hot_update_state,
+                    "state": "FAILED",
+                    "failed_stage": "CLOCK_PREFLIGHT",
+                    "error": f"{type(exc).__name__}:{exc}",
+                    "ready": False,
+                }
+            )
+            raise
+        hot_update_state = _persist_hot_update_state(
+            {
+                **hot_update_state,
+                "state": "CLOCK_VERIFIED",
+                "preflight": hot_update_preflight,
+                "ready": False,
+            }
+        )
     controller = FEngineController(
         path,
         expected_core_version=int(str(bitstream["core_version"]), 0),
     )
     started = time.monotonic()
-    applied = controller.prepare(
-        config,
-        fresh_download=True,
-        program_dac=False,
-        clock_ref=clock_selection["driver_ref"],
-        clock_profile=clock_selection["profile_id"],
-    )
+    try:
+        if hot_update:
+            applied = controller.prepare_clock_preserving_hot_update(
+                config,
+                program_dac=False,
+                clock_ref=clock_selection["driver_ref"],
+                clock_profile=clock_selection["profile_id"],
+            )
+        else:
+            applied = controller.prepare(
+                config,
+                fresh_download=True,
+                program_dac=False,
+                clock_ref=clock_selection["driver_ref"],
+                clock_profile=clock_selection["profile_id"],
+            )
+    except Exception as exc:
+        if hot_update and hot_update_state is not None:
+            _persist_hot_update_state(
+                {
+                    **hot_update_state,
+                    "state": "FAILED",
+                    "failed_stage": "PL_RELOAD_OR_RFDC_MTS",
+                    "error": f"{type(exc).__name__}:{exc}",
+                    "ready": False,
+                }
+            )
+        raise
+    if hot_update and hot_update_state is not None:
+        hot_update_state = _persist_hot_update_state(
+            {
+                **hot_update_state,
+                "state": "RFDC_MTS_VALID",
+                "ready": False,
+            }
+        )
     _record_active_bitstream_state(path)
     applied_core = controller.require_core()
     applied_core_status = applied_core.read_status()
@@ -1748,6 +1950,17 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
     live_clock = dict(applied_core.read_lmk_status(include_registers=True))
     clock_errors = _production_clock_readback_errors(clock_selection, live_clock)
     if clock_errors:
+        if hot_update and hot_update_state is not None:
+            _persist_hot_update_state(
+                {
+                    **hot_update_state,
+                    "state": "FAILED",
+                    "failed_stage": "POST_UPDATE_CLOCK_READBACK",
+                    "error": f"clock_errors={clock_errors}",
+                    "live_clock": live_clock,
+                    "ready": False,
+                }
+            )
         raise RuntimeError(
             "production clock readback failed: "
             f"errors={clock_errors}; live={live_clock}"
@@ -1762,6 +1975,18 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
     )
     output_load = _mark_output_load_production()
     rfdc_power = _mark_rfdc_power_normal()
+    status = _status_snapshot(controller)
+    if hot_update and hot_update_state is not None:
+        hot_update_state = _persist_hot_update_state(
+            {
+                **hot_update_state,
+                "state": "READY",
+                "live_clock": live_clock,
+                "core_version": applied_core_version,
+                "board_id": int(applied["status"].get("board_id", 0)),
+                "ready": True,
+            }
+        )
     return {
         "bitstream": {
             "id": bitstream["id"],
@@ -1774,12 +1999,22 @@ def _configure(request: dict[str, Any]) -> dict[str, Any]:
         "board_id": int(applied["status"].get("board_id", 0)),
         "source_identity": applied["source_identity"],
         "clock_reference": clock_selection["api_reference"],
+        "update_mode": update_mode,
+        "hot_update": (
+            {
+                "transaction_id": hot_update_transaction_id,
+                "preflight": hot_update_preflight,
+                "journal": hot_update_state,
+            }
+            if hot_update
+            else None
+        ),
         "endpoints": applied["endpoint_readback"],
         "ocb1": ocb1,
         "clock_diagnostic": clock_diagnostic,
         "output_load": output_load,
         "rfdc_power": rfdc_power,
-        "status": _status_snapshot(controller),
+        "status": status,
     }
 
 
@@ -3285,8 +3520,48 @@ def _require_rfdc_power_start_authorization(
     return {**state, "live": live}
 
 
+def _require_hot_update_ready(bitstream: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        saved = json.loads(LAST_CONFIGURE_REQUEST_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    saved_body = saved.get("request", {}) if isinstance(saved, dict) else {}
+    if (
+        not isinstance(saved_body, dict)
+        or str(saved_body.get("update_mode", CONFIGURE_UPDATE_FULL)).lower()
+        != CONFIGURE_UPDATE_CLOCK_PRESERVING
+    ):
+        return None
+    try:
+        state = json.loads(HOT_UPDATE_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HelperError(
+            "HOT_UPDATE_NOT_READY",
+            "the last CONFIGURE was clock-preserving but its journal is unavailable",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={"path": str(HOT_UPDATE_STATE_PATH), "reason": str(exc)},
+        ) from exc
+    valid = (
+        isinstance(state, dict)
+        and state.get("state") == "READY"
+        and state.get("ready") is True
+        and str(state.get("bitstream_id")) == str(bitstream.get("id"))
+        and str(state.get("bitstream_sha256", "")).lower()
+        == str(bitstream.get("sha256", "")).lower()
+    )
+    if not valid:
+        raise HelperError(
+            "HOT_UPDATE_NOT_READY",
+            "clock-preserving CONFIGURE did not reach the READY checkpoint",
+            exit_code=EXIT_STATE_CONFLICT,
+            details={"hot_update": state},
+        )
+    return state
+
+
 def _start(request: dict[str, Any]) -> dict[str, Any]:
     body = _body(request)
+    hot_update = _require_hot_update_ready(_bitstream(request))
     controller = _controller(request)
     _expected_board(controller, body)
     ocb1 = _require_ocb1_start_authorization(controller, body)
@@ -3297,6 +3572,7 @@ def _start(request: dict[str, Any]) -> dict[str, Any]:
     status = controller.start_immediate()
     return {
         "started": True,
+        "hot_update": hot_update,
         "reference_watchdog": watchdog,
         "ocb1": ocb1,
         "clock_diagnostic": clock_diagnostic,
@@ -3326,6 +3602,7 @@ def _require_external_clock_for_scheduled_sync(
 
 def _sync_prepare(request: dict[str, Any]) -> dict[str, Any]:
     body = _body(request)
+    hot_update = _require_hot_update_ready(_bitstream(request))
     controller = _controller(request)
     _expected_board(controller, body)
     ocb1 = _require_ocb1_start_authorization(controller, body)
@@ -3348,6 +3625,7 @@ def _sync_prepare(request: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "prepared": True,
+        "hot_update": hot_update,
         "ocb1": ocb1,
         "clock_diagnostic": clock_diagnostic,
         "output_load": output_load,

@@ -30,6 +30,14 @@ pub enum ClockReference {
     OnboardTcxo,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigureUpdateMode {
+    #[default]
+    Full,
+    ClockPreserving,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
@@ -71,6 +79,10 @@ pub struct ConfigureRequest {
     pub board_id: u16,
     #[serde(default)]
     pub clock_reference: ClockReference,
+    #[serde(default)]
+    pub update_mode: ConfigureUpdateMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_stream_accepting: Option<bool>,
     pub profile: Profile,
     pub source: SourceIdentity,
     pub endpoints: Vec<Endpoint>,
@@ -157,7 +169,7 @@ fn default_clock_attempt_kind() -> String {
     "overlay_reload".into()
 }
 
-fn is_stage34c2_phase_profile(profile_id: &str) -> bool {
+fn is_phase_diagnostic_profile(profile_id: &str) -> bool {
     [
         "160m_10m_request_clkin2_sdclkout3_phase_",
         "160m_5m_request_clkin2_sdclkout3_phase_",
@@ -176,7 +188,7 @@ fn is_external_request_profile(profile_id: &str) -> bool {
     matches!(
         profile_id,
         "160m_10m_request_manual_clkin2" | "160m_5m_request_manual_clkin2"
-    ) || is_stage34c2_phase_profile(profile_id)
+    ) || is_phase_diagnostic_profile(profile_id)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -269,6 +281,13 @@ fn validate_mac(value: &str, field: &str) -> Result<(), String> {
 
 impl ConfigureRequest {
     pub fn validate(&self) -> Result<(), String> {
+        if self.update_mode == ConfigureUpdateMode::ClockPreserving
+            && self.receiver_stream_accepting != Some(false)
+        {
+            return Err(
+                "clock_preserving update_mode requires receiver_stream_accepting=false".into(),
+            );
+        }
         let legal_profile = matches!(
             (&self.profile.sample_rate_msps, &self.profile.mode),
             (160, ProfileMode::TimeOnly)
@@ -279,7 +298,7 @@ impl ConfigureRequest {
         );
         if !legal_profile {
             return Err(
-                "Stage 34 profile supports 160MS/s time_only/spec_only/time_spec and 320MS/s time_only/spec_only"
+                "current profile supports 160MS/s time_only/spec_only/time_spec and 320MS/s time_only/spec_only"
                     .into(),
             );
         }
@@ -454,9 +473,9 @@ impl ClockDiagnosticPrepareRequest {
             "160m_10m_request_manual_clkin0",
             "160m_5m_request_manual_clkin2",
         ];
-        let phase_profile = is_stage34c2_phase_profile(&self.profile_id);
+        let phase_profile = is_phase_diagnostic_profile(&self.profile_id);
         if !PROFILES.contains(&self.profile_id.as_str()) && !phase_profile {
-            return Err("profile_id is not a frozen Stage 34c-2 diagnostic profile".into());
+            return Err("profile_id is not a frozen clock diagnostic diagnostic profile".into());
         }
         let (center_min, center_max) = center_bounds_mhz(self.sample_rate_msps)
             .ok_or_else(|| "sample_rate_msps must be 160 or 320".to_string())?;

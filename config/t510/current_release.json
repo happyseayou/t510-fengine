@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "bitstream_id": "fengine-current",
+  "core_version": "0x00010036",
+  "bitstream_sha256": "e00c586a1d862d7c7af113361832a30093334493e49f943e3dd22bf44f950665",
+  "scaling_profile": "qmc16383of8192-pfb16-fft0556",
+  "pfb_output_shift": 16,
+  "coefficient_fraction_bits": 17,
+  "fft_shift": "0x0556",
+  "required_qmc_gain": 1.9998779296875
+}

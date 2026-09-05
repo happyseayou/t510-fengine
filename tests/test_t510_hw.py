@@ -267,11 +267,18 @@ class FakeController:
         program_dac=False,
         clock_ref="external_10mhz",
         clock_profile="160m_10m_cont_manual_clkin2",
+        force_clock_reconfigure=True,
+        require_clock_preserved=False,
     ):
         self.prepared = config
         self.prepare_clock = {
             "clock_ref": clock_ref,
             "clock_profile": clock_profile,
+        }
+        self.prepare_options = {
+            "fresh_download": fresh_download,
+            "force_clock_reconfigure": force_clock_reconfigure,
+            "require_clock_preserved": require_clock_preserved,
         }
         self.core.clock_ref = clock_ref
         self.core.clock_profile = clock_profile
@@ -292,6 +299,27 @@ class FakeController:
             },
             "endpoint_readback": [{"id": index} for index in range(24)],
         }
+
+    def prepare_clock_preserving_hot_update(
+        self,
+        config,
+        *,
+        program_dac=False,
+        clock_ref="external_10mhz",
+        clock_profile="160m_10m_cont_manual_clkin2",
+    ):
+        self.connect(download=True)
+        result = self.prepare(
+            config,
+            fresh_download=False,
+            program_dac=program_dac,
+            clock_ref=clock_ref,
+            clock_profile=clock_profile,
+            force_clock_reconfigure=False,
+            require_clock_preserved=True,
+        )
+        result["hot_update"] = {"mode": "clock_preserving"}
+        return result
 
     def read_dac_channels(self, *, center_mhz=None):
         configured = self.dac_channels
@@ -466,6 +494,12 @@ class T510HelperTests(unittest.TestCase):
         )
         self.ocb1_state.start()
         self.last_configure.start()
+        self.hot_update_state = mock.patch.object(
+            t510_hw,
+            "HOT_UPDATE_STATE_PATH",
+            Path(self.temp.name) / "hot-update-state.json",
+        )
+        self.hot_update_state.start()
         self.clock_state = mock.patch.object(
             t510_hw,
             "CLOCK_DIAGNOSTIC_STATE_PATH",
@@ -487,6 +521,7 @@ class T510HelperTests(unittest.TestCase):
         self._write_watchdog_state()
 
     def tearDown(self) -> None:
+        self.hot_update_state.stop()
         self.rfdc_power_state.stop()
         self.output_load_state.stop()
         self.clock_state.stop()
@@ -572,11 +607,103 @@ class T510HelperTests(unittest.TestCase):
         saved = json.loads(t510_hw.LAST_CONFIGURE_REQUEST_PATH.read_text())
         self.assertEqual(saved["request"]["clock_reference"], "onboard_tcxo")
 
+    @mock.patch.object(t510_hw, "_clock_preserving_preflight")
+    @mock.patch.object(t510_hw, "_record_active_bitstream_state")
+    @mock.patch.object(t510_hw, "FEngineController", FakeController)
+    def test_clock_preserving_configure_is_explicit_and_journaled(
+        self,
+        _record_active_bitstream_state,
+        preflight,
+    ) -> None:
+        preflight.return_value = {
+            "expected_profile_sha256": "a" * 64,
+            "lmk_reset_written": False,
+            "profile_registers_written": False,
+        }
+        body = configure_body()
+        body.update(
+            {
+                "clock_reference": "onboard_tcxo",
+                "update_mode": "clock_preserving",
+                "receiver_stream_accepting": False,
+            }
+        )
+        result = t510_hw._configure({"bitstream": self.proof, "request": body})
+        controller = FakeController.instances[-1]
+        self.assertEqual(result["update_mode"], "clock_preserving")
+        self.assertEqual(controller.prepare_options["fresh_download"], False)
+        self.assertEqual(controller.prepare_options["force_clock_reconfigure"], False)
+        self.assertEqual(controller.prepare_options["require_clock_preserved"], True)
+        self.assertEqual(result["hot_update"]["journal"]["state"], "READY")
+        self.assertTrue(result["hot_update"]["journal"]["ready"])
+        saved = json.loads(t510_hw.HOT_UPDATE_STATE_PATH.read_text())
+        self.assertEqual(saved["state"], "READY")
+        self.assertFalse(saved["preflight"]["lmk_reset_written"])
+
+    def test_clock_preserving_configure_requires_receiver_quiescence(self) -> None:
+        body = configure_body()
+        body["update_mode"] = "clock_preserving"
+        with self.assertRaises(t510_hw.HelperError) as caught:
+            t510_hw._configure({"bitstream": self.proof, "request": body})
+        self.assertEqual(
+            caught.exception.code, "HOT_UPDATE_RECEIVER_QUIESCENCE_REQUIRED"
+        )
+
     def test_production_clock_selection_rejects_unknown_reference(self) -> None:
         with self.assertRaisesRegex(t510_hw.HelperError, "clock_reference"):
             t510_hw._production_clock_selection(
                 {"clock_reference": "mystery_reference"}
             )
+
+    def test_clock_preserving_preflight_deasserts_only_verified_request_sysref(self) -> None:
+        expected_sha = (
+            "a8504d384354610f8f130b1cda1a446bcdfb25bf8c4bb689fbb58adefe5e88e2"
+        )
+
+        class FakeClock:
+            SYSREF_REQUEST = "request"
+            instance = None
+
+            def __init__(self):
+                self.sysref = 1
+                self.set_calls = []
+                type(self).instance = self
+
+            def read_status(self, *, include_registers=False):
+                return {
+                    "profile_id": "160m_10m_request_manual_clkin0",
+                    "profile_sha256": expected_sha,
+                    "clock_reference": "onboard_tcxo",
+                    "selected_ref": "tcxo_10mhz",
+                    "sysref_policy": "mts_only",
+                    "sysref_request_gpio": self.sysref,
+                    "configured": True,
+                    "pll1_lock": 1,
+                    "pll2_lock": 1,
+                    "errors": [],
+                    "gpio": {
+                        "reset": {"value": 0},
+                        "ref_select0": {"value": 0},
+                        "ref_select1": {"value": 0},
+                    },
+                }
+
+            def set_sysref(self, enabled, *, mode):
+                self.set_calls.append((enabled, mode))
+                self.sysref = int(bool(enabled))
+                return {"enabled": bool(enabled), "mode": mode}
+
+        selection = t510_hw._production_clock_selection(
+            {"clock_reference": "onboard_tcxo"}
+        )
+        with mock.patch(
+            "python.t510_clock.T510ClockController", FakeClock
+        ):
+            result = t510_hw._clock_preserving_preflight(selection)
+        self.assertEqual(FakeClock.instance.set_calls, [(False, "request")])
+        self.assertEqual(result["after"]["sysref_request_gpio"], 0)
+        self.assertFalse(result["lmk_reset_written"])
+        self.assertFalse(result["profile_registers_written"])
 
     @mock.patch.object(t510_hw, "FEngineController", FakeController)
     def test_status_is_one_snapshot_of_cumulative_registers(self) -> None:

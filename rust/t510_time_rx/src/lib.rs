@@ -1,3 +1,7 @@
+pub mod autocorrelation;
+pub mod crosscorrelation;
+pub mod time_capture;
+
 use serde::{Deserialize, Serialize};
 
 pub const MAGIC: u32 = 0x5435_3130;

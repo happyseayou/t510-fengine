@@ -182,6 +182,51 @@ Allan deviation、相位和相干度。正式任务仍必须同时核对 receive
 drop、gap、FIR saturation、XFFT overflow与backpressure计数；监视器结果不能替代
 这些硬门禁。
 
-Stage 34d的正式任务使用100 ms或1 s的`sample0`分桶，一次累计八路自相关和28对
+currentd的正式任务使用100 ms或1 s的`sample0`分桶，一次累计八路自相关和28对
 复互相关，并通过`/api/measure/spec-stability/data`导出TIS1。该功能只增加receiver
 旁路统计和证据格式；FPGA header、payload、端口映射与包长完全不变。
+
+## 全频段自相关采集器
+
+当前 receiver 在同一个 receiver 和同一个 `PACKET_FANOUT` 消费组内增加全频段自相关采集，
+不打开第二个 UDP/AF_PACKET 消费者，也不改变上述线格式。已通过 SPEC 合同校验的包在各自
+256-bin block worker 内累加全部 8 路 IQ16；网页 preview 仍是独立的低频率显示旁路。
+
+- 武装：`POST /api/measure/autocorrelation`
+- 状态：`GET /api/measure/autocorrelation/status`
+- 显式中止：`POST /api/measure/autocorrelation/stop`
+- 数据根目录：receiver 参数 `--measurement-root`，每个合法 `scan_id` 只能新建一次，禁止覆盖。
+
+请求固定包含 `scan_id`、`tuning_id`、`duration_seconds`、`native_bucket_ms`、
+`sample_rate_msps=320`、`center_mhz`，并可带 `expected_fft_shift` 和字符串 metadata。
+原生桶支持10/20/50/100 ms；正式首选10 ms。开始和结束都使用共同的 `sample0` 桶边界，
+主机时间只记录控制事件。越过正式 end 后仍观察8个谱帧组才封口，保证最后一个桶也受有界
+重排窗保护。
+
+落盘为标准 Zarr v2 directory store：A层保存原生桶 `mean_power_count2`，B层保存100 ms的
+`mean_i_count_100ms`、`mean_q_count_100ms`、`m2_power_count4_100ms`和
+`clip_count_100ms`。`n_valid`、逐桶质量JSONL、gap range、chunk journal、逐文件SHA-256
+和最终manifest同时保存。完整扫描即使整桶无有效帧，也会在质量账本中写出
+`valid_frames=0`和实际`missing_frames`；缺失浮点数据使用Zarr NaN fill且`N_valid=0`，
+永远不填功率零。已经提交质量行后才到达的duplicate/late包另存到只追加的
+`arrival_events.jsonl`，按`bucket_index, block_index`与逐桶质量行合并，不能静默丢弃。
+原生和100 ms质量行还保存桶内`spec_status_flags_or`，用于按曝光桶审计PFB/XFFT状态。
+遇到writer队列溢出、配置身份变化或显式中止时，采集标为failed并封存未完成manifest；
+不得把中断segment静默续写成同一数据集。
+
+## 当前数值身份
+
+`CORE_VERSION=0x00010036` 保持本文 IQ16、UDP header 和 payload 布局。`fft_shift`
+仍是实际 XFFT 缩放调度 `0x0556`，不能用它编码 PFB 增益。新 core 的 8-tap 系数仍为
+Q1.17，FIR 累加器在 IQ16 对称舍入前右移 16 位；相对 v34，此处电压尺度增加 2 倍。
+RFDC 八路 QMC 使用增益 `16383/8192`、禁用相位校正、零偏置，并通过 TILE 事件更新。
+
+仅凭 UDP 包不能确定 RFDC QMC 设置。新采集 manifest 必须保存配置时及采集前后实际回读
+的 `digital_scaling`，包括 core、profile、八路 QMC、PFB 输出移位和 FFT 调度；身份缺失、
+前后变化或不匹配时不得按 current 数值身份解释。`python/t510_scaling.py` 提供严格校验及
+receiver 现有字符串 metadata 字段的序列化，不改变线上数据包版本。
+
+和历史基线比较时，TIME 电压增益为 `g=16383/8192`，SPEC 电压增益为 `2g`。
+电压除以对应增益，功率除以增益平方，ADC 对复可见度除以两路增益乘积；功率的 Allan
+方差除以增益四次方。已除以均值平方的归一化 Allan 方差不再次缩放。保留原始 count
+与统一尺度两套结果，尺度变化本身不构成科学性能改善。
