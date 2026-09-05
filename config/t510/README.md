@@ -1,44 +1,16 @@
-# T510 current release catalog
+# T510 current 配置
 
-`config.example.json` is the finalized catalog for the Stage 35 hardware
-baseline: the verified Stage 34 4096-channel, 8-tap F-engine. Its bitstream
-SHA-256 is
-`c21d93f5ea71e9ac17a4448cff138a8faaf9c7347d879be919b680d196b8a5be`, and
-its fixed ADC/DAC MTS targets are `416/112`. The current release is installed
-directly below `/opt/t510-agent/current`; versioned release directories are no
-longer retained. Replacing these values with a zero
-SHA, `-1` targets, or null campaign proof returns the catalog to its deliberate
-fail-closed sentinel state; the Board Agent and publish script reject it.
+`current_release.json` 是 current 固件身份和数字尺度的唯一元数据源。
+`config.example.json` 只包含 `fengine-current`，并按 `onboard_tcxo` 与
+`external_10mhz` 分别保存 MTS 资格。
 
-CONFIGURE accepts an explicit `clock_reference`. Use `onboard_tcxo` for the
-Stage 35 single-board noise study with external 10 MHz and PPS disconnected;
-use `external_10mhz` when a common external reference is intentionally present.
-The two request examples select `onboard_tcxo` explicitly. Omitting the field
-keeps the historical `external_10mhz` default for API compatibility.
-
-For a new candidate, run both required board campaigns and then finalize the
-catalog again:
+当前板载 TCXO 资格来自已封存的完整 40＋40 MTS 和五模式门禁。外部参考在完成同一
+标准流程以及 scheduled-PPS 门禁前保持 `pending`；Agent 会拒绝该参考源的 CONFIGURE。
 
 ```bash
-python3 scripts/pynq_t510_mts_campaign.py --phase discovery \
-  --output build/board/latest/evidence/mts_discovery.json
-python3 scripts/pynq_t510_mts_campaign.py --phase fixed \
-  --discovery-json build/board/latest/evidence/mts_discovery.json \
-  --output build/board/latest/evidence/mts_fixed.json
-python3 scripts/t510_finalize_catalog.py \
-  --discovery-json build/board/latest/evidence/mts_discovery.json \
-  --fixed-json build/board/latest/evidence/mts_fixed.json
+python3 scripts/t510_current_release.py --require-reference onboard_tcxo
+python3 scripts/t510_release_qualification.py --reference external_10mhz --dry-run
 ```
 
-The finalizer requires 20 RFDC-reset, 10 overlay-reload, and 10 LMK-reload
-cycles in each phase, all 40 passing. It derives ADC/DAC targets from the
-discovery maxima plus 20/16, records a hash of both reports, and writes the
-bitstream SHA into this single catalog. Both reports carry that SHA, and the
-finalizer rejects evidence captured with any other candidate bitstream. In
-every fixed cycle all four tiles of each converter kind must report the same
-final latency. The RFDC driver applies correction delay in one
-decimation/interpolation-factor step, so a final latency on either side of
-`Target_Latency` is accepted only within half one factor. Raw correction
-offsets remain evidence but are not RF phase; phase repeatability is verified
-by the separate RF loopback/TG gate. The retired targets 230/336 are explicitly
-rejected.
+新的硬件资格必须通过 `scripts/t510_release_qualification.py` 完整提交。该队列会调用
+MTS、catalog finalizer、安装和五个 60 秒模式门禁；外部参考还会追加 scheduled-PPS 门禁。

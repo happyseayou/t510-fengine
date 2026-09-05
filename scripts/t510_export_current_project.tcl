@@ -7,6 +7,24 @@ set build_dir [file normalize [file join $repo_root build vivado latest]]
 set expected_build_dir [file normalize [file join $repo_root build vivado latest]]
 set report_dir [file join $build_dir reports]
 set overlay_dir [file join $build_dir overlay]
+set metadata_path [file join $repo_root config t510 current_release.json]
+
+proc json_scalar {text key} {
+    set pattern [format {"%s"[[:space:]]*:[[:space:]]*("[^"]*"|[-+0-9.eE]+)} $key]
+    if {![regexp $pattern $text -> value]} {
+        error "current release metadata is missing $key"
+    }
+    return [string trim $value \" ]
+}
+if {![file exists $metadata_path]} {
+    error "current release metadata not found: $metadata_path"
+}
+set metadata_fh [open $metadata_path r]
+set metadata_json [read $metadata_fh]
+close $metadata_fh
+foreach key {core_version scaling_profile pfb_output_shift coefficient_fraction_bits fft_shift required_qmc_gain} {
+    set release($key) [json_scalar $metadata_json $key]
+}
 
 if {[current_project -quiet] eq ""} {
     error "current T510 release export requires the existing demo-ant project to be open"
@@ -103,7 +121,12 @@ if {[file exists $impl_log]} {
 set manifest [file join $overlay_dir t510_fengine.manifest.txt]
 set fh [open $manifest w]
 puts $fh "release=latest"
-puts $fh "core_version=0x00010034"
+puts $fh "core_version=$release(core_version)"
+puts $fh "scaling_profile=$release(scaling_profile)"
+puts $fh "pfb_output_shift=$release(pfb_output_shift)"
+puts $fh "coefficient_fraction_bits=$release(coefficient_fraction_bits)"
+puts $fh "fft_shift=$release(fft_shift)"
+puts $fh "required_qmc_gain=$release(required_qmc_gain)"
 puts $fh "project=$project_name"
 puts $fh "project_dir=$project_dir"
 puts $fh "part=[get_property PART [current_project]]"
@@ -121,7 +144,7 @@ close $fh
 set summary [file join $report_dir build_summary.txt]
 set fh [open $summary w]
 puts $fh "release=latest"
-puts $fh "core_version=0x00010034"
+puts $fh "core_version=$release(core_version)"
 puts $fh "project=$project_name"
 puts $fh "project_dir=$project_dir"
 puts $fh "part=[get_property PART [current_project]]"

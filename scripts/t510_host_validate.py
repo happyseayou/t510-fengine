@@ -66,6 +66,23 @@ def _delta(after: dict[str, Any], before: dict[str, Any], key: str) -> int:
     return int(after.get(key, 0) or 0) - int(before.get(key, 0) or 0)
 
 
+def _worker_capacity_errors(stats: dict[str, Any], active_flow_count: int) -> list[str]:
+    """Validate the port-fanout workers used by the currently active flows.
+
+    The receiver intentionally supports more UDP flows than workers.  Its BPF
+    fanout maps destination ports modulo ``worker_count``, so 24 TIME_SPEC
+    flows on the frozen 16-worker service should activate 16 workers.
+    """
+    worker_count = int(stats.get("worker_count", 0) or 0)
+    active_worker_count = int(stats.get("active_worker_count", 0) or 0)
+    if worker_count <= 0:
+        return ["CAPTURE_WORKER_CAPACITY_INVALID"]
+    expected_active_workers = min(active_flow_count, worker_count)
+    if active_worker_count < expected_active_workers:
+        return ["ACTIVE_WORKERS_LOW"]
+    return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="current T510 release Rust receiver/NIC gate")
     parser.add_argument("--sample-rate-msps", type=int, choices=(160, 320), required=True)
@@ -161,8 +178,7 @@ def main() -> int:
         errors.append("FLOW_COUNT_MISMATCH")
     if int(stats_after.get("flow_count", -1)) != 24:
         errors.append("CAPTURE_FLOW_CAPACITY_MISMATCH")
-    if int(stats_after.get("active_worker_count", 0)) < flow_count:
-        errors.append("ACTIVE_WORKERS_LOW")
+    errors.extend(_worker_capacity_errors(stats_after, flow_count))
     if needs_time and rates["time_pps"] < pps_min:
         errors.append("TIME_PPS_LOW")
     if needs_spec and rates["spec_pps"] < pps_min:
@@ -258,7 +274,15 @@ def main() -> int:
         "mode": args.mode,
         "center_mhz": args.center_mhz,
         "seconds": elapsed,
-        "required": {"time_flows": time_flows, "spec_flows": spec_flows, "pps_min": pps_min, "payload_mbps_min": payload_min},
+        "required": {
+            "time_flows": time_flows,
+            "spec_flows": spec_flows,
+            "active_workers": min(
+                flow_count, int(stats_after.get("worker_count", 0) or 0)
+            ),
+            "pps_min": pps_min,
+            "payload_mbps_min": payload_min,
+        },
         "rates": rates,
         "stats_before": stats_before,
         "stats_after": stats_after,

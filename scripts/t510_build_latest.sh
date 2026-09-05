@@ -10,7 +10,8 @@ BUILD_DIR="${ROOT}/build/vivado/latest"
 REPORT_DIR="${BUILD_DIR}/reports"
 OVERLAY_DIR="${BUILD_DIR}/overlay"
 CURRENT_OVERLAY="${ROOT}/overlay"
-PREVIOUS_OVERLAY="${ROOT}/.overlay.previous"
+METADATA="${ROOT}/config/t510/current_release.json"
+CATALOG="${ROOT}/config/t510/config.example.json"
 
 if [[ "$#" -ne 0 ]]; then
   echo "usage: t510_build_latest.sh" >&2
@@ -24,8 +25,11 @@ test -f "${OVERLAY_DIR}/t510_fengine_rfdc.xci"
 test -f "${OVERLAY_DIR}/t510_fengine.manifest.txt"
 test -d "${REPORT_DIR}"
 grep -qx 'release=latest' "${OVERLAY_DIR}/t510_fengine.manifest.txt"
-grep -qx 'core_version=0x00010034' "${OVERLAY_DIR}/t510_fengine.manifest.txt"
 grep -qx 'project=demo-ant' "${OVERLAY_DIR}/t510_fengine.manifest.txt"
+
+python3 "${ROOT}/scripts/t510_current_release.py" \
+  --metadata "${METADATA}" --catalog "${CATALOG}" \
+  --bitstream "${OVERLAY_DIR}/t510_fengine.bit" --allow-unqualified >/dev/null
 
 python3 "${ROOT}/scripts/t510_verify_rfdc_artifacts.py" \
   --xci "${OVERLAY_DIR}/t510_fengine_rfdc.xci" \
@@ -50,23 +54,9 @@ esac
 trap 'rm -rf -- "${NEXT_OVERLAY}"' EXIT
 cp -a "${OVERLAY_DIR}/." "${NEXT_OVERLAY}/"
 
-if [[ -e "${PREVIOUS_OVERLAY}" || -L "${PREVIOUS_OVERLAY}" ]]; then
-  echo "refusing to replace unexpected temporary path: ${PREVIOUS_OVERLAY}" >&2
-  exit 1
-fi
-if [[ -e "${CURRENT_OVERLAY}" || -L "${CURRENT_OVERLAY}" ]]; then
-  mv -- "${CURRENT_OVERLAY}" "${PREVIOUS_OVERLAY}"
-fi
-if ! mv -- "${NEXT_OVERLAY}" "${CURRENT_OVERLAY}"; then
-  if [[ -e "${PREVIOUS_OVERLAY}" || -L "${PREVIOUS_OVERLAY}" ]]; then
-    mv -- "${PREVIOUS_OVERLAY}" "${CURRENT_OVERLAY}"
-  fi
-  exit 1
-fi
+rm -rf -- "${CURRENT_OVERLAY}"
+mv -- "${NEXT_OVERLAY}" "${CURRENT_OVERLAY}"
 NEXT_OVERLAY="${ROOT}/.overlay.next.completed"
-if [[ -e "${PREVIOUS_OVERLAY}" || -L "${PREVIOUS_OVERLAY}" ]]; then
-  rm -rf -- "${PREVIOUS_OVERLAY}"
-fi
 
 echo "Verified latest export and updated current overlay: ${CURRENT_OVERLAY}"
 echo "Current build reports: ${REPORT_DIR}"

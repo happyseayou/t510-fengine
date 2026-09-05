@@ -1,0 +1,232 @@
+{
+  "bitstream_id": "fengine-current",
+  "board_id": 1,
+  "clock_reference": "onboard_tcxo",
+  "endpoints": [
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4300,
+      "enabled": true,
+      "endpoint_id": 0,
+      "source_port": 4000,
+      "stream": "TIME"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4301,
+      "enabled": true,
+      "endpoint_id": 1,
+      "source_port": 4001,
+      "stream": "TIME"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4302,
+      "enabled": true,
+      "endpoint_id": 2,
+      "source_port": 4002,
+      "stream": "TIME"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4303,
+      "enabled": true,
+      "endpoint_id": 3,
+      "source_port": 4003,
+      "stream": "TIME"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4304,
+      "enabled": true,
+      "endpoint_id": 4,
+      "source_port": 4004,
+      "stream": "TIME"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4305,
+      "enabled": true,
+      "endpoint_id": 5,
+      "source_port": 4005,
+      "stream": "TIME"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4306,
+      "enabled": true,
+      "endpoint_id": 6,
+      "source_port": 4006,
+      "stream": "TIME"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4307,
+      "enabled": true,
+      "endpoint_id": 7,
+      "source_port": 4007,
+      "stream": "TIME"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4308,
+      "enabled": false,
+      "endpoint_id": 8,
+      "source_port": 4008,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4309,
+      "enabled": false,
+      "endpoint_id": 9,
+      "source_port": 4009,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4310,
+      "enabled": false,
+      "endpoint_id": 10,
+      "source_port": 4010,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4311,
+      "enabled": false,
+      "endpoint_id": 11,
+      "source_port": 4011,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4312,
+      "enabled": false,
+      "endpoint_id": 12,
+      "source_port": 4012,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4313,
+      "enabled": false,
+      "endpoint_id": 13,
+      "source_port": 4013,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4314,
+      "enabled": false,
+      "endpoint_id": 14,
+      "source_port": 4014,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4315,
+      "enabled": false,
+      "endpoint_id": 15,
+      "source_port": 4015,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4316,
+      "enabled": false,
+      "endpoint_id": 16,
+      "source_port": 4016,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4317,
+      "enabled": false,
+      "endpoint_id": 17,
+      "source_port": 4017,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4318,
+      "enabled": false,
+      "endpoint_id": 18,
+      "source_port": 4018,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4319,
+      "enabled": false,
+      "endpoint_id": 19,
+      "source_port": 4019,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4320,
+      "enabled": false,
+      "endpoint_id": 20,
+      "source_port": 4020,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4321,
+      "enabled": false,
+      "endpoint_id": 21,
+      "source_port": 4021,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4322,
+      "enabled": false,
+      "endpoint_id": 22,
+      "source_port": 4022,
+      "stream": "SPEC"
+    },
+    {
+      "destination_ip": "10.0.1.16",
+      "destination_mac": "4c:bb:47:2b:42:6e",
+      "destination_port": 4323,
+      "enabled": false,
+      "endpoint_id": 23,
+      "source_port": 4023,
+      "stream": "SPEC"
+    }
+  ],
+  "profile": {
+    "center_mhz": 200.0,
+    "mode": "time_only",
+    "sample_rate_msps": 320
+  },
+  "source": {
+    "ip": "10.0.1.1",
+    "mac": "02:00:00:00:00:01"
+  }
+}

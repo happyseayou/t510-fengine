@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Eight-lane DAC-ADC fractional-bin gate for the fixed Stage 34 PFB."""
+"""Eight-lane DAC-ADC fractional-bin gate for the current fixed PFB."""
 
 from __future__ import annotations
 

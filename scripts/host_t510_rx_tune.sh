@@ -65,9 +65,8 @@ for index in $(seq 0 $((PORT_COUNT - 1))); do
 done
 
 if command -v iptables >/dev/null 2>&1; then
-  # Normalize upgrades to one current raw-table hook.  Older receiver releases
-  # used stage-numbered chains; leaving those hooks installed makes the active
-  # host configuration depend on deployment history.
+  # Normalize upgrades to one current raw-table hook. Remove every retired
+  # T510 receiver chain without encoding historical release names.
   while read -r legacy_chain; do
     while iptables -t raw -C PREROUTING -j "${legacy_chain}" 2>/dev/null; do
       iptables -t raw -D PREROUTING -j "${legacy_chain}"
@@ -76,7 +75,7 @@ if command -v iptables >/dev/null 2>&1; then
     iptables -t raw -X "${legacy_chain}"
   done < <(
     iptables -t raw -S |
-      awk '$1 == "-N" && $2 ~ /^T510_STAGE[0-9][[:alnum:]_]*_RX$/ { print $2 }'
+      awk '$1 == "-N" && $2 ~ /^T510_[[:alnum:]_]*_RX$/ && $2 != "T510_RX" { print $2 }'
   )
 
   iptables -t raw -N T510_RX 2>/dev/null || true

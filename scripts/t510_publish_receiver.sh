@@ -9,6 +9,7 @@ STAGE="${ROOT}/build/receiver/latest"
 REMOTE_STAGE="/home/astrolab/.cache/t510/latest"
 RELEASE_FILES=(
   t510_time_rx
+  t510_xcorr_cuda.cu
   host_t510_rx_tune.sh
   t510_host_validate.py
   t510-time-rx.service
@@ -44,13 +45,14 @@ install -d "${STAGE}"
 # tree; never erase long-task evidence while deploying a capture-side fix.
 find "${STAGE}" -mindepth 1 -maxdepth 1 ! -name evidence -exec rm -rf -- {} +
 install -m 0755 "${ROOT}/rust/t510_time_rx/target/aarch64-unknown-linux-musl/release/t510_time_rx" "${STAGE}/t510_time_rx"
+install -m 0644 "${ROOT}/rust/t510_time_rx/cuda/t510_xcorr_cuda.cu" "${STAGE}/t510_xcorr_cuda.cu"
 install -m 0755 "${ROOT}/scripts/host_t510_rx_tune.sh" "${STAGE}/host_t510_rx_tune.sh"
 install -m 0755 "${ROOT}/scripts/t510_host_validate.py" "${STAGE}/t510_host_validate.py"
 install -m 0644 "${ROOT}/deploy/t510/t510-time-rx.service" "${STAGE}/t510-time-rx.service"
 install -m 0644 "${ROOT}/deploy/t510/t510-rx-tune.service" "${STAGE}/t510-rx-tune.service"
 install -m 0644 "${ROOT}/deploy/t510/90-t510-rx.conf" "${STAGE}/90-t510-rx.conf"
 install -m 0755 "${ROOT}/deploy/t510/install-receiver.sh" "${STAGE}/install-receiver.sh"
-(cd "${STAGE}" && sha256sum t510_time_rx host_t510_rx_tune.sh t510_host_validate.py t510-time-rx.service t510-rx-tune.service 90-t510-rx.conf install-receiver.sh > SHA256SUMS)
+(cd "${STAGE}" && sha256sum t510_time_rx t510_xcorr_cuda.cu host_t510_rx_tune.sh t510_host_validate.py t510-time-rx.service t510-rx-tune.service 90-t510-rx.conf install-receiver.sh > SHA256SUMS)
 
 file "${STAGE}/t510_time_rx" | grep -q 'ARM aarch64'
 if readelf -l "${STAGE}/t510_time_rx" | grep -q 'Requesting program interpreter'; then
@@ -71,9 +73,12 @@ done
 # build/receiver/latest/evidence contains multi-gigabyte campaign PCAPs.  It is
 # intentionally local evidence, not a receiver release artifact.
 rsync -a -e "ssh ${SSH_OPTS}" "${release_paths[@]}" "${TARGET}:${REMOTE_STAGE}/"
+ssh ${SSH_OPTS} "${TARGET}" "'/usr/local/cuda-13.0/bin/nvcc' -std=c++17 -O3 -lineinfo -arch=native '${REMOTE_STAGE}/t510_xcorr_cuda.cu' -o '${REMOTE_STAGE}/t510_xcorr_cuda' && chmod 0755 '${REMOTE_STAGE}/t510_xcorr_cuda' && cd '${REMOTE_STAGE}' && sha256sum t510_time_rx t510_xcorr_cuda t510_xcorr_cuda.cu host_t510_rx_tune.sh t510_host_validate.py t510-time-rx.service t510-rx-tune.service 90-t510-rx.conf install-receiver.sh > SHA256SUMS"
 remote_install="bash '${REMOTE_STAGE}/install-receiver.sh' '${REMOTE_STAGE}'"
 if [[ -n "${T510_RX_SUDO_PASSWORD:-}" ]]; then
   printf '%s\n' "${T510_RX_SUDO_PASSWORD}" | ssh ${SSH_OPTS} "${TARGET}" "sudo -S ${remote_install}"
+elif ssh ${SSH_OPTS} "${TARGET}" "sudo -n true" >/dev/null 2>&1; then
+  ssh ${SSH_OPTS} "${TARGET}" "sudo -n ${remote_install}"
 else
   ssh -t ${SSH_OPTS} "${TARGET}" "sudo ${remote_install}"
 fi

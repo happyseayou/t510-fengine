@@ -28,7 +28,7 @@ SKIP_DIR_NAMES = {
 SKIP_DIR_PREFIXES = (".xsim",)
 SKIP_FILES = {
     "for_me.md",
-    "STAGE35_RADIO_ASTRONOMY_NOISE_STUDY_PLAN.md",
+    "reports/stages/archive/35/35_radio_astronomy_noise_study_plan.md",
     "gridstack-all.js",
     "echarts-all.js",
 }

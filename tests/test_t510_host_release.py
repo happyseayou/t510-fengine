@@ -20,7 +20,8 @@ class T510HostReleaseTests(unittest.TestCase):
 
     def test_tuning_normalizes_legacy_raw_table_hooks(self) -> None:
         tune = (ROOT / "scripts/host_t510_rx_tune.sh").read_text(encoding="utf-8")
-        self.assertIn("/^T510_STAGE[0-9][[:alnum:]_]*_RX$/", tune)
+        self.assertIn('/^T510_[[:alnum:]_]*_RX$/', tune)
+        self.assertIn('$2 != "T510_RX"', tune)
         self.assertIn(
             'iptables -t raw -D PREROUTING -j "${legacy_chain}"', tune
         )
@@ -43,9 +44,18 @@ class T510HostReleaseTests(unittest.TestCase):
         self.assertNotIn("/releases/${RELEASE_ID}", installer)
         self.assertIn('CURRENT="${INSTALL_ROOT}/current"', installer)
         self.assertIn('cp -aL "${SOURCE}" "${NEXT}"', installer)
-        self.assertIn('rm -rf -- "${PREVIOUS}" "${RELEASES}"', installer)
+        self.assertIn('"${INSTALL_ROOT}/.current.previous" "${INSTALL_ROOT}/releases"', installer)
         self.assertIn("/current/host_t510_rx_tune.sh", unit)
         self.assertIn("--queue-count 20 enp1s0f0np0", unit)
+
+    def test_standard_qualification_is_complete_and_fail_safe(self) -> None:
+        source = (ROOT / "scripts/t510_release_qualification.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('for phase in ("discovery", "fixed")', source)
+        self.assertIn('for rate, mode in MODES', source)
+        self.assertIn('if self.args.reference == "external_10mhz"', source)
+        self.assertIn('cleanup_errors=self.safe_failure()', source)
 
     def test_board_release_is_latest_only(self) -> None:
         publisher = (ROOT / "scripts/t510_publish_board.sh").read_text(
@@ -62,7 +72,9 @@ class T510HostReleaseTests(unittest.TestCase):
         self.assertIn('cp -aL "${SOURCE}" "${NEXT}"', installer)
         self.assertIn("global_pl_state.json", installer)
         self.assertIn('state["bitfile_name"] = str(bit_path)', installer)
-        self.assertIn('rm -rf -- "${PREVIOUS}" "${RELEASES}"', installer)
+        self.assertIn('"${INSTALL_ROOT}/.current.previous" "${INSTALL_ROOT}/releases"', installer)
+        self.assertIn('--require-reference onboard_tcxo', installer)
+        self.assertIn('fengine-current', installer)
 
     def test_release_profiles_use_capture_nic_mac(self) -> None:
         for name in (
