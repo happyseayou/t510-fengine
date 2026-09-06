@@ -839,3 +839,18 @@ GPU或科学数据；验证器改为解析实际查询参数键，并等待移�
 ```text
 /var/lib/t510/stage35/explorer/temperature-overlay-20260906-135101/
 ```
+
+### 8.18 复可见度幅相图例绑定
+
+`F-engine复可见度的幅度和相位`中，每个“ADC对＋频点”的幅度、可靠相位和灰色弱相关相位
+现使用同一Plotly图例组，图例点击按组切换。真实Chrome在ADC0–ADC1、128.593750 MHz上
+验证：点击前幅度和灰色相位各有4096点；点击一次后两条非空曲线均变为`legendonly`，再次
+点击后均恢复。该频点的可靠相位trace为0点，其状态不影响实际显示。
+
+通用验证器固化在`scripts/t510_visibility_legend_verify.py`，以后必须实际点击图例并检查非空
+幅相trace，不能只检查静态配置。8035上线后服务active、零异常重启，8036保持健康。证据
+目录的87个文件已逐项通过SHA-256复核：
+
+```text
+/var/lib/t510/stage35/explorer/legend-group-fix-20260906-140512/
+```

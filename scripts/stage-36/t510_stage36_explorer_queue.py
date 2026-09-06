@@ -189,6 +189,7 @@ class Queue:
                     self.args.helper_dir / "t510_stage35_simple_prepare.py",
                     self.args.helper_dir / "t510_stage35_time_long_prepare.py",
                     self.args.helper_dir / "t510_stage35_simple_math.py",
+                    self.args.legend_verifier, self.args.chromedriver,
                     self.args.plotly, self.args.stage35_config,
                     self.args.capture_queue / "evidence/phase_00_telemetry.json",
                     self.args.capture_queue / "queue_state.json"]
@@ -479,6 +480,14 @@ class Queue:
                 errors.append("candidate static bundle contains an external URL")
             if errors:
                 raise RuntimeError(str(errors))
+            completed = subprocess.run([
+                sys.executable, str(self.args.legend_verifier), "--url", base,
+                "--chromium", str(self.args.chromium),
+                "--chromedriver", str(self.args.chromedriver),
+                "--output", str(self.evidence / "visibility_legend_verification.json"),
+            ], text=True, capture_output=True, timeout=300, check=False)
+            if completed.returncode:
+                raise RuntimeError(f"visibility legend browser gate failed: {completed.stderr}")
             write_json(self.evidence / "browser_verification.json", {
                 "status": "PASS", "url": url, "selected_adcs": [0, 1],
                 "selected_pairs": [[0, 1], [2, 3]], "selected_bins": [3134, 3182, 3328],
@@ -653,6 +662,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage35-config", type=Path,
                         default=Path("/var/lib/t510/stage35/explorer/current/app_config.json"))
     parser.add_argument("--chromium", type=Path, default=Path("/snap/bin/chromium"))
+    parser.add_argument("--chromedriver", type=Path,
+                        default=Path("/snap/chromium/current/usr/lib/chromium-browser/chromedriver"))
+    parser.add_argument("--legend-verifier", type=Path,
+                        default=Path(__file__).resolve().parents[1] / "t510_visibility_legend_verify.py")
     parser.add_argument("--candidate-port", type=int, default=18036)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--lock", type=Path, default=Path("/run/lock/t510-stage36-explorer.lock"))

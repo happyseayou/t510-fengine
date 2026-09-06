@@ -102,6 +102,8 @@ def main() -> int:
     parser.add_argument("--capture-queue", type=Path, required=True)
     parser.add_argument("--server", type=Path, required=True)
     parser.add_argument("--javascript", type=Path, required=True)
+    parser.add_argument("--legend-verifier", type=Path, required=True)
+    parser.add_argument("--chromedriver", type=Path, required=True)
     parser.add_argument("--chromium", type=Path, default=Path("/snap/bin/chromium"))
     parser.add_argument("--python", type=Path, required=True)
     parser.add_argument("--candidate-port", type=int, default=18037)
@@ -125,7 +127,8 @@ def main() -> int:
             telemetry = args.capture_queue / "evidence/phase_01_telemetry.json"
             queue_state = args.capture_queue / "queue_state.json"
             for path in (args.source_app, args.source_config, telemetry, queue_state,
-                         args.server, args.javascript, args.chromium, args.python):
+                         args.server, args.javascript, args.legend_verifier,
+                         args.chromium, args.chromedriver, args.python):
                 if not path.exists():
                     raise RuntimeError(f"missing input: {path}")
             product = temperature_product(telemetry, queue_state)
@@ -172,7 +175,8 @@ def main() -> int:
                 "temperature_mean_c_range": [min(temp["mean_c"]), max(temp["mean_c"])],
             })
 
-            profile = root / "chromium-profile"
+            profile = Path.home() / "snap/chromium/common/t510-stage35-browser" / root.name
+            profile.parent.mkdir(parents=True, exist_ok=True)
             browser = subprocess.run([
                 str(args.chromium), "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
                 "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader",
@@ -185,6 +189,11 @@ def main() -> int:
             if browser.returncode or "PL温度来自同一正式窗口" not in browser.stdout or "加载失败：" in browser.stdout:
                 raise RuntimeError("browser did not render the PL temperature overlay")
             write_json(evidence_dir / "browser_verification.json", {"status": "PASS"})
+            checked([
+                str(args.python), str(args.legend_verifier), "--url", base,
+                "--chromium", str(args.chromium), "--chromedriver", str(args.chromedriver),
+                "--output", str(evidence_dir / "visibility_legend_verification.json"),
+            ], commands, timeout=300)
             process.terminate(); process.wait(timeout=10); process = None
 
             install = Path("/opt/t510-stage35-explorer")

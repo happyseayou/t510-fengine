@@ -30,6 +30,12 @@ class Stage35TemperatureOverlayTests(unittest.TestCase):
         self.assertIn('staged = install / ".current.next"', source)
         self.assertNotIn("previous", source)
         self.assertIn('request_json("http://127.0.0.1:8036/healthz")', source)
+        self.assertIn('"visibility_legend_verification.json"', source)
+
+    def test_visibility_legend_binds_amplitude_and_phase(self) -> None:
+        source = JAVASCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(source.count("legendgroup: legendGroup"), 3)
+        self.assertIn('groupclick: "togglegroup"', source)
 
 
 if __name__ == "__main__":

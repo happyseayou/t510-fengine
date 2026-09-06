@@ -757,9 +757,11 @@ async function visibilityFigure(card, datasets, id, heading, meaning) {
       const frequency = row.global_bin === null ? "" : ` · ${rfLabel(row)}`;
       const label = `${subject}${frequency}`;
       const color = groupColor(subjectIndex, frequencyIndex);
+      const legendGroup = `visibility-${subjectIndex}-${frequencyIndex}`;
       const amplitude = row.amplitude || row.amplitude_count2 || data.amplitude_adu2;
       traces.push(pointTrace(x, amplitude, `${label} · 幅度`, color, {
-        xaxis: "x", yaxis: "y", customdata: amplitude.map((v, n) => [subject, row.global_bin,
+        xaxis: "x", yaxis: "y", legendgroup: legendGroup,
+        customdata: amplitude.map((v, n) => [subject, row.global_bin,
           row.rf_mhz, n, v, row.phase_deg[n], row.gamma[n], row.phase_reliable[n]])}));
       const reliableX = [], reliableY = [], weakX = [], weakY = [];
       row.phase_deg.forEach((value, n) => {
@@ -767,10 +769,10 @@ async function visibilityFigure(card, datasets, id, heading, meaning) {
         else { weakX.push(x[n]); weakY.push(value); }
       });
       traces.push(pointTrace(reliableX, reliableY, `${label} · 相位`, color,
-        {xaxis: "x2", yaxis: "y2", showlegend: false,
+        {xaxis: "x2", yaxis: "y2", showlegend: false, legendgroup: legendGroup,
           marker: {color, opacity: .72, symbol: "triangle-up-open"}}));
       traces.push(pointTrace(weakX, weakY, `${label} · 弱相关相位（不可解释）`, "#aeb5bc",
-        {xaxis: "x2", yaxis: "y2", showlegend: false,
+        {xaxis: "x2", yaxis: "y2", showlegend: false, legendgroup: legendGroup,
           marker: {size: 4, color: "#aeb5bc", opacity: .52, symbol: "triangle-up-open"}}));
     });
   });
@@ -793,6 +795,7 @@ async function visibilityFigure(card, datasets, id, heading, meaning) {
     yaxis: {title: {text: `复可见度幅度 (${unit})`}, gridcolor: "#e4e8ec", domain: [.57, 1], automargin: true},
     xaxis2: {title: {text: xTitle}, gridcolor: "#e4e8ec", domain: [0, 1], automargin: true},
     yaxis2: {title: {text: "相位 (度)"}, gridcolor: "#e4e8ec", range: [-180, 180], domain: [0, .4], automargin: true},
+    legend: {...baseLayout(heading, xTitle, "").legend, groupclick: "togglegroup"},
     height: 620,
   });
   bindClick(figure.plot, figure.calculated, p => {

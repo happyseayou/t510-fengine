@@ -38,6 +38,7 @@ class Stage36ExplorerTests(unittest.TestCase):
         self.assertIn('self.phase("time_temperature", self.prepare_temperature)', source)
         self.assertIn('shutil.copytree(self.args.static_source / "katex"', source)
         self.assertIn("KaTeX did not render formulas", source)
+        self.assertIn('"visibility_legend_verification.json"', source)
 
     def test_static_page_uses_local_fixed_assets_and_comparison(self) -> None:
         html = (WEB / "index.html").read_text(encoding="utf-8")
@@ -60,12 +61,18 @@ class Stage36ExplorerTests(unittest.TestCase):
         self.assertNotIn("previous", source)
         self.assertIn('systemctl", "stop", "t510-stage36-explorer.service"', source)
         self.assertIn('parser.add_argument("--katex-dir"', source)
+        self.assertIn('parser.add_argument("--legend-verifier"', source)
         self.assertIn('class="katex"', source)
 
     def test_local_katex_bundle_is_complete(self) -> None:
         self.assertGreater((KATEX / "katex.min.js").stat().st_size, 200_000)
         self.assertGreater((KATEX / "katex.min.css").stat().st_size, 20_000)
         self.assertGreaterEqual(len(list((KATEX / "fonts").glob("KaTeX_*"))), 60)
+
+    def test_visibility_legend_binds_amplitude_and_phase(self) -> None:
+        source = (WEB / "stage36-app.js").read_text(encoding="utf-8")
+        self.assertEqual(source.count("legendgroup: legendGroup"), 3)
+        self.assertIn('groupclick: "togglegroup"', source)
 
 
 if __name__ == "__main__":

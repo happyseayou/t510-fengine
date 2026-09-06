@@ -102,6 +102,8 @@ def main() -> int:
     parser.add_argument("--server", type=Path, required=True)
     parser.add_argument("--javascript", type=Path, required=True)
     parser.add_argument("--katex-dir", type=Path, required=True)
+    parser.add_argument("--legend-verifier", type=Path, required=True)
+    parser.add_argument("--chromedriver", type=Path, required=True)
     parser.add_argument("--chromium", type=Path, default=Path("/snap/bin/chromium"))
     parser.add_argument("--python", type=Path, required=True)
     parser.add_argument("--candidate-port", type=int, default=18037)
@@ -126,7 +128,8 @@ def main() -> int:
             queue_state = args.capture_queue / "queue_state.json"
             for path in (args.source_app, args.source_config, telemetry, queue_state,
                          args.server, args.javascript, args.katex_dir / "katex.min.js",
-                         args.katex_dir / "katex.min.css", args.chromium, args.python):
+                         args.katex_dir / "katex.min.css", args.legend_verifier,
+                         args.chromium, args.chromedriver, args.python):
                 if not path.exists():
                     raise RuntimeError(f"missing input: {path}")
             product = temperature_product(telemetry, queue_state)
@@ -188,6 +191,11 @@ def main() -> int:
             write_json(evidence_dir / "browser_verification.json", {
                 "status": "PASS", "katex_nodes": browser.stdout.count('class="katex"'),
             })
+            checked([
+                str(args.python), str(args.legend_verifier), "--url", base,
+                "--chromium", str(args.chromium), "--chromedriver", str(args.chromedriver),
+                "--output", str(evidence_dir / "visibility_legend_verification.json"),
+            ], commands, timeout=300)
             process.terminate(); process.wait(timeout=10); process = None
 
             install = Path("/opt/t510-stage36-explorer")
