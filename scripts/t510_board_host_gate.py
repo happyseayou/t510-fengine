@@ -220,7 +220,10 @@ def _current_metadata_errors(
 ) -> list[str]:
     errors: list[str] = []
     clock = snapshot.get("clock", {})
-    if clock.get("clock_reference") != reference:
+    expected_clock_reference = (
+        "onboard_tcxo" if reference == "onboard_tcxo" else "external_gpsdo"
+    )
+    if clock.get("clock_reference") != expected_clock_reference:
         errors.append("CLOCK_REFERENCE_MISMATCH")
     if reference == "onboard_tcxo":
         if clock.get("profile_id") != EXPECTED_CLOCK_PROFILE:

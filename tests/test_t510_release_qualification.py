@@ -10,11 +10,16 @@ import unittest
 from unittest.mock import Mock,patch
 from scripts import pynq_t510_mts_campaign as mts
 from scripts import t510_release_qualification as queue
+from scripts import t510_scheduled_pps_gate as scheduled
 from scripts import t510_board_host_gate as board_gate
 from scripts import t510_host_validate as host_gate
 from python.t510_scaling import scaling_identity,qmc_settings
 
 class QualificationTests(unittest.TestCase):
+    def test_scheduled_gate_reserves_time_for_stateless_helper(self):
+        self.assertEqual(queue.SCHEDULED_PPS_LEAD,30)
+        self.assertEqual(scheduled.DEFAULT_LEAD_PPS,30)
+
     @staticmethod
     def stopped_snapshot():
         tiles=[{'kind':kind,'tile':tile,'pll_lock_status':1,'sample_rate_hz':3_840_000_000.0}
@@ -151,10 +156,104 @@ class QualificationTests(unittest.TestCase):
             self.assertIn('failure_mute',names)
             self.assertEqual(json.loads((q.evidence/'queue-state.json').read_text())['status'],'FAIL')
 
+    def test_failure_mute_sets_remote_pythonpath(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            q=queue.QualificationQueue(argparse.Namespace(
+                evidence=root/'evidence',package=root,queue_id='external-failure',
+                reference='external_10mhz',agent_base='http://board'))
+            q.http=Mock(side_effect=ConnectionError('agent stopped'))
+            q.remote=Mock()
+            self.assertEqual(q.safe_failure(),[])
+            argv=q.remote.call_args.args[1]
+            self.assertIn(f'PYTHONPATH={q.remote_package}',argv)
+
+    def test_reused_discovery_requires_full_matching_proof(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); proof=root/'discovery.json'
+            value={'ok':True,'classification':'T510_MTS_DISCOVERY_PASS',
+                   'completed_cycles':40,'clock_ref':'external_10mhz',
+                   'bitstream_sha256':'a'*64,'core_version':'0x00010036'}
+            proof.write_text(json.dumps(value))
+            q=queue.QualificationQueue(argparse.Namespace(
+                evidence=root/'evidence',package=root,queue_id='external-resume',
+                reference='external_10mhz',agent_base='http://board',
+                reuse_discovery=proof))
+            q.state.update(bitstream_sha256='a'*64,core_version='0x00010036')
+            source, report=q.validated_reuse_discovery()
+            self.assertEqual(source,proof.resolve());self.assertEqual(report,value)
+            value['completed_cycles']=39;proof.write_text(json.dumps(value))
+            with self.assertRaisesRegex(RuntimeError,'failed validation'):
+                q.validated_reuse_discovery()
+
+    def test_reused_fixed_requires_matching_discovery_targets(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); discovery=root/'discovery.json'; fixed=root/'fixed.json'
+            common={'ok':True,'completed_cycles':40,'clock_ref':'external_10mhz',
+                    'bitstream_sha256':'a'*64,'core_version':'0x00010036'}
+            discovery_value={**common,'classification':'T510_MTS_DISCOVERY_PASS',
+                             'recommended_fixed_targets':{'adc':468,'dac':108}}
+            fixed_value={**common,'classification':'T510_MTS_FIXED_PASS',
+                         'targets':{'adc':468,'dac':108},'fixed_repeatability':{'ok':True}}
+            discovery.write_text(json.dumps(discovery_value));fixed.write_text(json.dumps(fixed_value))
+            q=queue.QualificationQueue(argparse.Namespace(
+                evidence=root/'evidence',package=root,queue_id='external-fixed-resume',
+                reference='external_10mhz',agent_base='http://board',
+                reuse_discovery=discovery,reuse_fixed=fixed))
+            q.state.update(bitstream_sha256='a'*64,core_version='0x00010036')
+            reused_discovery=q.validated_reuse_discovery()
+            source, report=q.validated_reuse_fixed(reused_discovery)
+            self.assertEqual(source,fixed.resolve());self.assertEqual(report,fixed_value)
+            fixed_value['targets']['dac']=109;fixed.write_text(json.dumps(fixed_value))
+            with self.assertRaisesRegex(RuntimeError,'failed validation'):
+                q.validated_reuse_fixed(reused_discovery)
+
+    def test_external_clock_reference_maps_to_agent_status_contract(self):
+        snapshot=self.stopped_snapshot()
+        snapshot['clock'].update(clock_reference='external_gpsdo',
+                                 profile_id='160m_10m_cont_manual_clkin2')
+        snapshot['mts']={'adc':{'target_latency':468},'dac':{'target_latency':108}}
+        self.assertEqual(board_gate._current_metadata_errors(
+            snapshot,reference='external_10mhz',targets={'adc':468,'dac':108}),[])
+
+    def test_reused_matrix_requires_all_five_matching_passes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            q=queue.QualificationQueue(argparse.Namespace(
+                evidence=root/'evidence',package=root,queue_id='external-matrix-resume',
+                reference='external_10mhz',agent_base='http://board',
+                reuse_matrix_dir=root))
+            q.state['core_version']='0x00010036'
+            for rate,mode in queue.MODES:
+                value={'ok':True,'classification':f'T510_{rate}MSPS_{mode.upper()}_BOARD_HOST_PASS',
+                       'sample_rate_msps':rate,'mode':mode,'seconds':60.0,'errors':[],
+                       'board_idle':{'core_version':'0x00010036',
+                                     'clock':{'clock_reference':'external_gpsdo'}}}
+                (root/f'{rate}_{mode}_gate.json').write_text(json.dumps(value))
+            self.assertEqual(set(q.validated_reuse_matrix()),
+                             {f'{rate}_{mode}' for rate,mode in queue.MODES})
+            bad=root/'160_time_only_gate.json';value=json.loads(bad.read_text())
+            value['seconds']=59.9;bad.write_text(json.dumps(value))
+            with self.assertRaisesRegex(RuntimeError,'failed validation'):
+                q.validated_reuse_matrix()
+
     def test_existing_queue_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);p=root/'queue-state.json';p.write_text('{"status":"running"}')
             q=queue.QualificationQueue(argparse.Namespace(evidence=root,package=root,queue_id='stage36-test'))
             with self.assertRaisesRegex(RuntimeError,'evidence already exists'):q.run()
             self.assertEqual(p.read_text(),'{"status":"running"}')
+
+    def test_preflight_failure_does_not_touch_hardware(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            q=queue.QualificationQueue(argparse.Namespace(
+                evidence=root/'evidence',package=root,queue_id='bad-preflight'))
+            q.validate_package=Mock(side_effect=RuntimeError('bad package'))
+            q.safe_failure=Mock()
+            with self.assertRaisesRegex(RuntimeError,'bad package'):
+                q.run()
+            q.safe_failure.assert_not_called()
+            state=json.loads((q.evidence/'queue-state.json').read_text())
+            self.assertEqual(state['cleanup_errors'],[])
 if __name__=='__main__':unittest.main()

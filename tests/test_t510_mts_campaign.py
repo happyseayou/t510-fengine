@@ -30,7 +30,7 @@ class _Tile:
 
 class _Core:
     PRODUCTION_CLOCK_REF = "external_10mhz"
-    PRODUCTION_CLOCK_PROFILE = "160m_10m_continuous"
+    PRODUCTION_CLOCK_PROFILE = "160m_10m_cont_manual_clkin2"
 
     def __init__(self, *, clock_configured: bool = True) -> None:
         self.events: list[str] = []
@@ -57,6 +57,12 @@ class _Core:
 
 
 class T510MtsCampaignTests(unittest.TestCase):
+    def test_external_campaign_uses_canonical_clkin2_profile(self):
+        self.assertEqual(
+            CAMPAIGN._campaign_clock_profile(_Core(), "external_10mhz"),
+            "160m_10m_cont_manual_clkin2",
+        )
+
     def test_bootstrap_preserves_clock_before_download_without_tile_reset(self):
         events=[]; ctrl=Mock(); core=ctrl.require_core.return_value
         ctrl.connect.side_effect=lambda **kw: events.append('download')

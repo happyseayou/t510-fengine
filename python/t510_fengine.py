@@ -547,7 +547,7 @@ class T510FEngine:
         "gps_10mhz": 2,
     }
     PRODUCTION_CLOCK_REF = "external_10mhz"
-    PRODUCTION_CLOCK_PROFILE = "160m_10m_continuous"
+    PRODUCTION_CLOCK_PROFILE = "160m_10m_cont_manual_clkin2"
     PRODUCTION_SYNC_MODE = "external_pps"
     RFDC_ADC_ANALOG_SAMPLE_RATE_HZ = 3_840_000_000
     RFDC_DAC_ANALOG_SAMPLE_RATE_HZ = 3_840_000_000

@@ -52,10 +52,16 @@ class T510HostReleaseTests(unittest.TestCase):
         source = (ROOT / "scripts/t510_release_qualification.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn('for phase in ("discovery", "fixed")', source)
+        self.assertIn('phases = ("discovery", "fixed")', source)
+        self.assertIn("for phase in phases", source)
+        self.assertIn("validated_reuse_discovery", source)
+        self.assertIn("validated_reuse_fixed", source)
         self.assertIn('for rate, mode in MODES', source)
         self.assertIn('if self.args.reference == "external_10mhz"', source)
-        self.assertIn('cleanup_errors=self.safe_failure()', source)
+        self.assertIn(
+            'self.safe_failure() if self.state.get("hardware_owned") else []',
+            source,
+        )
 
     def test_board_release_is_latest_only(self) -> None:
         publisher = (ROOT / "scripts/t510_publish_board.sh").read_text(

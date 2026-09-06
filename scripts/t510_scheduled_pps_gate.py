@@ -14,6 +14,7 @@ import urllib.request
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_LEAD_PPS = 30
 
 
 def _http(base: str, path: str, body: dict | None = None) -> dict:
@@ -35,7 +36,7 @@ def main() -> int:
     parser.add_argument("--board-id", type=int, default=1)
     parser.add_argument("--generation", type=int, default=lambda: int(time.time()))
     parser.add_argument("--epoch-tai", type=int, required=True)
-    parser.add_argument("--lead-pps", type=int, default=5)
+    parser.add_argument("--lead-pps", type=int, default=DEFAULT_LEAD_PPS)
     parser.add_argument("--signal-chain-tag", type=lambda value: int(value, 0), required=True)
     parser.add_argument("--observation-tag", type=lambda value: int(value, 0), default=0)
     parser.add_argument("--schedule-tag", type=lambda value: int(value, 0), default=0)

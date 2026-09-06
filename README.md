@@ -8,8 +8,7 @@ RFDC QMC 与 PFB 舍入前应用已记录的数字尺度。
 
 current 身份的唯一机器可读来源是
 [`config/t510/current_release.json`](config/t510/current_release.json)。catalog 只有
-`fengine-current`：板载 TCXO 已资格通过，外部 10 MHz＋PPS 尚未执行，因此保持
-`pending`，Agent 会拒绝用它正式采流。
+`fengine-current`：板载 TCXO 与外部 10 MHz＋PPS 均已通过资格验证。
 
 ## 稳定入口
 

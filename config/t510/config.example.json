@@ -69,7 +69,54 @@
           }
         },
         "external_10mhz": {
-          "status": "pending"
+          "status": "qualified",
+          "mts_adc_target_latency": 468,
+          "mts_dac_target_latency": 108,
+          "campaign": {
+            "discovery": {
+              "rfdc_reset": 20,
+              "overlay_reload": 10,
+              "lmk_reload": 10,
+              "passed": 40
+            },
+            "fixed": {
+              "rfdc_reset": 20,
+              "overlay_reload": 10,
+              "lmk_reload": 10,
+              "passed": 40
+            },
+            "observed_adc_max": 432,
+            "observed_dac_max": 72,
+            "adc_margin": 20,
+            "dac_margin": 16,
+            "dac_nominal_target": 108,
+            "dac_period_branch_ceiling": 72,
+            "dac_alignment_mode": "deterministic_target",
+            "dac_deterministic_target_feasible": true,
+            "dac_deterministic_infeasible_witness": [],
+            "lmk_settle_seconds": {
+              "discovery": 3.0,
+              "fixed": 3.0
+            },
+            "latency_quantum": 12,
+            "strict_headroom_quanta": 1,
+            "dac_sysref_t1_period": 720,
+            "frozen_evidence_bounds": {
+              "adc": {
+                "min": 372,
+                "max": 432
+              },
+              "dac": {
+                "min": 32,
+                "max": 72
+              }
+            },
+            "frozen_fixed_targets": {
+              "adc": 468,
+              "dac": 108
+            },
+            "evidence_sha256": "afb0298861bfc42fd203ca39fadf8b3ad01353df333d163c1da471befe8b7846"
+          }
         }
       },
       "profiles": [

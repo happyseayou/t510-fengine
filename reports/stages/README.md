@@ -8,7 +8,7 @@ Stage 00–33 已移入 [`archive/00-33/`](archive/00-33/)，Stage 34 已移入
 当前正式产品为 `CORE_VERSION=0x00010036`，bitstream SHA-256 为
 `e00c586a1d862d7c7af113361832a30093334493e49f943e3dd22bf44f950665`。Stage 36 R10 的
 板载 TCXO MTS 40/40、固定目标 40/40、五个全速模式和短幅值门禁均为 PASS；900 秒科学
-采集尚未启动。外部 10 MHz＋PPS 标准资格保持 pending。
+采集尚未启动。外部 10 MHz＋PPS 标准资格也已通过。
 
 ## Stage 35
 

@@ -413,6 +413,8 @@ catalog 与 current overlay。板上原 bitstream SHA 相同，因此只更新 P
 正式窗口错误为零；结束状态为停流、DAC enable mask 0、core v36、QMC/PFB 尺度回读一致。
 8035 历史页面继续返回 HTTP 200，旧 Stage 35 数据未移动。
 
-外部 10 MHz＋PPS 标准队列 dry-run 已通过，包含独立 discovery/fixed 40＋40、五模式 60 秒和
-160 TIME+SPEC scheduled-PPS 门禁。该硬件流程本轮未接线、未执行，catalog 状态保持
-`external_10mhz=pending`。Stage 36 的 900 秒科学采集也未启动。
+2026-09-06 外部 10 MHz＋PPS 标准资格完成：CLKin2 双 PLL 锁定且 PPS 连续增长；discovery
+与 fixed 均为 40/40 PASS，冻结目标为 ADC 468、DAC 108；五个合法全速模式各 60 秒均为
+PASS。160 TIME+SPEC scheduled-PPS 门禁实际预留 40 个 PPS，TIME/SPEC 首包 sample0 均为
+32788，连续 10 秒 host 门禁无错误。结束时已停流、DAC enable mask 为 0，catalog 状态为
+`external_10mhz=qualified`。Stage 36 的 900 秒科学采集尚未启动。

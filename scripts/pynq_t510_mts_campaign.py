@@ -128,7 +128,7 @@ def _reset_rfdc_tiles(core: Any) -> list[dict[str, Any]]:
 
 def _campaign_clock_profile(core: Any, clock_ref: str) -> str:
     return ("160m_10m_request_manual_clkin0" if clock_ref == "tcxo_10mhz"
-            else core.PRODUCTION_CLOCK_PROFILE)
+            else "160m_10m_cont_manual_clkin2")
 
 
 def _run_mts(core: Any, *, center_mhz: float, adc_target: int, dac_target: int,
@@ -215,10 +215,17 @@ def _condition_initial_hardware(
     core = _reload_overlay(controller)
     resets = _reset_rfdc_tiles(core) if initialize_clock else []
     time.sleep(max(float(settle_seconds), 0.0))
-    return {"ok": True, "counted_as_campaign_cycle": False,
-            "clock": clock, "clock_initialized": initialize_clock,
-            "shutdown_calls": shutdown, "reset_calls": resets,
-            "rfdc_contract": core.read_rfdc_contract(require=True)}
+    result = {"ok": True, "counted_as_campaign_cycle": False,
+              "clock": clock, "clock_initialized": initialize_clock,
+              "shutdown_calls": shutdown, "reset_calls": resets,
+              "rfdc_contract": core.read_rfdc_contract(require=True)}
+    if clock_ref == "external_10mhz":
+        pps = core.wait_for_pps_increment(timeout=3.0)
+        status = pps.get("status", {})
+        result["external_pps"] = pps
+        if not pps.get("ok") or not bool(status.get("pps_recent", 0)):
+            raise RuntimeError(f"EXTERNAL_PPS_NOT_READY: {pps}")
+    return result
 
 
 def _reload_lmk(controller: Any, *, clock_ref: str, settle_seconds: float) -> dict[str, Any]:
