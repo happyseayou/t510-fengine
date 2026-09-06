@@ -414,7 +414,7 @@ class Queue(base.QueueRunner):
         if not integrity["ok"]:
             raise RuntimeError(f"TIME raw witness integrity failed: {integrity['errors']}")
         sys.path.insert(0, str(self.args.helper_dir))
-        from t510_time_capture_verify import crop_continuous_pcap, verify_pcap
+        from t510_stage35_time_verify import crop_continuous_pcap, verify_pcap
         result = {"superset": identity, "crop": crop_continuous_pcap(superset, cropped),
                   "verified": verify_pcap(cropped), "receiver_integrity": integrity,
                   "phase": phase["label"]}
@@ -686,6 +686,185 @@ class Queue(base.QueueRunner):
             self.save(); self.event("queue_failed", error=self.state["error"])
             return 1
 
+    def resume_after_time_witness_import_failure(self) -> int:
+        """Resume the one registered phase-0 failure without recapturing TIME900.
+
+        The original receiver task and 52 ms PCAP completed before the bad import
+        was evaluated.  This path first proves those immutable products, records
+        the missing post-window snapshot as unavailable, and then continues at
+        phase 1.  It deliberately refuses every other failure shape.
+        """
+        registered_error = "ModuleNotFoundError: No module named 't510_time_capture_verify'"
+        if not self.state_path.is_file():
+            raise RuntimeError(f"resume state does not exist: {self.state_path}")
+        loaded = json.loads(self.state_path.read_text(encoding="utf-8"))
+        if loaded.get("format") != FORMAT or loaded.get("queue_id") != self.args.queue_id:
+            raise RuntimeError("resume queue identity mismatch")
+        if loaded.get("status") != "failed" or loaded.get("error", {}).get("message") != registered_error:
+            raise RuntimeError("queue did not stop at the registered TIME witness import failure")
+        phases = loaded.get("phases", [])
+        if len(phases) != 13 or phases[0].get("status") != "failed":
+            raise RuntimeError("registered resume requires failed phase 0 and the complete 13-phase plan")
+        if phases[0].get("error") != registered_error:
+            raise RuntimeError("phase-0 error does not match the registered failure")
+        if any(phase.get("status") != "pending" for phase in phases[1:]):
+            raise RuntimeError("registered resume requires every later phase to remain pending")
+        if loaded.get("source_commit") != "5d9316a":
+            raise RuntimeError("registered failure source identity mismatch")
+
+        self.state = loaded
+        self.phases = phases
+        self.telemetry_since_seq = 0
+        self.telemetry_epoch_id = None
+        recovery_committed = False
+        try:
+            usage = shutil.disk_usage(self.args.measurement_root)
+            errors: list[str] = []
+            if usage.free < self.args.minimum_free_bytes:
+                errors.append(f"free bytes {usage.free} below {self.args.minimum_free_bytes}")
+            for phase in phases[1:]:
+                if (self.args.measurement_root / phase["scan_id"]).exists():
+                    errors.append(f"unregistered later scan already exists: {phase['scan_id']}")
+            board, receiver = self.board(), self.receiver()
+            if board.get("streaming"):
+                errors.append("board is streaming")
+            if float(receiver.get("stats", {}).get("packets_per_sec", 0.0) or 0.0):
+                errors.append("receiver reports live packets")
+            for endpoint in ACTIVE_TASKS:
+                status = self.receiver(endpoint + "/status")
+                if endpoint == "/api/measure/time" and status.get("status") == "completed":
+                    request = status.get("request", {})
+                    if request.get("scan_id") != phases[0]["scan_id"]:
+                        errors.append("completed TIME task belongs to another scan")
+                elif status.get("status") in ("armed", "running", "draining"):
+                    errors.append(f"active task {endpoint}: {status.get('status')}")
+            current_mode = str(board.get("profile", {}).get("mode", ""))
+            current_center = float(board.get("profile", {}).get("center_mhz", 0.0))
+            errors.extend(
+                row for row in identity_errors(board, mode=current_mode, center_mhz=current_center)
+                if not row.startswith("sample_rate_msps=")
+            )
+            catalog = self.board("/api/v2/bitstreams").get("bitstreams", [])
+            if len(catalog) != 1 or catalog[0].get("id") != "fengine-current":
+                errors.append("catalog is not single current release")
+            elif catalog[0].get("sha256") != EXPECTED_BITSTREAM_SHA256:
+                errors.append("catalog bitstream SHA mismatch")
+            elif catalog[0].get("mts_qualifications", {}).get("onboard_tcxo", {}).get("status") != "qualified":
+                errors.append("onboard reference is not qualified")
+            if errors:
+                raise RuntimeError(f"resume preflight failed: {errors}")
+            resume_number = len(self.state.get("resume_history", [])) + 1
+            attempt_id = base.unix_ms()
+            base.write_json_new(self.evidence / f"resume_{resume_number:02d}_{attempt_id}_preflight.json", {
+                "registered_failure": registered_error,
+                "resume_source_commit": self.args.source_commit,
+                "disk_free_bytes": usage.free,
+                "board": board,
+                "receiver": receiver,
+                "queue_script": {"path": str(Path(__file__).resolve()),
+                                 "sha256": base.sha256_file(Path(__file__).resolve())},
+            })
+
+            formal = phases[0]
+            dataset = self.args.measurement_root / formal["scan_id"]
+            manifest = base.verify_manifest_basic(dataset, formal)
+            sys.path.insert(0, str(self.args.helper_dir))
+            from t510_stage35_time_verify import crop_continuous_pcap, verify, verify_pcap
+            time_verification = verify(dataset)
+            superset = self.raw / "time-formal-52ms-superset.pcap"
+            cropped = self.raw / "time-formal-50ms.pcap"
+            if not superset.is_file() or cropped.with_name(cropped.name + ".partial").exists():
+                raise RuntimeError("TIME witness files are not in a recoverable state")
+            superset_identity = {"path": str(superset), "bytes": superset.stat().st_size,
+                                 "sha256": base.sha256_file(superset)}
+            crop = (verify_pcap(cropped) if cropped.exists()
+                    else crop_continuous_pcap(superset, cropped))
+            raw = {
+                "superset": superset_identity,
+                "crop": crop,
+                "verified": verify_pcap(cropped),
+                "receiver_integrity": {
+                    "ok": True,
+                    "evidence": "reconstructed_after_registered_post-capture_import_failure",
+                    "dataset_verification": time_verification,
+                    "limitation": "The live post-window board/receiver snapshot was not persisted before the import failed; continuity is established by the sealed receiver manifest, eight-flow quality ledger, telemetry, and raw PCAP.",
+                },
+                "phase": formal["label"],
+            }
+            witness_path = self.evidence / "time_raw_witness.json"
+            if witness_path.exists():
+                prior_witness = json.loads(witness_path.read_text(encoding="utf-8"))
+                if prior_witness.get("verified", {}).get("sha256") != raw["verified"]["sha256"]:
+                    raise RuntimeError("existing recovered TIME witness identity mismatch")
+                raw = prior_witness
+            else:
+                base.write_json_new(witness_path, raw)
+            telemetry = json.loads((self.evidence / "phase_00_telemetry.json").read_text(encoding="utf-8"))
+            formal.update(
+                status="completed",
+                finished_unix_ms=base.unix_ms(),
+                capture_status=self.receiver("/api/measure/time/status"),
+                manifest=manifest,
+                formal_integrity={
+                    "ok": True,
+                    "evidence": "post_failure_recovery_audit",
+                    "dataset_verification": time_verification,
+                    "raw_witness_sha256": raw["verified"]["sha256"],
+                    "telemetry_samples": len(telemetry),
+                    "limitation": raw["receiver_integrity"]["limitation"],
+                },
+                telemetry_samples=len(telemetry),
+                raw_witness=raw,
+                recovered_after_registered_failure=True,
+            )
+            formal.pop("error", None)
+            history = self.state.setdefault("resume_history", [])
+            history.append({
+                "resume_number": resume_number,
+                "resumed_unix_ms": base.unix_ms(),
+                "resume_source_commit": self.args.source_commit,
+                "original_error": self.state.get("error"),
+                "reused_scan_id": formal["scan_id"],
+                "reused_manifest_sha256": manifest["sha256"],
+            })
+            self.state.update(status="running", current_phase_index=None,
+                              finished_unix_ms=None, error=None)
+            self.save()
+            recovery_committed = True
+            self.event("registered_failure_recovered", phase=formal["label"],
+                       manifest_sha256=manifest["sha256"], resume_number=resume_number)
+
+            for phase in phases[1:]:
+                self.run_phase(phase)
+            self.independent_verify()
+            safe_errors = self.safe_finalize(failed=False)
+            if safe_errors:
+                raise RuntimeError(f"safe finalization errors: {safe_errors}")
+            self.state.update(status="completed", current_phase_index=None,
+                              finished_unix_ms=base.unix_ms())
+            self.save(); self.event("queue_complete"); self.final_manifest()
+            return 0
+        except Exception as exc:
+            if not recovery_committed:
+                safe_errors = self.safe_finalize(failed=True)
+                self.event("registered_failure_recovery_failed", error={
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "traceback": traceback.format_exc(), "safe_finalize_errors": safe_errors,
+                })
+                return 1
+            current = self.state.get("current_phase_index")
+            if current is not None:
+                phase = self.phases[int(current)]
+                if phase.get("status") != "completed":
+                    phase.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+            safe_errors = self.safe_finalize(failed=True)
+            self.state.update(status="failed", finished_unix_ms=base.unix_ms(), error={
+                "message": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(), "safe_finalize_errors": safe_errors,
+            })
+            self.save(); self.event("queue_failed", error=self.state["error"])
+            return 1
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -704,6 +883,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lock", type=Path,
                         default=Path("/run/lock/t510-stage36-science.lock"))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--resume-after-time-witness-import-failure", action="store_true")
     args = parser.parse_args()
     allowed = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
     if not args.queue_id or any(byte not in allowed for byte in args.queue_id.encode("ascii")):
@@ -730,7 +910,10 @@ def main() -> int:
         except BlockingIOError as exc:
             raise RuntimeError("another Stage 36 science queue owns the lock") from exc
         template = json.loads(args.template.read_text(encoding="utf-8"))
-        return Queue(args, template).run()
+        queue = Queue(args, template)
+        if args.resume_after_time_witness_import_failure:
+            return queue.resume_after_time_witness_import_failure()
+        return queue.run()
 
 
 if __name__ == "__main__":

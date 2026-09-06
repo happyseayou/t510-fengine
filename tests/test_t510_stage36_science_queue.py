@@ -55,6 +55,9 @@ class Stage36ScienceQueueTests(unittest.TestCase):
         self.assertNotIn("/api/measure/stage35-", source)
         self.assertIn("safe_finalize(failed=True)", source)
         self.assertIn("time_derived_100ms_1s.npz", source)
+        self.assertIn("from t510_stage35_time_verify import crop_continuous_pcap, verify_pcap", source)
+        self.assertNotIn("from t510_time_capture_verify", source)
+        self.assertIn("resume_after_time_witness_import_failure", source)
 
 
 if __name__ == "__main__":
