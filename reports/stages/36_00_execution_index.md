@@ -439,3 +439,6 @@ GB10 原地复用 Stage 35 最终 Explorer 的解包、Hann FFT、时间合并�
 `8036` 的 TIME_ONLY 900 秒平均数字功率图随后加入 PL 温度右轴：900 个约 1 Hz 原始 AMS
 遥测点按实际时间戳对齐 9000 个 100 ms 功率点，没有插值。轻量 current-only 更新的 API、
 Chromium 与在线健康检查均 PASS，`8035` 未受影响。
+
+8036公式渲染随后修复：Stage 36发布包现自包含KaTeX脚本、样式和字体，严格Chromium门禁
+检测到31个真实KaTeX节点、零原始公式行；相关静态资源线上均为HTTP 200，8035保持健康。

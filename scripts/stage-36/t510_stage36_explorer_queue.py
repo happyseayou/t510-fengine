@@ -183,6 +183,8 @@ class Queue:
         required = [self.args.server, self.args.static_source / "index.html",
                     self.args.static_source / "stage36-app.js",
                     self.args.static_source / "stage36-app.css",
+                    self.args.static_source / "katex/katex.min.js",
+                    self.args.static_source / "katex/katex.min.css",
                     self.args.helper_dir / "t510_stage35_explorer_prepare.py",
                     self.args.helper_dir / "t510_stage35_simple_prepare.py",
                     self.args.helper_dir / "t510_stage35_time_long_prepare.py",
@@ -341,6 +343,7 @@ class Queue:
         static = self.app / "static"; static.mkdir()
         for name in ("index.html", "stage36-app.js", "stage36-app.css"):
             shutil.copy2(self.args.static_source / name, static / name)
+        shutil.copytree(self.args.static_source / "katex", static / "katex")
         shutil.copy2(self.args.plotly, static / "plotly-strict.min.js")
         scans = {
             "A": self.args.measurement_root / "stage36-science-20260906-1852-self-a-spec-scan-900s",
@@ -441,7 +444,8 @@ class Queue:
         port = self.args.candidate_port
         process = self.start_candidate(port)
         base = f"http://127.0.0.1:{port}"
-        profile = self.root / "chromium-profile"
+        profile = Path.home() / "snap/chromium/common/t510-stage36-browser" / self.root.name
+        profile.parent.mkdir(parents=True, exist_ok=True)
         url = (base + "/?mode=single&adcs=0,1&pairs=0-1,2-3&"
                "bins=3134,3182,3328&time_capture=TIME-formal&fengine_short=16&"
                "self_scan=A&self_ms=100&pair_visibility_ms=100&allan_form=variance&allan_scale=relative")
@@ -462,6 +466,10 @@ class Queue:
                 errors.append("Stage 35/36 comparison is not visible")
             if "PL温度来自同一正式窗口" not in completed.stdout:
                 errors.append("TIME power temperature explanation is not visible")
+            if 'class="katex"' not in completed.stdout:
+                errors.append("KaTeX did not render formulas")
+            if "Failed To Create Data Directory" in completed.stderr:
+                errors.append("Chromium profile directory was not usable")
             if "加载失败：" in completed.stdout or "有章节加载失败" in completed.stdout:
                 errors.append("browser rendered a data failure")
             sources = "\n".join((self.app / "static" / name).read_text(encoding="utf-8")

@@ -104,3 +104,18 @@ Chromium 验证了温度说明能够显示；current-only 交换后 `8036` 与�
 ```text
 /var/lib/t510/measurements/stage36-science-20260906-1852-temperature-overlay-20260906-134419/
 ```
+
+### 公式渲染修复
+
+用户浏览器复核发现8036公式显示为LaTeX原始字符串。根因是HTML引用了本地KaTeX路径，但
+Stage 36候选构建只复制了HTML、应用JS/CSS和Plotly，遗漏KaTeX脚本、样式与字体，线上两个
+KaTeX请求均为404。原浏览器门禁只检查页面数据就绪，没有检查公式DOM，因此没有拦住该问题。
+
+Stage 36现已自包含63个KaTeX资源文件；构建前检查JS/CSS，构建时复制完整目录，浏览器门禁
+改为必须出现真实`class="katex"`节点，并拒绝不可用的Chromium配置目录。线上独立验证得到
+31个KaTeX公式节点、零原始公式行，JS、CSS和代表性字体均返回HTTP 200。8036服务无异常
+重启，8035保持健康。修复证据的79个文件已逐项通过SHA-256复核：
+
+```text
+/var/lib/t510/measurements/stage36-science-20260906-1852-formula-fix-20260906-135617/
+```
