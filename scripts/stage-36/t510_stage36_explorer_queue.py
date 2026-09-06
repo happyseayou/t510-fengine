@@ -76,6 +76,35 @@ def component_std(array: np.ndarray, *, chunk: int) -> np.ndarray:
     return np.sqrt(variance)
 
 
+def trim_spec_record(record: dict[str, Any], spectra: int = 4096) -> None:
+    """Freeze the verified witness to the requested contiguous 4096 frames."""
+    path = Path(record["iq16_npy"])
+    source = np.load(path, mmap_mode="r")
+    if len(source) < spectra:
+        raise RuntimeError(f"SPEC witness contains only {len(source)} frames")
+    if len(source) > spectra:
+        partial = path.with_name(path.name + ".partial")
+        if partial.exists():
+            raise RuntimeError(f"stale SPEC crop partial exists: {partial}")
+        output = np.lib.format.open_memmap(
+            partial, mode="w+", dtype=source.dtype, shape=(spectra,) + source.shape[1:])
+        for first in range(0, spectra, 128):
+            output[first:first + 128] = source[first:first + 128]
+        output.flush()
+        del output, source
+        partial.replace(path)
+    else:
+        del source
+    record.update(
+        spectra=spectra,
+        iq16_npy_bytes=path.stat().st_size,
+        iq16_npy_sha256=sha256_file(path),
+        selection="first 4096 frames of the verified contiguous common sample0 interval",
+    )
+    if "sample0_start" in record:
+        record["sample0_end"] = int(record["sample0_start"]) + spectra * 4096
+
+
 class Queue:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -117,6 +146,7 @@ class Queue:
     def phase(self, name: str, operation: Any) -> Any:
         item = next(row for row in self.state["phases"] if row["name"] == name)
         self.state["current_phase"] = name
+        item.pop("error", None)
         item.update(status="running", started_unix_ms=unix_ms())
         self.save(); self.event("phase_start", phase=name)
         result = operation()
@@ -185,8 +215,7 @@ class Queue:
         time_record = prepare.prepare_time("TIME-formal", time_source, raw_root)
         time_record = simple.prepare_time_fft("TIME-formal", time_record, raw_root)
         spec_record = prepare.prepare_spec("F-engine-4096", spec_source, raw_root / "spec_index")
-        spec_path = Path(spec_record["iq16_npy"])
-        spec_record["iq16_npy_sha256"] = sha256_file(spec_path)
+        trim_spec_record(spec_record)
         raw_manifest = {
             "format": "T510_STAGE36_SIMPLE_RAW_INDEX_V1",
             "time": {"TIME-formal": time_record},
@@ -492,6 +521,65 @@ class Queue:
             self.save(); self.event("queue_failed", error=self.state["error"])
             return 1
 
+    def resume_after_spec_coverage_failure(self) -> int:
+        expected_error = "RuntimeError: SPEC raw coverage mismatch"
+        if not self.state_path.is_file():
+            raise RuntimeError(f"resume state does not exist: {self.state_path}")
+        loaded = json.loads(self.state_path.read_text(encoding="utf-8"))
+        if (loaded.get("format") != FORMAT or loaded.get("status") != "failed"
+                or loaded.get("error", {}).get("message") != expected_error
+                or loaded.get("source_commit") != "72e7074"):
+            raise RuntimeError("output is not the registered SPEC coverage verifier failure")
+        expected_status = {
+            "preflight": "completed", "raw_and_long_arrays": "completed",
+            "stage35_comparison": "completed", "candidate_build": "completed",
+            "numeric_api_verify": "failed", "browser_verify": "pending",
+            "publish_8036": "pending", "live_verify": "pending", "final_manifest": "pending",
+        }
+        if {row["name"]: row["status"] for row in loaded.get("phases", [])} != expected_status:
+            raise RuntimeError("registered resume phase state mismatch")
+        self.state = loaded
+        manifest_path = Path(self.state["raw_manifest"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if set(manifest.get("spec", {})) != {"F-engine-4096"}:
+            raise RuntimeError("registered raw manifest SPEC identity mismatch")
+        record = manifest["spec"]["F-engine-4096"]
+        before = {"spectra": record.get("spectra"),
+                  "iq16_npy": file_identity(Path(record["iq16_npy"]))}
+        if int(record.get("spectra", 0)) != 4098:
+            raise RuntimeError("registered resume requires the observed 4098-frame derived array")
+        trim_spec_record(record)
+        partial_manifest = manifest_path.with_name(manifest_path.name + ".partial")
+        write_json(partial_manifest, manifest)
+        partial_manifest.replace(manifest_path)
+        history = self.state.setdefault("resume_history", [])
+        history.append({
+            "resumed_unix_ms": unix_ms(), "resume_source_commit": self.args.source_commit,
+            "original_error": self.state.get("error"), "repair": "crop verified common SPEC interval to 4096 frames",
+            "before": before, "after": {"spectra": record["spectra"],
+                                         "iq16_npy": file_identity(Path(record["iq16_npy"]))},
+        })
+        self.state.update(status="running", current_phase=None, error=None, finished_unix_ms=None)
+        self.save(); self.event("registered_spec_coverage_failure_recovered")
+        try:
+            self.phase("numeric_api_verify", self.api_verify)
+            self.phase("browser_verify", self.browser_verify)
+            self.phase("publish_8036", self.publish)
+            self.phase("live_verify", self.live_verify)
+            self.phase("final_manifest", self.final_manifest)
+            self.state.update(status="completed", current_phase=None, finished_unix_ms=unix_ms())
+            self.save(); self.event("queue_complete")
+            return 0
+        except Exception as exc:
+            current = self.state.get("current_phase")
+            for item in self.state["phases"]:
+                if item["name"] == current and item["status"] == "running":
+                    item.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+            self.state.update(status="failed", finished_unix_ms=unix_ms(), error={
+                "message": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()})
+            self.save(); self.event("queue_failed", error=self.state["error"])
+            return 1
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -508,6 +596,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-port", type=int, default=18036)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--lock", type=Path, default=Path("/run/lock/t510-stage36-explorer.lock"))
+    parser.add_argument("--resume-after-spec-coverage-failure", action="store_true")
     return parser.parse_args()
 
 
@@ -516,7 +605,10 @@ def main() -> int:
     args.lock.parent.mkdir(parents=True, exist_ok=True)
     with args.lock.open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return Queue(args).run()
+        queue = Queue(args)
+        if args.resume_after_spec_coverage_failure:
+            return queue.resume_after_spec_coverage_failure()
+        return queue.run()
 
 
 if __name__ == "__main__":

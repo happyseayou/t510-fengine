@@ -29,6 +29,8 @@ class Stage36ExplorerTests(unittest.TestCase):
         self.assertIn('--bind 0.0.0.0:8036', source)
         self.assertIn("TIME_GAIN = 1.9998779296875", source)
         self.assertIn("SPEC_GAIN = 3.999755859375", source)
+        self.assertIn("trim_spec_record(spec_record)", source)
+        self.assertIn("resume_after_spec_coverage_failure", source)
 
     def test_static_page_uses_local_fixed_assets_and_comparison(self) -> None:
         html = (WEB / "index.html").read_text(encoding="utf-8")
