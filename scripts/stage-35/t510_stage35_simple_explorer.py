@@ -160,7 +160,7 @@ class SimpleData:
         self.time_long_index_path = fixed_path(self.config["time_long_index"], file=True)
         self.time_long_index = json.loads(self.time_long_index_path.read_text(encoding="utf-8"))
         if (
-            self.time_long_index.get("format") != "T510_TIME_CAPTURE_LONG_ARRAYS_V1"
+            self.time_long_index.get("format") != "T510_STAGE35_TIME_LONG_ARRAYS_V1"
             or int(self.time_long_index.get("duration_seconds", 0)) != 900
             or int(self.time_long_index.get("base_cadence_ms", 0)) != 10
         ):
@@ -177,6 +177,29 @@ class SimpleData:
             raise ValueError("cross scan is not a sealed full-band 100 ms dataset")
         self.cross_attrs = cross_attrs
         self.cross_id = self.cross_scan.name
+        temperature = self.config.get("time_temperature")
+        self.time_temperature_path = fixed_path(temperature, file=True) if temperature else None
+        self.time_temperature = (
+            json.loads(self.time_temperature_path.read_text(encoding="utf-8"))
+            if self.time_temperature_path else None
+        )
+        if self.time_temperature is not None:
+            if self.time_temperature.get("format") != "T510_STAGE35_TIME_TEMPERATURE_V1":
+                raise ValueError("unexpected TIME temperature format")
+            sizes = {
+                len(self.time_temperature.get(name, []))
+                for name in ("time_s", "mean_c", "min_c", "max_c")
+            }
+            if sizes != {int(self.time_temperature.get("points", -1))}:
+                raise ValueError("TIME temperature arrays have inconsistent lengths")
+            if self.time_temperature.get("sensor") != "pl_temp" or self.time_temperature.get("unit") != "degC":
+                raise ValueError("TIME temperature must be the PL sensor in degC")
+            times = np.asarray(self.time_temperature["time_s"], dtype=np.float64)
+            values = np.asarray(self.time_temperature["mean_c"], dtype=np.float64)
+            if not np.all(np.isfinite(times)) or not np.all(np.isfinite(values)):
+                raise ValueError("TIME temperature contains non-finite values")
+            if len(times) and (np.any(np.diff(times) <= 0) or times[0] < 0 or times[-1] > 900):
+                raise ValueError("TIME temperature timestamps are outside the formal window")
         self._identities = {
             "raw_manifest": sha256_file(self.raw_manifest_path),
             "cross_manifest": sha256_file(self.cross_scan / "dataset_manifest.json"),
@@ -185,6 +208,8 @@ class SimpleData:
             },
             "time_long_index": sha256_file(self.time_long_index_path),
         }
+        if self.time_temperature_path:
+            self._identities["time_temperature"] = sha256_file(self.time_temperature_path)
 
     def meta(self) -> dict[str, Any]:
         time_identity = {
@@ -220,6 +245,12 @@ class SimpleData:
             "time_captures": sorted(self.time_records),
             "time_long_capture": self.time_long_index["label"],
             "time_long_cadence_ms": [10, 100, 1000],
+            "time_temperature": ({
+                key: self.time_temperature[key] for key in (
+                    "format", "sensor", "unit", "points", "sampling", "coverage_seconds",
+                    "capture_start_unix_ms", "capture_duration_seconds", "source",
+                )
+            } if self.time_temperature else None),
             "spec_capture": next(iter(self.spec_records)),
             "self_scans": sorted(self.self_scans),
             "cross_scan": self.cross_id,
@@ -359,6 +390,7 @@ class SimpleData:
             "mean_q_adu": values[:, 1].tolist(),
             "mean_power_adu2": values[:, 2].tolist(),
             "n_valid": weights.astype(np.uint64).tolist(),
+            "temperature": self.time_temperature,
             "point_definition": (
                 f"每个点由连续 {cadence_ms} ms 内全部有效 TIME_ONLY I/Q整数按样本数加权平均。"
             ),
