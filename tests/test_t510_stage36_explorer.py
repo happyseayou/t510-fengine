@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "scripts/stage-36/t510_stage36_explorer.py"
 QUEUE = ROOT / "scripts/stage-36/t510_stage36_explorer_queue.py"
+TEMPERATURE_QUEUE = ROOT / "scripts/stage-36/t510_stage36_temperature_overlay_queue.py"
 WEB = ROOT / "scripts/stage-36/web/explorer"
 
 
@@ -31,6 +32,9 @@ class Stage36ExplorerTests(unittest.TestCase):
         self.assertIn("SPEC_GAIN = 3.999755859375", source)
         self.assertIn("trim_spec_record(spec_record)", source)
         self.assertIn("resume_after_spec_coverage_failure", source)
+        self.assertIn("def prepare_temperature", source)
+        self.assertIn("T510_STAGE36_TIME_TEMPERATURE_V1", source)
+        self.assertIn('self.phase("time_temperature", self.prepare_temperature)', source)
 
     def test_static_page_uses_local_fixed_assets_and_comparison(self) -> None:
         html = (WEB / "index.html").read_text(encoding="utf-8")
@@ -41,6 +45,17 @@ class Stage36ExplorerTests(unittest.TestCase):
         self.assertIn('/static/stage36-app.js', html)
         self.assertIn("META.stage35_comparison", js)
         self.assertIn("数值放大本身不代表科学性能改善", js)
+        self.assertIn('name: "PL 温度"', js)
+        self.assertIn('yaxis: "y2"', js)
+        self.assertIn('text: "PL 温度 (°C)"', js)
+        self.assertIn("未插值为功率的", js)
+
+    def test_temperature_update_is_current_only_and_fail_stop(self) -> None:
+        source = TEMPERATURE_QUEUE.read_text(encoding="utf-8")
+        self.assertIn("expected 900 in-window PL temperature points", source)
+        self.assertIn('staged = install / ".current.next"', source)
+        self.assertNotIn("previous", source)
+        self.assertIn('systemctl", "stop", "t510-stage36-explorer.service"', source)
 
 
 if __name__ == "__main__":

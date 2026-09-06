@@ -435,3 +435,7 @@ GB10 原地复用 Stage 35 最终 Explorer 的解包、Hann FFT、时间合并�
 没有调用 HPC 或搬运约百 GB 输入。数值 API 与真实 Chromium 多选门禁 PASS，`8036` 已作为
 独立只读 system service 发布；`8035` 保持存活且数据未修改。完整身份与限制见
 [36-02 科学复评与 8036 交付](36_02_science_evaluation.md)。
+
+`8036` 的 TIME_ONLY 900 秒平均数字功率图随后加入 PL 温度右轴：900 个约 1 Hz 原始 AMS
+遥测点按实际时间戳对齐 9000 个 100 ms 功率点，没有插值。轻量 current-only 更新的 API、
+Chromium 与在线健康检查均 PASS，`8035` 未受影响。

@@ -562,16 +562,38 @@ async function renderTimeSingle(adcs, guard = () => true) {
       customdata: long.mean_power_adu2.map((value, index) => [label, index, value, long.n_valid[index], long.cadence_ms]),
     }));
   });
+  const temperature = firstLong.temperature;
+  if (temperature?.time_s?.length) {
+    longPowerTraces.push({
+      type: "scattergl", mode: "lines", x: temperature.time_s, y: temperature.mean_c,
+      name: "PL 温度", yaxis: "y2", line: {color: "#b74842", width: 2},
+      customdata: temperature.mean_c.map((value, index) => [
+        "temperature", temperature.time_s[index], value,
+        temperature.min_c[index], temperature.max_c[index],
+      ]),
+      hovertemplate: "时间 %{x:.3f} s<br>PL 温度 %{y:.3f} °C<extra></extra>",
+      __stepEligible: false,
+    });
+  }
   figure = createFigure(card, `single-time-long-power-page-${state.page}`,
     `TIME_ONLY 900秒平均数字功率（每点 ${firstLong.cadence_ms} ms）`, {
-      what: `每个叉是该时间桶内所有TIME_ONLY整数先逐样点计算I²+Q²，再求平均；同图叠加 ${groupLabel(labels)}。`,
-      source: sourceText(firstLong.source), formula: firstLong.formula,
-      calculated: datasets.map(({label, long}) => `${label}：${long.calculation.display_points.toLocaleString()}点，整段平均数字功率=${number(mean(long.mean_power_adu2))} ADU²`).join("；") + "。点击点可看有效样本数。",
-      meaning: "这张图看宽带TIME_ONLY噪声强弱是否随900秒缓慢变化。它是mean(I²+Q²)，不是RMS，也没有换算成温度。",
+      what: `每个叉是该时间桶内所有TIME_ONLY整数先逐样点计算I²+Q²，再求平均；同图叠加 ${groupLabel(labels)}。右轴曲线是板上PL温度。`,
+      source: sourceText(firstLong.source) + (temperature ? ` PL温度来自同一正式窗口的板上AMS遥测，共${temperature.points}个原始约1秒采样点，按实际时间戳对齐，未插值为功率的${firstLong.cadence_ms} ms采样。` : ""), formula: firstLong.formula,
+      calculated: datasets.map(({label, long}) => `${label}：${long.calculation.display_points.toLocaleString()}点，整段平均数字功率=${number(mean(long.mean_power_adu2))} ADU²`).join("；") + (temperature ? `；PL温度=${number(Math.min(...temperature.mean_c), 3)}–${number(Math.max(...temperature.mean_c), 3)} °C。` : "。") + "点击功率点可看有效样本数。",
+      meaning: "这张图看宽带TIME_ONLY噪声强弱是否随900秒缓慢变化，并可对照板温漂移。数字功率是mean(I²+Q²)，不是RMS；右轴温度是板上PL传感器读数，不是噪声温度。",
     });
-  await draw(figure.plot, longPowerTraces, baseLayout("TIME_ONLY 900秒平均数字功率同图比较", "时间 (s)", "平均 I²+Q² (ADU²)"));
+  await draw(figure.plot, longPowerTraces, baseLayout(
+    "TIME_ONLY 900秒平均数字功率同图比较", "时间 (s)", "平均 I²+Q² (ADU²)", {
+      margin: {l: 80, r: 88, t: 92, b: 68},
+      yaxis2: {title: {text: "PL 温度 (°C)"}, overlaying: "y", side: "right",
+        showgrid: false, zeroline: false, automargin: true},
+    }));
   bindClick(figure.plot, figure.calculated, point => {
     const value = point.customdata;
+    if (value[0] === "temperature") {
+      return `时间 ${number(value[1], 3)} s：PL温度均值=${number(value[2], 3)} °C，` +
+        `该遥测记录内范围=${number(value[3], 3)}–${number(value[4], 3)} °C。`;
+    }
     return `${value[0]}，时间桶 ${value[1]}，每点 ${value[4]} ms：${Number(value[3]).toLocaleString()}个有效样点，平均I²+Q²=${number(value[2])} ADU²。`;
   });
 }

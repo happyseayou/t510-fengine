@@ -126,6 +126,7 @@ class Queue:
             "phases": [
                 {"name": name, "status": "pending"} for name in (
                     "preflight", "raw_and_long_arrays", "stage35_comparison",
+                    "time_temperature",
                     "candidate_build", "numeric_api_verify", "browser_verify",
                     "publish_8036", "live_verify", "final_manifest",
                 )
@@ -186,7 +187,9 @@ class Queue:
                     self.args.helper_dir / "t510_stage35_simple_prepare.py",
                     self.args.helper_dir / "t510_stage35_time_long_prepare.py",
                     self.args.helper_dir / "t510_stage35_simple_math.py",
-                    self.args.plotly, self.args.stage35_config]
+                    self.args.plotly, self.args.stage35_config,
+                    self.args.capture_queue / "evidence/phase_00_telemetry.json",
+                    self.args.capture_queue / "queue_state.json"]
         errors.extend(f"missing input: {path}" for path in required if not path.is_file())
         if shutil.disk_usage(self.root.parent).free < 100 * 1024**3:
             errors.append("less than 100 GiB free")
@@ -290,6 +293,47 @@ class Queue:
             raise RuntimeError(f"unified Stage 35/36 comparison is outside 20%: {result}")
         write_json(self.data / "stage35_comparison.json", result)
 
+    def prepare_temperature(self) -> None:
+        telemetry_path = self.args.capture_queue / "evidence/phase_00_telemetry.json"
+        queue_state_path = self.args.capture_queue / "queue_state.json"
+        telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+        queue_state = json.loads(queue_state_path.read_text(encoding="utf-8"))
+        phase = next(item for item in queue_state["phases"] if item.get("label") == "time-formal")
+        start_ms = int(phase["capture_status"]["started_unix_ms"])
+        end_ms = start_ms + int(phase["duration_seconds"]) * 1000
+        by_timestamp: dict[int, dict[str, Any]] = {}
+        for poll in telemetry:
+            for record in poll.get("board", {}).get("records", []):
+                ams = record.get("ams") or {}
+                timestamp = ams.get("captured_at_unix_ms")
+                pl = (ams.get("temperatures_c") or {}).get("pl_temp")
+                if timestamp is None or not isinstance(pl, dict):
+                    continue
+                timestamp = int(timestamp)
+                if start_ms <= timestamp <= end_ms:
+                    by_timestamp[timestamp] = {
+                        "mean": float(pl["mean"]), "min": float(pl["min"]),
+                        "max": float(pl["max"]), "sequence": record.get("sequence"),
+                    }
+        ordered = sorted(by_timestamp.items())
+        if len(ordered) != 900:
+            raise RuntimeError(f"formal TIME window must contain 900 PL temperature points, got {len(ordered)}")
+        result = {
+            "format": "T510_STAGE36_TIME_TEMPERATURE_V1",
+            "sensor": "pl_temp", "unit": "degC", "points": len(ordered),
+            "sampling": "original board AMS telemetry at approximately 1 Hz; no interpolation",
+            "capture_start_unix_ms": start_ms, "capture_duration_seconds": 900,
+            "time_s": [(timestamp - start_ms) / 1000.0 for timestamp, _ in ordered],
+            "mean_c": [value["mean"] for _, value in ordered],
+            "min_c": [value["min"] for _, value in ordered],
+            "max_c": [value["max"] for _, value in ordered],
+            "source": file_identity(telemetry_path),
+            "queue_state": file_identity(queue_state_path),
+        }
+        write_json(self.data / "time_temperature.json", result)
+        self.state["time_temperature"] = str(self.data / "time_temperature.json")
+        self.save()
+
     def build_candidate(self) -> None:
         shutil.copy2(self.args.server, self.app / "t510_stage36_explorer.py")
         helpers = self.app / "helpers"; helpers.mkdir()
@@ -311,6 +355,7 @@ class Queue:
             "self_scans": {key: str(value) for key, value in scans.items()},
             "cross_scan": str(self.args.measurement_root / "stage36-science-20260906-1852-pairs-xcorr-scan-900s"),
             "stage35_comparison": str(self.data / "stage35_comparison.json"),
+            "time_temperature": self.state["time_temperature"],
             "scientific_boundary": {
                 "TIME_ONLY": "post-DDC 320 MS/s IQ16 ADU; no physical calibration",
                 "F-engine": "channelized IQ16 count; no K/Jy/SEFD calibration",
@@ -353,6 +398,8 @@ class Queue:
                 raise RuntimeError("candidate meta format mismatch")
             if meta.get("stage35_comparison", {}).get("status") != "PASS":
                 raise RuntimeError("Stage 35 comparison is not PASS")
+            if meta.get("time_temperature", {}).get("points") != 900:
+                raise RuntimeError("TIME temperature coverage mismatch")
             checks = {
                 "time_raw": "/api/v2/timeseries?domain=time_single&adc=0&capture=TIME-formal&bucket=raw",
                 "time_10ms": "/api/v2/timeseries?domain=time_long_single&adc=0&cadence_ms=10",
@@ -370,6 +417,8 @@ class Queue:
                 raise RuntimeError("TIME raw point count mismatch")
             if [len(results[name]["time_s"]) for name in ("time_10ms", "time_100ms", "time_1s")] != [90000, 9000, 900]:
                 raise RuntimeError("TIME long cadence coverage mismatch")
+            if len(results["time_100ms"].get("temperature", {}).get("time_s", [])) != 900:
+                raise RuntimeError("TIME API temperature coverage mismatch")
             if any(len(row["i"]) != 4096 for row in results["spec_raw"]["series"]):
                 raise RuntimeError("SPEC raw coverage mismatch")
             if len(results["self_100ms"]["time_s"]) != 9000:
@@ -411,6 +460,8 @@ class Queue:
                 errors.append("browser did not reach authoritative-data-ready state")
             if "Stage 36 原始读数" not in completed.stdout:
                 errors.append("Stage 35/36 comparison is not visible")
+            if "PL温度来自同一正式窗口" not in completed.stdout:
+                errors.append("TIME power temperature explanation is not visible")
             if "加载失败：" in completed.stdout or "有章节加载失败" in completed.stdout:
                 errors.append("browser rendered a data failure")
             sources = "\n".join((self.app / "static" / name).read_text(encoding="utf-8")
@@ -502,6 +553,7 @@ class Queue:
             self.phase("preflight", self.preflight)
             self.phase("raw_and_long_arrays", self.prepare_arrays)
             self.phase("stage35_comparison", self.comparison)
+            self.phase("time_temperature", self.prepare_temperature)
             self.phase("candidate_build", self.build_candidate)
             self.phase("numeric_api_verify", self.api_verify)
             self.phase("browser_verify", self.browser_verify)
