@@ -1,6 +1,6 @@
 # Stage 36：数字精度调整与 Stage 35 最终产品复评
 
-日期：2026-09-05（CST）。状态：`R2_TIMING_PASS / MTS_INITIALIZATION_FAIL`。
+日期：2026-09-05–06（CST）。状态：`SCIENTIFIC_EVALUATION_COMPLETE / 8036_CLIENT_REVIEW_REQUIRED`。
 
 ## 已确认的执行合同
 
@@ -24,9 +24,9 @@
 | 36.1 | v34 上 QMC 新增益资格与恢复 | PASS / RESTORED |
 | 36.2 | PFB 定点 RTL、软件尺度身份、真实 XFFT / 位精确模型 | PASS：V2 位精确合同与独立误差验证 |
 | 36.3 | GUI MCP 完整综合→实现→bitstream 链 | R2 PASS，已导出：WNS +0.050668 ns |
-| 36.4 | 新固件导出、MTS、五个合法模式全速门禁 | 导出 PASS；MTS 初始化 DAC0 复位超时，队列停止（0/40） |
-| 36.5 | 新档完整科学采集与独立复算 | NOT_STARTED |
-| 36.6 | 8036 报告与浏览器验收 | NOT_STARTED |
+| 36.4 | 新固件导出、MTS、五个合法模式全速门禁 | COMPLETE：板载与外部参考资格均 PASS |
+| 36.5 | 新档完整科学采集与独立复算 | COMPLETE：13/13 阶段、总 manifest 与独立复算 PASS |
+| 36.6 | 8036 报告与浏览器验收 | TECHNICAL PASS：服务在线，等待用户实际页面复核 |
 
 ## 基线与资格任务身份
 
@@ -417,4 +417,21 @@ catalog 与 current overlay。板上原 bitstream SHA 相同，因此只更新 P
 与 fixed 均为 40/40 PASS，冻结目标为 ADC 468、DAC 108；五个合法全速模式各 60 秒均为
 PASS。160 TIME+SPEC scheduled-PPS 门禁实际预留 40 个 PPS，TIME/SPEC 首包 sample0 均为
 32788，连续 10 秒 host 门禁无错误。结束时已停流、DAC enable mask 为 0，catalog 状态为
-`external_10mhz=qualified`。Stage 36 的 900 秒科学采集尚未启动。
+`external_10mhz=qualified`。
+
+### 正式科学采集、分析与 8036 交付
+
+正式科学队列 `stage36-science-20260906-1852` 已完成 TIME_ONLY 900 s、A/B/C 三次
+F-engine 自功率各 900 s、全部 28 对全频复可见度 900 s、八个 30 s TIME 对照，以及
+连续 50 ms TIME 和连续 4096 帧全频 SPEC 见证。13/13 阶段均为 `completed`，最终总
+manifest、TIME900、幅值门禁与跨数据集独立验签均 PASS；最终停流、DAC mask 0。
+
+原始 TIME I/Q 标准差为 8.211–9.195 count，F-engine 八路全频 I/Q 标准差中位数为
+8.005–8.720 count，均落在 8–12。按 QMC 和 PFB 实际增益消除尺度后，范围分别为
+4.106–4.598 和 2.001–2.180 count；相对 Stage 35 中位数变化为 -1.19% 和 -3.18%。
+因此读数放大符合设计，不能单独记作科学性能改善。
+
+GB10 原地复用 Stage 35 最终 Explorer 的解包、Hann FFT、时间合并、Allan 数学和页面框架，
+没有调用 HPC 或搬运约百 GB 输入。数值 API 与真实 Chromium 多选门禁 PASS，`8036` 已作为
+独立只读 system service 发布；`8035` 保持存活且数据未修改。完整身份与限制见
+[36-02 科学复评与 8036 交付](36_02_science_evaluation.md)。
