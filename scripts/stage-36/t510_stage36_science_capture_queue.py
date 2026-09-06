@@ -272,6 +272,7 @@ class Queue(base.QueueRunner):
         self.state.update({
             "format": FORMAT,
             "phases": self.phases,
+            "source_commit": args.source_commit,
             "physical_context": {
                 "rf_inputs": "eight_independent_50ohm_operator_confirmed_unchanged",
                 "external_10mhz_pps": "operator_confirmed_disconnected",
@@ -289,6 +290,20 @@ class Queue(base.QueueRunner):
 
     def preflight(self) -> None:
         usage = shutil.disk_usage(self.args.measurement_root)
+        identity_paths = {
+            "queue": Path(__file__).resolve(),
+            "stage35_acquisition_primitives": Path(base.__file__).resolve(),
+            "time_verifier": (self.args.helper_dir / "t510_stage35_time_verify.py").resolve(),
+            "stage36_amplitude_verifier": (HERE / "t510_stage36_short_gate.py").resolve(),
+            "configure_template": self.args.template.resolve(),
+            "cuda_sidecar": self.args.sidecar.resolve(),
+        }
+        base.write_json_new(self.evidence / "implementation_identity.json", {
+            "source_commit": self.args.source_commit,
+            "files": {name: {"path": str(path), "bytes": path.stat().st_size,
+                             "sha256": base.sha256_file(path)}
+                      for name, path in identity_paths.items()},
+        })
         base.write_json_new(self.evidence / "disk_preflight.json", {
             "total": usage.total, "used": usage.used, "free": usage.free,
         })
@@ -675,6 +690,7 @@ class Queue(base.QueueRunner):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--queue-id", required=True)
+    parser.add_argument("--source-commit", required=True)
     parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--helper-dir", type=Path, required=True)
     parser.add_argument("--measurement-root", type=Path,
@@ -700,6 +716,7 @@ def main() -> int:
     if args.dry_run:
         print(json.dumps({
             "format": FORMAT, "queue_id": args.queue_id,
+            "source_commit": args.source_commit,
             "core_version": EXPECTED_CORE_VERSION,
             "bitstream_sha256": EXPECTED_BITSTREAM_SHA256,
             "measurement_root": str(args.measurement_root),

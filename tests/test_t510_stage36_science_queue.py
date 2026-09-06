@@ -19,6 +19,8 @@ class Stage36ScienceQueueTests(unittest.TestCase):
                 str(SCRIPT),
                 "--queue-id",
                 "stage36-test",
+                "--source-commit",
+                "0123456789abcdef",
                 "--template",
                 str(ROOT / "config/t510/qualification-template.json"),
                 "--helper-dir",
