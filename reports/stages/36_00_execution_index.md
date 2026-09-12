@@ -1,6 +1,8 @@
 # Stage 36：数字精度调整与 Stage 35 最终产品复评
 
-日期：2026-09-05–06（CST）。状态：`SCIENTIFIC_EVALUATION_COMPLETE / 8036_CLIENT_REVIEW_REQUIRED`。
+日期：2026-09-05–12（CST）。状态：`CLOSED_WITH_DOCUMENTED_LIMITATIONS`。
+
+最终结论、默认分析行为及Stage37交接见[Stage36收尾](36_28_closeout.md)。下方保留早期执行合同与构建日志，其中“计划/当前v34”等为当时状态，不代表当前部署。
 
 ## 已确认的执行合同
 
@@ -26,7 +28,14 @@
 | 36.3 | GUI MCP 完整综合→实现→bitstream 链 | R2 PASS，已导出：WNS +0.050668 ns |
 | 36.4 | 新固件导出、MTS、五个合法模式全速门禁 | COMPLETE：板载与外部参考资格均 PASS |
 | 36.5 | 新档完整科学采集与独立复算 | COMPLETE：13/13 阶段、总 manifest 与独立复算 PASS |
-| 36.6 | 8036 报告与浏览器验收 | TECHNICAL PASS：服务在线，等待用户实际页面复核 |
+| 36.6 | 8036 报告与浏览器验收 | COMPLETE：浏览器验收通过，用户已查看并提出的修订已落实 |
+
+## 追加背景研究与交付
+
+- [背景参数与有效期](36_22_background_calibration_strategy.md)、[跨reset模板](36_23_background_reset_transfer.md)
+- [共同信号验证](36_24_weak_common_signal_validation.md)、[OCB2复矢量分析](36_26_ocb2_vector_analysis.md)
+- [标准背景处理新接线验收](36_27_background_standard_acceptance.md)
+- [收尾与未解决边界](36_28_closeout.md)
 
 ## 基线与资格任务身份
 

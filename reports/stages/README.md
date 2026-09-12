@@ -26,9 +26,14 @@ Stage 00–33 已移入 [`archive/00-33/`](archive/00-33/)，Stage 34 已移入
 
 ## Stage 36
 
+状态：已收尾，科学限制如实保留。先读[收尾与交接](36_28_closeout.md)。
+
 - [36 执行索引](36_00_execution_index.md)
 - [36-01 Stage 35 经验审计](36_01_stage35_lessons_audit.md)
 - [36-02 科学复评与 8036 交付](36_02_science_evaluation.md)
+- [36-25 OCB2受控诊断](36_25_ocb2_controlled_experiment.md)
+- [36-26 OCB2复矢量与频带分析](36_26_ocb2_vector_analysis.md)
+- [36-27 标准背景处理接入与验收](36_27_background_standard_acceptance.md)
 
 ## 历史归档
 

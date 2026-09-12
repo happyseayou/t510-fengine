@@ -6,7 +6,7 @@
   <title>Stage 36：TIME_ONLY、F-engine 与 Allan 方差</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231769aa'/%3E%3Cpath d='M14 42V22h7l11 12 11-12h7v20h-7V32L32 44 21 32v10z' fill='white'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/katex/katex.min.css">
-  <link rel="stylesheet" href="/static/stage36-app.css" integrity="sha256-s/Z596O7EkhOVzuk0dWL5bf1KaTRKluMvDBGhU08QPs=">
+  <link rel="stylesheet" href="/static/stage36-app.css" integrity="sha256-I1F5lKDF+nMdiJocFeNAUspkyHQHr6yGQvwGjNDEiRg=">
   <script defer src="/static/plotly-strict.min.js" integrity="sha256-yocV5+NI4dVvtdMVdceFC1zdJ39gG/BHwP78QXLilXs="></script>
   <script defer src="/static/katex/katex.min.js"></script>
   <script defer src="/static/stage36-app.js"></script>
@@ -65,7 +65,7 @@
           <label for="fftCapture">单路TIME_ONLY软件FFT：参照片段</label><select id="fftCapture"></select>
         </div>
         <div id="pairFengineControls" hidden>
-          <label for="pairVisibilityCadence">F-engine 900秒复可见度：每点平均时长</label>
+          <label for="pairVisibilityCadence">长复可见度与 A/B/C：每点平均时长</label>
           <select id="pairVisibilityCadence"><option value="100">100 ms</option><option value="1000">1 s</option></select>
         </div>
         <p id="fengineScope" class="control-scope">只刷新第2章。</p>
@@ -100,6 +100,11 @@
         <p class="lead">每个点都说明“它是什么、从哪里来、怎样算、当前算出多少”。这里没有系统温度或天文源定标。</p>
       </header>
       <main>
+        <div class="boundary"><a href="/static/background-standard.html">标准背景处理：新八路50 Ω模板与独立检验 →</a></div>
+        <div class="boundary"><a href="/static/ocb2.html">OCB2 A→B→A：复数返回、全频结构和背景扣除对照 →</a></div>
+        <div class="boundary"><a href="/static/weak-signal.html">共同信号 OFF→ON→OFF：固定背景扣除与返回对照 →</a></div>
+        <div class="boundary"><a href="/static/background-reset.html">三轮 RFDC reset：旧／新背景对照，540秒幅度与相位趋势 →</a></div>
+        <div class="boundary"><a href="/static/background-holdout.html">新增实验：固定背景扣除 — 看 A0 能否预测 A2 / A4 / A6，比较扣除前后与积分曲线 →</a></div>
         <section id="singleView" class="report-view">
           <section class="chapter"><div class="chapter-heading"><span>1</span><div><h2>TIME_ONLY 的 I/Q 整数读数</h2><p>先看50 ms片段中的原始整数和短平均，再看新采900秒的I/Q中心与平均数字功率。TIME_ONLY没有频率bin。</p></div></div><div id="singleTimeCards" class="subject-list"></div></section>
           <section class="chapter"><div class="chapter-heading"><span>2</span><div><h2>生产 F-engine 的 I/Q count 和功率</h2><p>短时图保留逐帧数据；900秒图看慢变化；单路TIME_ONLY软件FFT只在独立图中作参照。</p></div></div><div id="singleFengineCards" class="subject-list"></div></section>
@@ -107,7 +112,7 @@
         </section>
         <section id="pairView" class="report-view" hidden>
           <div class="boundary">这里只看生产F-engine的同频复可见度。两路都接独立50 Ω，因此测量的是仪器内部伪相关底，不是天空可见度。</div>
-          <section class="chapter"><div class="chapter-heading"><span>1</span><div><h2>F-engine 复可见度的幅度和相位</h2><p>短时逐帧、帧平均和所选100 ms或1 s的900秒曲线分别画。页面不再显示TIME_ONLY两路复乘或TIME软件FFT相关。</p></div></div><div id="pairFengineCards" class="subject-list"></div></section>
+          <section class="chapter"><div class="chapter-heading"><span>1</span><div><h2>F-engine 复可见度的幅度和相位</h2><p>短时逐帧、帧平均和所选100 ms或1 s的900秒曲线分别画。下方新增 A/B/C 启停实验：完整时间曲线保留停流空隙，另比较九个 100 秒段。</p></div></div><div id="pairFengineCards" class="subject-list"></div></section>
           <section class="chapter"><div class="chapter-heading"><span>2</span><div><h2>复可见度 Allan 方差</h2><p>计算完整复数向量之差，不对会在±180°绕回的相位角直接相减。</p></div></div><div id="pairAllanCards" class="subject-list"></div></section>
         </section>
         <nav class="pagination" aria-label="多选对象分页"><button id="previousPage">上一页</button><span id="pageStatus"></span><button id="nextPage">下一页</button></nav>

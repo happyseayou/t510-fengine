@@ -50,3 +50,5 @@ python3 scripts/check_markdown_links.py
 ```
 
 Vivado 任务只按 [AGENTS.md](AGENTS.md) 通过已 attach 的 GUI 提交，本地回归不会启动 Vivado。
+
+背景扣除的分析入口、模板身份与适用条件见 [复可见度背景处理标准](docs/BACKGROUND_ANALYSIS.md)。
