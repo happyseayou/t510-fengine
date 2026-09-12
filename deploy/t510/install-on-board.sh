@@ -69,7 +69,13 @@ chmod 0555 \
   "${NEXT}/python/t510_hw.py" \
   "${NEXT}/python/t510_ref_watchdog.py"
 
-systemctl stop t510-agent.service t510-ref-watchdog.service
+# Fresh images have no units yet; failures stopping existing units remain fatal.
+for unit in t510-agent.service t510-ref-watchdog.service; do
+  load_state="$(systemctl show "${unit}" --property LoadState --value)"
+  if [[ "${load_state}" != "not-found" ]]; then
+    systemctl stop "${unit}"
+  fi
+done
 rm -rf -- "${CURRENT}"
 mv -T -- "${NEXT}" "${CURRENT}"
 
