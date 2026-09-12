@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import urllib.request
 from typing import Any
 
 
+PLOT_SELECTOR = "#pairFengineCards .plot"
 ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf"
 
 
@@ -31,6 +33,7 @@ def request(method: str, url: str, value: Any = None) -> Any:
 
 
 def execute(driver: str, session: str, script: str) -> Any:
+    script = script.replace("__PLOT_SELECTOR__", PLOT_SELECTOR)
     return request("POST", f"{driver}/session/{session}/execute/sync",
                    {"script": script, "args": []})
 
@@ -61,11 +64,17 @@ def write_json(path: Path, value: Any) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True)
+    parser.add_argument("--expect-gap-counts", help="comma-separated null counts in successive amplitude traces")
+    parser.add_argument("--pairs", default="0-1")
+    parser.add_argument("--bins", default="128.593750MHz")
+    parser.add_argument("--plot-selector", default="#pairFengineCards .plot")
     parser.add_argument("--chromium", type=Path, default=Path("/snap/bin/chromium"))
     parser.add_argument("--chromedriver", type=Path, required=True)
     parser.add_argument("--driver-port", type=int, default=19515)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    global PLOT_SELECTOR
+    PLOT_SELECTOR = args.plot_selector
 
     driver_url = f"http://127.0.0.1:{args.driver_port}"
     profile = Path.home() / "snap/chromium/common/t510-legend-verifier" / str(os.getpid())
@@ -84,26 +93,36 @@ def main() -> int:
             ]},
         }}})
         session = created["sessionId"]
-        url = args.url.rstrip("/") + "/?mode=pair&pairs=0-1&bins=128.593750MHz&pair_visibility_ms=100"
+        url = args.url.rstrip("/") + f"/?mode=pair&pairs={args.pairs}&bins={args.bins}&pair_visibility_ms=100"
         request("POST", f"{driver_url}/session/{session}/url", {"url": url})
         wait_until(lambda: "权威数据就绪" in execute(
             driver_url, session, "return document.getElementById('health').textContent"), 180)
         execute(driver_url, session, """
-          const p=document.querySelector('#pairFengineCards .plot');
+          const p=document.querySelector('__PLOT_SELECTOR__');
           p.scrollIntoView({block:'center',behavior:'instant'});
           p.querySelector('.gpu-placeholder')?.click(); return true;
         """)
         wait_until(lambda: execute(driver_url, session, """
-          return document.querySelector('#pairFengineCards .plot')?.dataset.gpuState==='rendered';
+          return document.querySelector('__PLOT_SELECTOR__')?.dataset.gpuState==='rendered';
         """), 60)
 
         inspect = """
-          const p=document.querySelector('#pairFengineCards .plot .js-plotly-plot');
+          const p=document.querySelector('__PLOT_SELECTOR__ .js-plotly-plot');
           const rows=(p.data||[]).slice(0,3).map((t,index)=>({index,name:t.name,
             axis:t.yaxis||'y',group:t.legendgroup||'',visible:t.visible,points:(t.x||[]).length}));
           return {rows,groupclick:p.layout?.legend?.groupclick||'',legends:p.querySelectorAll('.legendtoggle').length};
         """
         before = execute(driver_url, session, inspect)
+        if args.expect_gap_counts:
+            observed = execute(driver_url, session, """
+              const p=document.querySelector('__PLOT_SELECTOR__ .js-plotly-plot');
+              return p.data.filter(t=>t.showlegend!==false && (t.x||[]).length)
+                .map(t=>Array.from(t.x).filter(x=>x===null).length);
+            """)
+            expected = [int(x) for x in args.expect_gap_counts.split(',')]
+            if observed != expected:
+                raise RuntimeError(f"acquisition gap markers differ: {observed} != {expected}")
+
         if (len(before["rows"]) != 3 or len({row["group"] for row in before["rows"]}) != 1
                 or not before["rows"][0]["group"] or before["groupclick"] != "togglegroup"
                 or before["legends"] < 1):
@@ -128,6 +147,8 @@ def main() -> int:
         if any(row["visible"] is not True for row in restored["rows"] if row["points"] > 0):
             raise RuntimeError(f"second legend click did not restore amplitude and phase together: {restored}")
 
+        screenshot = request("GET", f"{driver_url}/session/{session}/screenshot")
+        args.output.with_suffix(".png").write_bytes(base64.b64decode(screenshot))
         write_json(args.output, {"format": "T510_VISIBILITY_LEGEND_VERIFY_V1", "status": "PASS",
                                  "url": url, "before": before, "hidden": hidden,
                                  "restored": restored})

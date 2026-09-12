@@ -151,3 +151,5 @@ body.sidebar-collapsed #collapseSidebar { transform: rotate(180deg); }
   .figure-heading { align-items: flex-start; flex-direction: column; }
   .plot { min-height: 320px; }
 }
+
+.formula-symbols p { margin: 0 0 .65em; font-size: .9em; line-height: 1.6; }

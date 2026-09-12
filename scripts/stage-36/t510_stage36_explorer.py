@@ -178,6 +178,37 @@ class SimpleData:
             raise ValueError("cross scan is not a sealed full-band 100 ms dataset")
         self.cross_attrs = cross_attrs
         self.cross_id = self.cross_scan.name
+        self.cross_groups = {"original": {"label": "原始组", "path": self.cross_scan}}
+        for key, row in self.config.get("cross_repeats", {}).items():
+            if key == "original":
+                raise ValueError("repeat cannot replace original cross scan")
+            path = fixed_path(row["path"])
+            attrs = json.loads((path / "xcorr.zarr" / ".zattrs").read_text())
+            if attrs.get("complete") is not True or attrs.get("save_fullband_100ms") is not True:
+                raise ValueError("repeat is not a complete full-band dataset")
+            self.cross_groups[key] = {"label": row["label"], "path": path}
+        for row in self.cross_groups.values():
+            row["sha256"] = sha256_file(row["path"] / "dataset_manifest.json")
+        self.abc_phases = []
+        abc = self.config.get("abc_queue")
+        if abc:
+            queue = fixed_path(abc)
+            state = json.loads((queue / "queue_state.json").read_text())
+            if state.get("status") != "completed" or state.get("verification_status") != "PASS":
+                raise ValueError("ABC queue is not completed and verified")
+            self.abc_phases = state["phases"]
+            if len(self.abc_phases) != 19:
+                raise ValueError("ABC requires 19 complete captures")
+            for phase in self.abc_phases:
+                path = fixed_path(queue.parent / phase["scan_id"])
+                digest = sha256_file(path / "dataset_manifest.json")
+                if digest != phase["manifest"]["sha256"] or not phase["formal_integrity"]["ok"]:
+                    raise ValueError("ABC manifest/integrity mismatch")
+                attrs = json.loads((path / "xcorr.zarr" / ".zattrs").read_text())
+                if attrs.get("complete") is not True:
+                    raise ValueError("ABC dataset incomplete")
+                self.cross_groups[f"abc-{phase['index']}"] = {
+                    "label": phase["label"], "path": path, "sha256": digest}
         comparison = self.config.get("stage35_comparison")
         self.stage35_comparison = (json.loads(fixed_path(comparison, file=True).read_text(encoding="utf-8")) if comparison else None)
         temperature = self.config.get("time_temperature")
@@ -257,6 +288,9 @@ class SimpleData:
             "spec_capture": next(iter(self.spec_records)),
             "self_scans": sorted(self.self_scans),
             "cross_scan": self.cross_id,
+            "cross_groups": [{"id": key, "label": row["label"], "scan_id": row["path"].name}
+                             for key, row in self.cross_groups.items() if not key.startswith("abc-")],
+            "abc_available": bool(self.abc_phases),
             "short_bucket_frames": list(SHORT_BUCKETS),
             "phase_gate_gamma": PHASE_GATE,
             "limits": {
@@ -717,8 +751,8 @@ class SimpleData:
         }
 
     @functools.lru_cache(maxsize=256)
-    def cross_base(self, pair: tuple[int, int], global_bin: int, cadence_ms: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        zarr = self.cross_scan / "xcorr.zarr"
+    def cross_base(self, pair: tuple[int, int], global_bin: int, cadence_ms: int, group: str = "original") -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        zarr = self.cross_groups[group]["path"] / "xcorr.zarr"
         pair_index = PAIR_INDEX[pair]
         block, local = divmod(global_bin, 256)
         if cadence_ms == 100:
@@ -762,10 +796,14 @@ class SimpleData:
         cadence_ms = int(query_one(query, "cadence_ms", "100"))
         if cadence_ms not in (100, 1000):
             raise ValueError("cadence_ms must be 100 or 1000")
+        group = query_one(query, "group", "original")
+        if group not in self.cross_groups:
+            raise ValueError("unknown cross scan group")
+        selected = self.cross_groups[group]
         series = []
         points = 0
         for global_bin in bins:
-            visibility, pa, pb, valid = self.cross_base(pair, global_bin, cadence_ms)
+            visibility, pa, pb, valid = self.cross_base(pair, global_bin, cadence_ms, group)
             gamma = normalized_correlation_magnitude(visibility, pa, pb)
             reliable = np.isfinite(gamma) & (gamma >= PHASE_GATE)
             points = len(visibility)
@@ -794,14 +832,76 @@ class SimpleData:
                 "meaning": f"两路生产 F-engine 的同频复数先逐帧计算 Xa·conj(Xb)，再按有效频谱数"
                 f"平均成每 {cadence_ms} ms 一个复可见度；这是独立 50 Ω 条件下的仪器相关底，"
                 "不是 ADC 直接读数或天空可见度。",
-                "scan_id": self.cross_id,
+                "group": group, "group_label": selected["label"],
+                "scan_id": selected["path"].name,
                 "array": "mean_cross_visibility_count2_100ms" if cadence_ms == 100 else "mean_cross_visibility_count2",
-                "sha256": self._identities["cross_manifest"],
+                "sha256": selected["sha256"],
             },
         }
 
+    def abc_pair(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        pair, bins = query_pair(query), self._bins(query)
+        group = query_one(query, "group", "A")
+        summary = query_one(query, "view", "timeline") == "segments"
+        cadence = int(query_one(query, "cadence_ms", "100"))
+        if group not in ("A", "B", "C") or not self.abc_phases or cadence not in (100, 1000):
+            raise ValueError("invalid ABC selection")
+        phases = [p for p in self.abc_phases if p["group"] == group]
+        origin = phases[0]["capture_status"]["started_unix_ms"]
+        times, breaks, segments, series = [], [], [], []
+        for j, k in enumerate(bins):
+            values, powers_a, powers_b, counts = [], [], [], []
+            for phase in phases:
+                v, a, b, n = self.cross_base(pair, k, cadence, f"abc-{phase['index']}")
+                expected = phase["duration_seconds"] * 1000 // cadence
+                if len(v) != expected:
+                    raise ValueError("ABC time coverage mismatch")
+                if summary:
+                    width = 100000 // cadence
+                    def weighted(x):
+                        return np.sum((x*n).reshape(-1, width), axis=1) / n.reshape(-1, width).sum(axis=1)
+                    v, a, b, n = weighted(v), weighted(a), weighted(b), n.reshape(-1,width).sum(axis=1)
+                if j == 0:
+                    if not summary and times:
+                        breaks.append(len(times))
+                    if summary:
+                        times.extend(range(len(times)+1, len(times)+len(v)+1))
+                    else:
+                        offset = (phase["capture_status"]["started_unix_ms"] - origin) / 1000
+                        times.extend((offset+(np.arange(len(v))+.5)*cadence/1000).tolist())
+                    segments.append({"label": phase["label"], "scan_id": phase["scan_id"],
+                        "started_unix_ms": phase["capture_status"]["started_unix_ms"],
+                        "duration_seconds": phase["duration_seconds"],
+                        "manifest_sha256": phase["manifest"]["sha256"]})
+                values.extend(v); powers_a.extend(a); powers_b.extend(b); counts.extend(n)
+            v = np.asarray(values)
+            gamma = normalized_correlation_magnitude(v, np.asarray(powers_a), np.asarray(powers_b))
+            series.append({"global_bin": k, "rf_mhz": float(self.rf_mhz[k]),
+                "amplitude_count2": (100*gamma if summary else np.abs(v)).tolist(),
+                "phase_deg": np.angle(v, deg=True).tolist(), "gamma": finite_list(gamma),
+                "phase_reliable": (np.isfinite(gamma) & (gamma >= PHASE_GATE)).tolist(),
+                "n_valid": np.asarray(counts,dtype=int).tolist()})
+        return {"domain": "abc_pair", "group": group, "cadence_ms": cadence,
+            "time_s": times, "break_before_indices": breaks, "segments": segments,
+            "x_axis_title": "100 秒段序号（A 为连续记录内分段）" if summary else "相对各组首段起点的实际时间 (s，保留停流空隙)",
+            "series": series, "phase_gate_gamma": PHASE_GATE, "amplitude_unit": "%" if summary else "count²",
+            "point_definition": "每点是一个完整 100 秒段的归一化复平均幅度；每组九点。" if summary else f"每点为 {cadence} ms 复平均；每组有效采集 900 秒。",
+            "formula": (
+                r"\bar V_{ab}=\frac{\sum_k n_k V_{ab,k}}{\sum_k n_k},\quad "
+                r"\bar P_a=\frac{\sum_k n_k P_{a,k}}{\sum_k n_k},\quad "
+                r"\bar P_b=\frac{\sum_k n_k P_{b,k}}{\sum_k n_k},\quad "
+                r"\gamma=\frac{|\bar V_{ab}|}{\sqrt{\bar P_a\bar P_b}},\quad "
+                r"y=100\gamma,\quad \phi=\operatorname{atan2}(\Im\bar V_{ab},\Re\bar V_{ab})"
+                if summary else
+                r"V_{ab,k}=\frac{\sum_r X_{a,r}X_{b,r}^*}{n_k},\quad "
+                r"|V|=\sqrt{(\Re V)^2+(\Im V)^2},\quad \phi=\operatorname{atan2}(\Im V,\Re V)"),
+            "source": {"kind": "A/B/C 启停对照实验", "meaning":
+                "A：连续 900 秒；B：九次 100 秒，仅 STOP/START；C：九次 100 秒，每次重写相同板载时钟、重载同一固件并执行 RFDC 初始化/MTS。", "scan_id": [p["scan_id"] for p in phases]}}
+
     def timeseries(self, query: dict[str, list[str]]) -> dict[str, Any]:
         domain = query_one(query, "domain", "time_single")
+        if domain == "abc_pair":
+            return self.abc_pair(query)
         if domain == "time_single":
             return self.time_single(query)
         if domain == "time_long_single":
