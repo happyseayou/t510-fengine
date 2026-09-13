@@ -791,6 +791,20 @@ class SimpleData:
             raise ValueError("cadence_ms must be 100 or 1000")
         return visibility, pa, pb, valid
 
+    def historical_pair(self, pair, global_bin, cadence_ms, group, correction):
+        """Retrospective reference-load holdout; never a qualified live template."""
+        if group not in ("original", "repeat1", "repeat2") or group not in self.cross_groups:
+            raise ValueError("unknown historical group")
+        if correction not in ("raw", "subtract"):
+            raise ValueError("correction must be raw or subtract")
+        v, a, b, n = self.cross_base(pair, global_bin, cadence_ms, group)
+        # Always fit the native 100 ms data, independent of display cadence.
+        native, _, _, weights = self.cross_base(pair, global_bin, 100, group)
+        if len(native) != 9000 or not np.all(np.isfinite(native)) or not np.all(weights > 0):
+            raise ValueError("historical reference requires complete finite 900 s data")
+        background = np.average(native[:600], weights=weights[:600])
+        return (v - background if correction == "subtract" else v), a, b, n, background
+
     def fengine_long_pair(self, query: dict[str, list[str]]) -> dict[str, Any]:
         pair, bins = query_pair(query), self._bins(query)
         cadence_ms = int(query_one(query, "cadence_ms", "100"))
@@ -799,15 +813,19 @@ class SimpleData:
         group = query_one(query, "group", "original")
         if group not in self.cross_groups:
             raise ValueError("unknown cross scan group")
+        correction = query_one(query, "correction", "raw")
         selected = self.cross_groups[group]
+        start = 60000 // cadence_ms if correction == "subtract" else 0
         series = []
         points = 0
         for global_bin in bins:
-            visibility, pa, pb, valid = self.cross_base(pair, global_bin, cadence_ms, group)
+            visibility, pa, pb, valid, background = self.historical_pair(pair, global_bin, cadence_ms, group, correction)
+            visibility, pa, pb, valid = (x[start:] for x in (visibility, pa, pb, valid))
             gamma = normalized_correlation_magnitude(visibility, pa, pb)
             reliable = np.isfinite(gamma) & (gamma >= PHASE_GATE)
             points = len(visibility)
             series.append({
+                "background_count2": [float(background.real), float(background.imag)],
                 "global_bin": global_bin, "rf_mhz": float(self.rf_mhz[global_bin]),
                 "amplitude_count2": np.abs(visibility).tolist(),
                 "phase_deg": np.angle(visibility, deg=True).tolist(),
@@ -816,23 +834,27 @@ class SimpleData:
             })
         return {
             "domain": "fengine_long_pair", "pair": list(pair), "cadence_ms": cadence_ms,
-            "time_s": ((np.arange(points) + 0.5) * cadence_ms / 1000.0).tolist(),
+            "time_s": ((np.arange(points) + start + 0.5) * cadence_ms / 1000.0).tolist(),
             "series": series, "phase_gate_gamma": PHASE_GATE,
+            "correction": correction, "training_interval_s": [0, 60],
+            "validation_interval_s": [60, 900],
             "amplitude_unit": "count²",
             "point_definition": f"每个点是全4096通道产品中该频率连续 {cadence_ms} ms 的复乘平均。",
             "formula": (
+                r"\widehat B_{ab}=\frac{\sum_{r\in T}n_rV_{ab,r}}{\sum_{r\in T}n_r},\quad "
+                r"R_{ab,k}=V_{ab,k}-\widehat B_{ab},\quad "
                 r"V_{ab,k}=\frac{\sum_r X_{a,r}X_{b,r}^*}{n_k},\quad "
                 r"|V|=\sqrt{(\Re V)^2+(\Im V)^2},\quad "
                 r"\phi=\operatorname{atan2}(\Im V,\Re V),\quad "
                 r"\text{相对复可见度}=100\frac{V_{ab}}{\sqrt{P_aP_b}}\%"
             ),
-            "calculation": {"cadence_ms": cadence_ms, "points": points},
+            "calculation": {"cadence_ms": cadence_ms, "points": points, "training_seconds": 60, "validation_seconds": 840},
             "source": {
                 "kind": "F-engine全频复可见度",
                 "meaning": f"两路生产 F-engine 的同频复数先逐帧计算 Xa·conj(Xb)，再按有效频谱数"
                 f"平均成每 {cadence_ms} ms 一个复可见度；这是独立 50 Ω 条件下的仪器相关底，"
                 "不是 ADC 直接读数或天空可见度。",
-                "group": group, "group_label": selected["label"],
+                "group": group, "group_label": selected["label"], "correction": correction,
                 "scan_id": selected["path"].name,
                 "array": "mean_cross_visibility_count2_100ms" if cadence_ms == 100 else "mean_cross_visibility_count2",
                 "sha256": selected["sha256"],
@@ -968,11 +990,22 @@ class SimpleData:
             )
         elif subject == "pair":
             pair = query_pair(query)
+            group = query_one(query, "group", "original")
+            correction = query_one(query, "correction", "raw")
+            holdout = query_one(query, "window", "full") == "holdout"
+            if correction == "subtract" and not holdout:
+                raise ValueError("subtraction Allan requires holdout window")
+            if group not in self.cross_groups:
+                raise ValueError("unknown cross scan group")
+            selected = self.cross_groups[group]
             cadence_ms = int(query_one(query, "cadence_ms", "100"))
             if cadence_ms not in PAIR_TAUS:
                 raise ValueError("pair cadence_ms must be 100 or 1000")
             for global_bin in bins:
-                visibility, pa, pb, valid = self.cross_base(pair, global_bin, cadence_ms)
+                visibility, pa, pb, valid, background = self.historical_pair(pair, global_bin, cadence_ms, group, correction)
+                if holdout:
+                    start = 60000 // cadence_ms
+                    visibility, pa, pb, valid = (x[start:] for x in (visibility, pa, pb, valid))
                 points = self.overlapping_allan_visibility(
                     visibility, pa, pb, valid, cadence_ms / 1000.0,
                     PAIR_TAUS[cadence_ms], relative_percent=scale == "relative",
@@ -983,15 +1016,16 @@ class SimpleData:
                     "points": [{**point, "value": point[form], "white_reference": white[index]}
                                for index, point in enumerate(points)],
                 })
-            subject_value = {"pair": list(pair), "scan": self.cross_id,
+            subject_value = {"pair": list(pair), "scan": selected["path"].name, "group": group,
+                             "correction": correction, "window": "holdout" if holdout else "full",
                              "base_bucket_s": cadence_ms / 1000.0, "cadence_ms": cadence_ms}
             source = {
                 "kind": "F-engine全频复可见度",
                 "meaning": f"从两路生产 F-engine 同频复乘并平均得到的 {cadence_ms} ms 复可见度序列"
                 "开始；Allan 方差比较相邻时间窗口的完整复数向量差，不把相位角直接相减。",
-                "scan_id": self.cross_id,
+                "scan_id": selected["path"].name,
                 "array": "mean_cross_visibility_count2_100ms" if cadence_ms == 100 else "mean_cross_visibility_count2",
-                "sha256": self._identities["cross_manifest"],
+                "sha256": selected["sha256"],
             }
             if scale == "relative":
                 definition = (
@@ -1005,6 +1039,10 @@ class SimpleData:
                 r"\sigma_A^2(\tau)=\frac{1}{2K}\sum_{i=1}^{K}"
                 r"|Y_{i+m}-Y_i|^2"
             )
+            if holdout:
+                formula = (r"\widehat B_{ab}=\frac{\sum_{r\in T}n_rV_{ab,r}}{\sum_{r\in T}n_r},\quad "
+                           r"R_{ab,r}=V_{ab,r}-\widehat B_{ab},\quad " + formula)
+                source["meaning"] += " 仅使用60–900秒；扣除曲线将下式窗口中的V替换为R。固定背景不改变绝对复数Allan；相对模式的自功率分母随窗口变化，结果不必相同。"
         else:
             raise ValueError("subject must be single or pair")
         if scale == "relative":

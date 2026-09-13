@@ -10,7 +10,7 @@ const COLORS = [
 ];
 const PAGE_SIZE = 4;
 const GPU_PLOT_BUDGET = 1;
-const GPU_TRACE_SLOTS = 144; // 4 pairs × 4 bins × 3 scans × amplitude/two phase traces
+const GPU_TRACE_SLOTS = 288; // 4 pairs × 4 bins × 3 scans × raw/corrected × amplitude/two phase traces
 const GPU_DEFAULT_HEIGHT = 520;
 const gpuPlots = new Map();
 let gpuSurface = null;
@@ -102,7 +102,8 @@ function createCard(container, id, heading, source) {
 }
 
 function groupColor(subjectIndex, frequencyIndex = 0) {
-  return COLORS[(subjectIndex * 4 + frequencyIndex) % COLORS.length];
+  const index = subjectIndex * 4 + frequencyIndex;
+  return index < COLORS.length ? COLORS[index] : `hsl(${(index * 137.508) % 360}, 62%, 38%)`;
 }
 
 function adcLabel(adc) {
@@ -135,7 +136,8 @@ function formulaSymbols(formula) {
   if (/[IQ]/.test(formula)) add("I、Q、z、X", "I、Q 分别是复样点的实部和虚部；z 是 TIME_ONLY 复样点，X 是频率通道的复数输出。TIME_ONLY 用 ADU，生产 F-engine 用 count；两者均是数字单位，不能直接当作 K 或 Jy。软件 Hann FFT 的 X 使用窗归一化后的 ADU。");
   if (formula.includes("mathrm{i}")) add("直立 i", "虚数单位，满足 i² = −1；与 Allan 公式中表示窗口起点的下标 i 不同。");
   if (formula.includes("P")) add("P、P̄", "P 是数字功率 I²+Q²，横线表示窗口内平均，单位为 ADU² 或 count²。先算每个样点/帧的功率，再平均；不等于先平均 I、Q 再平方。长期序列中的 Pᵣ 是基础时间桶的平均功率。");
-  if (formula.includes("B")) add("B", "每个显示点合并的样点数（TIME_ONLY）或频谱帧数（F-engine/软件 FFT），无单位；未经平均时 B=1。这里不是带宽。");
+  if (formula.includes("widehat B")) add("B̂ₐᵦ、Rₐᵦ、T", "B̂ 是该组、该ADC对、该bin在前60秒训练区T内按有效帧数加权估计的固定复背景，单位count²；R=V−B̂是复残差。扣除曲线的幅度、相位和Allan公式均以R替代V；后840秒才是验证区。各组独立估计，不能跨重启共用。");
+  else if (formula.includes("B")) add("B", "每个显示点合并的样点数（TIME_ONLY）或频谱帧数（F-engine/软件 FFT），无单位；未经平均时 B=1。这里不是带宽。");
   if (weighted) add("nᵣ", "第 r 个基础统计桶的有效样本数或有效频谱帧数，是加权平均的权重；分母 Σnᵣ 是该窗口的有效总数。TIME 长序列和单路功率 Allan 的基础桶为 10 ms；复相关以当前选择的 100 ms 或 1 s 桶为基础。");
   if (formula.includes("y=100")) add("y、γ", "y 是图上纵轴的归一化相关百分数；γ=|ρ| 是无量纲相关幅度，y=100γ。每个点先按有效帧数对完整 100 秒复数及自功率加权平均，再归一化，不能先取模再平均。");
   if (formula.includes("n_k")) add("nₖ", "第 k 个输出时间桶内的有效频谱帧总数；分子逐帧求和，除以此数得到复平均。");
@@ -764,7 +766,7 @@ async function allanFigure(card, datasets, id, heading, subjectText) {
     what: `${subjectText}。同一幅图叠加 ${groupLabel(datasets.map(item => item.label))}；叉形实线由测量数据计算，同色虚线不是测量数据。`,
     source: sourceText(firstData.source), formula: `${firstData.formula}\\qquad ${firstData.white_formula}`,
     calculated: `当前显示 ${formText}、${scaleText}。以 ${datasets[0].label} 首点为例：τ=${number(first.tau_s)} s，N=${first.N.toLocaleString()}，m=${first.m}，K=${first.K.toLocaleString()}，平方差之和=${number(first.sum_squared_difference)}，最终值=${number(first.value)} ${firstData.unit}。点击任一实测点看该对象的全过程。`,
-    meaning: "曲线若像虚线一样持续下降，说明延长积分仍有效；实线变平或抬头，说明继续积分没有按白噪声的理想速度获益。",
+    meaning: firstData.window === "holdout" ? "三组各用前60秒训练，所有曲线只比较同一后840秒。绝对复可见度Allan扣除前后应重合；相对模式因自功率分母随窗口变化，可以不同。这不是幅度Allan，曲线变化不能单独证明灵敏度改善。" : "曲线若像虚线一样持续下降，说明延长积分仍有效；实线变平或抬头，说明继续积分没有按白噪声的理想速度获益。",
   });
   await draw(figure.plot, traces, baseLayout(heading, "相邻平均窗口长度 τ (s)", `${formText} (${firstData.unit})`, {
     xaxis: {title: {text: "相邻平均窗口长度 τ (s)"}, type: "log", gridcolor: "#e4e8ec", automargin: true},
@@ -829,12 +831,13 @@ async function visibilityFigure(card, datasets, id, heading, meaning) {
     phase_deg: firstData.phase_deg, gamma: firstData.gamma, phase_reliable: firstData.phase_reliable}];
   const first = firstRows[0];
   const amplitude = first.amplitude || first.amplitude_count2 || firstData.amplitude_adu2;
-  const reliableCount = first.phase_reliable.filter(Boolean).length;
+  const statStart = firstData.training_interval_s && firstData.correction === "raw" ? 60000 / firstData.cadence_ms : 0;
+  const reliableCount = first.phase_reliable.slice(statStart).filter(Boolean).length;
   const unit = firstData.amplitude_unit || "ADU²";
   const figure = createFigure(card, id, heading, {
     what: `同一幅图叠加 ${groupLabel(datasets.map(item => item.label))}。${firstData.point_definition}`,
     source: sourceText(firstData.source), formula: firstData.formula,
-    calculated: `${datasets[0].label}${first.global_bin === null ? "" : ` · ${rfLabel(first)}`}：${amplitude.length.toLocaleString()} 点，平均复可见度幅度=${number(mean(amplitude))} ${unit}，其中 ${reliableCount.toLocaleString()} 点达到 |相关系数|≥${firstData.phase_gate_gamma} 的相位提示门限。点击幅度点可看所属 ADC 对和实值。`,
+    calculated: `${datasets[0].label}${first.global_bin === null ? "" : ` · ${rfLabel(first)}`}：${amplitude.length.toLocaleString()} 个显示点，${firstData.training_interval_s ? "后840秒验证区" : "全段"}平均复可见度幅度=${number(mean(amplitude.slice(statStart)))} ${unit}，其中 ${reliableCount.toLocaleString()} 点达到 |相关系数|≥${firstData.phase_gate_gamma} 的相位提示门限。点击幅度点可看所属 ADC 对和实值。`,
     meaning: `${meaning} 灰色相位表示相关幅度太弱，角度主要受噪声摆布，不可作天文相位解释。`,
   });
   await draw(figure.plot, traces, {
@@ -845,6 +848,11 @@ async function visibilityFigure(card, datasets, id, heading, meaning) {
     xaxis2: {title: {text: xTitle}, gridcolor: "#e4e8ec", domain: [0, 1], automargin: true},
     yaxis2: {title: {text: "相位 (度)"}, gridcolor: "#e4e8ec", range: [-180, 180], domain: [0, .4], automargin: true},
     legend: {...baseLayout(heading, xTitle, "").legend, groupclick: "togglegroup", maxheight: 120},
+    annotations: firstData.training_interval_s ? [{xref: "x", yref: "paper", x: 30, y: 1, text: "训练60s", showarrow: false, yanchor: "bottom", font: {size: 11, color: "#805b00"}}] : [],
+    shapes: firstData.training_interval_s ? ["x", "x2"].map(xref => ({
+      type: "rect", xref, yref: "paper", x0: 0, x1: 60, y0: xref === "x" ? .57 : 0, y1: xref === "x" ? 1 : .4,
+      fillcolor: "rgba(220,170,50,0.12)", line: {width: 0}, layer: "below",
+    })) : [],
     height: 620,
   });
   bindClick(figure.plot, figure.calculated, p => {
@@ -862,10 +870,10 @@ async function renderFenginePair(pairs, guard = () => true) {
     const [raw, averaged, long] = await Promise.all([
       api("/api/v2/timeseries", {...params, domain: "fengine_raw_pair", bucket: 1}),
       api("/api/v2/timeseries", {...params, domain: "fengine_raw_pair"}),
-      Promise.all((META.cross_groups || [{id: "original", label: "原始组"}]).map(async group => ({
-        label: `${group.label} · ${pairLabel(pair)}`,
-        data: await api("/api/v2/timeseries", {domain: "fengine_long_pair", group: group.id, pair: name, bins: binsParam(), cadence_ms: state.pairVisibilityMs}),
-      }))),
+      Promise.all((META.cross_groups || [{id: "original", label: "原始组"}]).flatMap(group => ["raw", "subtract"].map(async correction => ({
+        label: `${group.label} · ${pairLabel(pair)} · ${correction === "raw" ? "原始" : "扣除背景"}`,
+        data: await api("/api/v2/timeseries", {domain: "fengine_long_pair", group: group.id, correction, pair: name, bins: binsParam(), cadence_ms: state.pairVisibilityMs}),
+      })))),
     ]);
     return {pair, label: pairLabel(pair), raw, averaged, long};
   }));
@@ -880,10 +888,10 @@ async function renderFenginePair(pairs, guard = () => true) {
     `pair-spec-avg-page-${state.page}`, `${state.fengineShort} 个 F-engine 帧的复数平均`,
     "这里先逐帧复乘，再把相邻帧的实部和虚部分别平均。");
   await visibilityFigure(card, datasets.flatMap(item => item.long),
-    `pair-long-page-${state.page}`, `900 秒 F-engine 复可见度（每点 ${state.pairVisibilityMs} ms）`,
+    `pair-long-page-${state.page}`, `900 秒 F-engine 复可见度：原始与扣除背景（每点 ${state.pairVisibilityMs} ms）`,
     state.pairVisibilityMs === 100
-      ? "三组分别保存了全 4096 通道的 100 ms 产品；横轴为各组开始后的时间，叠加不表示同时采集。补采两组之间经过断电重启、换卡及同版本组件重新部署，不能把差异只归因于重启。点击图例同时切换对应幅度和相位。"
-      : "每个 1 s 点由同批十个 100 ms 产品按有效频谱数加权合并，不是另一遍采集。");
+      ? "黄色0–60秒为训练区；各组各bin独立估计复背景，扣除曲线只显示60–900秒验证区。原始数据保留完整900秒，统计只用后840秒。这是历史50Ω留出分析，不是正式模板校正，也不是自功率扣除。三组非同时采集，差异不能只归因于重启。点击图例联动幅度与相位。"
+      : "每个1秒点来自同批100ms产品。黄色前60秒训练，后840秒验证；背景始终用原生100ms数据估计，各组独立，点击图例联动幅度和相位。");
   if (META.abc_available) await renderAbcPair(pairs, guard);
 }
 
@@ -909,16 +917,19 @@ async function renderAbcPair(pairs, guard) {
 }
 
 async function renderAllanPair(pairs, guard = () => true) {
-  const datasets = await Promise.all(pairs.map(async pair => ({
-    label: pairLabel(pair),
-    data: await api("/api/v2/allan", {subject: "pair", pair: pair.join("-"), bins: binsParam(),
-      cadence_ms: state.pairAllanMs, form: state.allanForm, scale: state.allanScale}),
-  })));
+  const datasets = await Promise.all(pairs.flatMap(pair =>
+    (META.cross_groups || [{id: "original", label: "原始组"}]).flatMap(group =>
+      ["raw", "subtract"].map(async correction => ({
+        label: `${group.label} · ${pairLabel(pair)} · ${correction === "raw" ? "原始" : "扣除背景"}`,
+        data: await api("/api/v2/allan", {subject: "pair", pair: pair.join("-"), bins: binsParam(),
+          group: group.id, correction, window: "holdout",
+          cadence_ms: state.pairAllanMs, form: state.allanForm, scale: state.allanScale}),
+      })))));
   if (!guard()) return;
   const card = markGroupedCard(createCard($("#pairAllanCards"), "pair-allan-group",
     groupLabel(datasets.map(item => item.label)), sourceText(datasets[0].data.source)), datasets.length);
   await allanFigure(card, datasets, `pair-allan-page-${state.page}`, "复可见度 Allan 方差同图比较",
-    "每条实线从相应 ADC 对、相应频率的 900 秒完整复可见度序列开始；相邻窗口比较完整复数向量，使用 |Y₂−Y₁|²，不直接相减会绕回的相位角");
+    "三组各自原始/扣除的后840秒复可见度同图比较；相邻窗口比较完整复数向量，使用 |Y₂−Y₁|²，不直接相减相位角。绝对尺度两条曲线重合属预期，可用图例选择");
 }
 
 function selected(name) {

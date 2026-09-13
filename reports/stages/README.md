@@ -28,6 +28,8 @@ Stage 00–33 已移入 [`archive/00-33/`](archive/00-33/)，Stage 34 已移入
 
 状态：已收尾，科学限制如实保留。先读[收尾与交接](36_28_closeout.md)。
 
+- [36-29 主报告背景扣除审计](36_29_main_report_background_audit.md)
+
 - [36 执行索引](36_00_execution_index.md)
 - [36-01 Stage 35 经验审计](36_01_stage35_lessons_audit.md)
 - [36-02 科学复评与 8036 交付](36_02_science_evaluation.md)
